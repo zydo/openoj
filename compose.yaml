@@ -1,0 +1,94 @@
+name: openoj
+
+services:
+  web:
+    build:
+      context: ./frontend
+    ports:
+      - "${OPENOJ_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=16m,uid=101,gid=101,mode=0750
+      - /var/run:size=1m,uid=101,gid=101,mode=0750
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    networks:
+      - app
+      - edge
+
+  api:
+    build:
+      context: ./api
+    environment:
+      OPENOJ_PROBLEMS_DIR: /problems
+      OPENOJ_DATA_DIR: /data
+      OPENOJ_QUEUE_DIR: /queue
+      OPENOJ_RUNNER_TIMEOUT_SECONDS: "20"
+    volumes:
+      - "${OPENOJ_PROBLEMS_PATH:-./problems}:/problems:ro"
+      - openoj_data:/data
+      - judge_queue:/queue
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    networks:
+      - app
+
+  runner:
+    build:
+      context: ./runner
+    environment:
+      OPENOJ_QUEUE_DIR: /queue
+      OPENOJ_POLL_INTERVAL: "0.05"
+    volumes:
+      - judge_queue:/queue
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=384m,mode=1777
+      - /work:size=384m,mode=1777,exec
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - KILL
+      - SETUID
+      - SETGID
+    group_add:
+      - "10001"
+    mem_limit: 768m
+    cpus: 1.5
+    pids_limit: 64
+    restart: unless-stopped
+
+volumes:
+  openoj_data:
+  judge_queue:
+
+networks:
+  app:
+    internal: true
+  edge:
