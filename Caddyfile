@@ -1,0 +1,5 @@
+# Caddy automatically obtains and renews a Let's Encrypt certificate for this
+# domain, and redirects all HTTP (port 80) traffic to HTTPS (port 443).
+openoj.dongziyu.com {
+	reverse_proxy web:8080
+}
