@@ -57,9 +57,12 @@ function draftKey(slug: string, language: string) {
   return `openoj:${slug}:${language}`;
 }
 
+// Editor state (language preference and per-problem drafts) is session-local:
+// it survives page refreshes but is scoped to the tab, per the multi-user
+// design in TODO.md. Accounts and server-persisted state arrive later.
 function readDraft(slug: string, language: string) {
   try {
-    return localStorage.getItem(draftKey(slug, language));
+    return sessionStorage.getItem(draftKey(slug, language));
   } catch {
     return null;
   }
@@ -67,9 +70,21 @@ function readDraft(slug: string, language: string) {
 
 function writeDraft(slug: string, language: string, code: string) {
   try {
-    localStorage.setItem(draftKey(slug, language), code);
+    sessionStorage.setItem(draftKey(slug, language), code);
   } catch {
     /* Drafts are best-effort; judging works without them. */
+  }
+}
+
+// The last chosen language carries across problems within the session; each
+// problem still keeps its own per-language draft.
+const LANGUAGE_STORAGE_KEY = "openoj:language";
+
+function storedLanguage(): string {
+  try {
+    return sessionStorage.getItem(LANGUAGE_STORAGE_KEY) ?? "python3";
+  } catch {
+    return "python3";
   }
 }
 
@@ -102,6 +117,31 @@ function difficultyTone(difficulty: string) {
   return "hard";
 }
 
+// The curated problem set grades difficulty on a five-level scale (H1–H5);
+// display the levels as words rather than raw labels.
+const DIFFICULTY_LABELS: Record<string, string> = {
+  H1: "Very easy",
+  H2: "Easy",
+  H3: "Medium",
+  H4: "Hard",
+  H5: "Very hard",
+};
+
+function difficultyLabel(difficulty: string) {
+  return DIFFICULTY_LABELS[difficulty] ?? difficulty;
+}
+
+// Search normalization: case-insensitive and blind to punctuation, so
+// "two-sum" is found by "two sum" or "two+sum".
+function searchText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function matchesFilter(entry: ProblemSummary, normalizedQuery: string) {
+  return searchText(entry.title).includes(normalizedQuery)
+    || entry.tags.some((tag) => searchText(tag).includes(normalizedQuery));
+}
+
 function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
@@ -117,7 +157,7 @@ function App() {
   const [activeSlug, setActiveSlug] = useState<string | null>(slugFromPath);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [loadError, setLoadError] = useState("");
-  const [language, setLanguage] = useState("python3");
+  const [language, setLanguage] = useState<string>(storedLanguage);
   const [code, setCode] = useState("");
   const [drafts, setDrafts] = useState<Array<Record<string, string>>>([]);
   const [activeCase, setActiveCase] = useState(0);
@@ -212,7 +252,10 @@ function App() {
     api.getProblem(activeSlug).then((loaded) => {
       if (cancelled) return;
       setProblem(loaded);
-      const initialLanguage = Object.keys(loaded.languages).find((key) => loaded.languages[key].enabled) ?? "python3";
+      const preferred = storedLanguage();
+      const initialLanguage = loaded.languages[preferred]?.enabled
+        ? preferred
+        : (Object.keys(loaded.languages).find((key) => loaded.languages[key].enabled) ?? "python3");
       setLanguage(initialLanguage);
       const saved = readDraft(loaded.slug, initialLanguage);
       const initialCode = saved ?? loaded.languages[initialLanguage].starter;
@@ -283,6 +326,7 @@ function App() {
 
   const changeLanguage = (key: string) => {
     if (!problem) return;
+    try { sessionStorage.setItem(LANGUAGE_STORAGE_KEY, key); } catch { /* Preference is best-effort. */ }
     const next = readDraft(problem.slug, key) ?? problem.languages[key].starter;
     setLanguage(key);
     setCode(next);
@@ -405,7 +449,7 @@ function App() {
               <div className="problem-heading">
                 <h1>{problem.title}</h1>
                 <div className="problem-meta">
-                  <span className={`difficulty ${difficultyTone(problem.difficulty)}`}>{problem.difficulty}</span>
+                  <span className={`difficulty ${difficultyTone(problem.difficulty)}`}>{difficultyLabel(problem.difficulty)}</span>
                   {problem.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
                 </div>
               </div>
@@ -748,6 +792,10 @@ function Landing({ theme, onToggleTheme, onOpen }: {
   const [pages, setPages] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  // Full problem set for the search box; the rendered page alone would miss
+  // problems on later pages.
+  const [allItems, setAllItems] = useState<ProblemSummary[] | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const loadPage = useCallback((target: number) => {
@@ -766,11 +814,38 @@ function Landing({ theme, onToggleTheme, onOpen }: {
     loadPage(1);
   }, [loadPage]);
 
+  useEffect(() => {
+    let cancelled = false;
+    api.getProblems().then((data) => {
+      if (!cancelled) setAllItems(data.items);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+
   const goToPage = (target: number) => {
     if (target < 1 || target > pages || target === page) return;
     loadPage(target);
     listRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
   };
+
+  const normalized = searchText(query);
+  const filtered = normalized && allItems
+    ? allItems.filter((entry) => matchesFilter(entry, normalized))
+    : null;
+
+  const renderRow = (entry: ProblemSummary) => (
+    <button
+      key={entry.slug}
+      className="problem-row"
+      onClick={() => onOpen(entry.slug)}
+    >
+      <span className="problem-row-main">
+        <strong>{entry.title}</strong>
+        {entry.tags.length > 0 && <small>{entry.tags.join(" · ")}</small>}
+      </span>
+      <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{difficultyLabel(entry.difficulty)}</span>
+    </button>
+  );
 
   return (
     <div className="app-shell">
@@ -807,10 +882,29 @@ function Landing({ theme, onToggleTheme, onOpen }: {
           <section className="landing-index" ref={listRef}>
             <header className="index-header">
               <h2>All problems</h2>
-              <span>{total} {total === 1 ? "problem" : "problems"}</span>
+              <span>
+                {filtered !== null
+                  ? `${filtered.length} of ${allItems?.length ?? total} problems`
+                  : `${total} ${total === 1 ? "problem" : "problems"}`}
+              </span>
             </header>
+            <div className="landing-filter">
+              <input
+                className="landing-search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Filter by title or tag"
+                aria-label="Filter problems"
+              />
+            </div>
             {error ? (
               <p className="landing-error">{error}</p>
+            ) : filtered !== null ? (
+              <div className="landing-list">
+                {filtered.length ? filtered.map(renderRow) : (
+                  <p className="landing-empty">No problems match “{query.trim()}”.</p>
+                )}
+              </div>
             ) : loading && items.length === 0 ? (
               <div className="landing-list">
                 <p className="landing-loading"><LoaderCircle className="spin" size={16} /> Loading the problem set…</p>
@@ -818,18 +912,7 @@ function Landing({ theme, onToggleTheme, onOpen }: {
             ) : (
               <>
                 <div className="landing-list">
-                  {items.map((entry) => (
-                    <button
-                      key={entry.slug}
-                      className="problem-row"
-                      onClick={() => onOpen(entry.slug)}
-                    >
-                      <span className="problem-row-main">
-                        <strong>{entry.title}</strong>
-                      </span>
-                      <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{entry.difficulty}</span>
-                    </button>
-                  ))}
+                  {items.map(renderRow)}
                 </div>
                 {pages > 1 && (
                   <nav className="pagination" aria-label="Problem pages">
@@ -1016,20 +1099,16 @@ function ProblemDrawer({ problems, activeSlug, onSelect, onClose }: {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const normalized = query.trim().toLowerCase();
+  const normalized = searchText(query.trim());
   const filtered = normalized
-    ? problems.filter((entry) =>
-        entry.title.toLowerCase().includes(normalized)
-        || entry.slug.includes(normalized)
-        || entry.tags.some((tag) => tag.toLowerCase().includes(normalized)),
-      )
+    ? problems.filter((entry) => matchesFilter(entry, normalized))
     : problems;
 
   return (
     <div className="drawer-backdrop" onMouseDown={onClose}>
       <aside className="drawer" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-heading">
-          <div><span>Problem set</span><strong>Practice library</strong></div>
+          <div><strong>Practice library</strong></div>
           <button className="icon-button" onClick={onClose} aria-label="Close problem list"><X size={18} /></button>
         </div>
         <div className="drawer-tools">
@@ -1038,7 +1117,7 @@ function ProblemDrawer({ problems, activeSlug, onSelect, onClose }: {
             className="drawer-filter"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter by title, slug, or tag"
+            placeholder="Filter by title or tag"
             aria-label="Filter problems"
           />
           <span className="drawer-count">{filtered.length} of {problems.length} problems</span>
@@ -1052,9 +1131,9 @@ function ProblemDrawer({ problems, activeSlug, onSelect, onClose }: {
             >
               <span className="problem-row-main">
                 <strong>{entry.title}</strong>
-                <small>{entry.tags.join(" · ")}</small>
+                {entry.tags.length > 0 && <small>{entry.tags.join(" · ")}</small>}
               </span>
-              <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{entry.difficulty}</span>
+              <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{difficultyLabel(entry.difficulty)}</span>
             </button>
           )) : <p className="drawer-empty">No problems match “{query.trim()}”.</p>}
         </div>
