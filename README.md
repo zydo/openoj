@@ -58,17 +58,25 @@ OPENOJ_PROBLEMS_PATH=/absolute/path/to/problems docker compose up --build
 
 ### Selecting a problem set with `OPENOJ_PROBLEMS`
 
-Instead of a bind mount, point OpenOJ at an external problem-set repository.
-The specification follows git's disambiguation convention: a bare
-two-segment `owner/name` **always means GitHub**; a local directory with that
-shape must be referenced explicitly and never shadows the shorthand.
+**The default problem set is `zydo/openoj-problems`** — a plain
+`docker compose up --build` clones it into `./.cache` on first start (and
+afterwards only refreshes when the remote actually moved). To use something
+else, set `OPENOJ_PROBLEMS`. The specification follows git's disambiguation
+convention: a bare two-segment `owner/name` **always means GitHub**; a local
+directory with that shape must be referenced explicitly and never shadows
+the shorthand.
 
 ```bash
-OPENOJ_PROBLEMS=zydo/openoj-problems              docker compose up --build  # GitHub shorthand
+docker compose up --build                                          # default: zydo/openoj-problems
 OPENOJ_PROBLEMS=zydo/openoj-problems@v1.2.0       docker compose up --build  # pinned branch/tag
 OPENOJ_PROBLEMS=https://github.com/myname/set.git docker compose up --build  # full git URL
 OPENOJ_PROBLEMS=./name/repo                       docker compose up --build  # local, explicit
+OPENOJ_PROBLEMS=/problems                         docker compose up --build  # force the bundled 2-problem set
 ```
+
+An unreachable remote keeps the cached revision (or fails loudly on a cold
+cache), and `/problems` forces the bundled offline fallback without touching
+the network.
 
 Accepted forms:
 
