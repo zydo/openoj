@@ -32,7 +32,6 @@ import type { JudgeResult, Problem, Submission } from "./types";
 type ProblemSummary = Pick<Problem, "id" | "slug" | "title" | "difficulty" | "tags">;
 type Theme = "light" | "dark";
 
-const DEFAULT_SLUG = "two-sum";
 const THEME_STORAGE_KEY = "openoj:theme";
 
 function storedTheme(): Theme | null {
@@ -688,7 +687,6 @@ function Landing({ problems, theme, onToggleTheme, onOpen }: {
   onToggleTheme: () => void;
   onOpen: (slug: string) => void;
 }) {
-  const featured = problems.find((entry) => entry.slug === DEFAULT_SLUG);
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -721,27 +719,10 @@ function Landing({ problems, theme, onToggleTheme, onOpen }: {
       </header>
       <main className="landing">
         <div className="landing-inner">
-          {featured && (
-            <section className="hero-card panel">
-              <div className="hero-main">
-                <div className="problem-kicker">Featured problem</div>
-                <h1>{featured.title}</h1>
-                <div className="problem-meta">
-                  <span className={`difficulty ${difficultyTone(featured.difficulty)}`}>{featured.difficulty}</span>
-                  {featured.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
-                </div>
-                <p>Return the indices of the two numbers in the array that add up to the target — the classic opener, and the fastest way to see the judge at work.</p>
-              </div>
-              <button className="hero-cta" onClick={() => onOpen(featured.slug)}>
-                <Play size={15} fill="currentColor" />
-                Open {featured.title}
-              </button>
-            </section>
-          )}
           <section className="landing-index">
             <header className="index-header">
               <h2>All problems</h2>
-              <span>{problems.length} {problems.length === 1 ? "problem" : "problems"} · sorted alphabetically</span>
+              <span>{problems.length} {problems.length === 1 ? "problem" : "problems"}</span>
             </header>
             <div className="landing-list">
               {problems.map((entry) => (
