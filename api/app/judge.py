@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import time
 import uuid
@@ -15,9 +16,39 @@ class RunnerUnavailable(RuntimeError):
     pass
 
 
-def _compare(actual: Any, expected: Any, comparison: str) -> bool:
+DEFAULT_CLOSE_TOLERANCE = 1e-9
+
+
+def _close_enough(actual: Any, expected: Any, tolerance: float) -> bool:
+    """Per-scalar tolerant comparison: numbers may differ by the given
+    relative (and absolute) tolerance; structure must match exactly."""
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return actual is expected
+    if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
+        return math.isclose(actual, expected, rel_tol=tolerance, abs_tol=tolerance)
+    if isinstance(actual, list) and isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _close_enough(a, e, tolerance) for a, e in zip(actual, expected)
+        )
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return actual.keys() == expected.keys() and all(
+            _close_enough(actual[key], expected[key], tolerance) for key in actual
+        )
+    return actual == expected
+
+
+def _compare(actual: Any, expected: Any, comparison: Any) -> bool:
     if comparison == "exact":
         return actual == expected
+    if comparison == "close" or (
+        isinstance(comparison, dict) and comparison.get("mode") == "close"
+    ):
+        tolerance = (
+            float(comparison.get("tolerance", DEFAULT_CLOSE_TOLERANCE))
+            if isinstance(comparison, dict)
+            else DEFAULT_CLOSE_TOLERANCE
+        )
+        return _close_enough(actual, expected, tolerance)
     if comparison in {"sorted", "multiset", "set"}:
         if not isinstance(actual, list) or not isinstance(expected, list):
             return False
