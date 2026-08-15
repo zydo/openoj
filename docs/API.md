@@ -113,7 +113,7 @@ Judges every hidden case. Verdict statuses: `accepted`, `wrong_answer`,
 on the same runner; the ratio is a hardware-independent speed signal).
 
 ```sh
-# Session's submission history for a problem (pre-session history is shared)
+# Session's submission history for a problem (strictly session-scoped)
 curl -b jar.txt 'https://openoj.dongziyu.com/api/submissions?slug=two-sum'
 curl -b jar.txt https://openoj.dongziyu.com/api/submissions/42
 ```

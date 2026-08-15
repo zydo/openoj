@@ -50,7 +50,8 @@ Guest sessions DONE (phase 1):
   expired sessions and everything they own (drafts, submissions) are purged.
 - Editor drafts are server-side and session-scoped: they persist per problem
   and survive refreshes; a mid-use expiry returns the visitor to the gate
-  with a notice. Pre-session (legacy) submissions remain visible to all.
+  with a notice. Submission history is strictly per-session too — rows
+  recorded before sessions existed (NULL session) are invisible to guests.
 
 Later, openwebui-style **user accounts**, persisted in the container's
 storage:
@@ -72,11 +73,12 @@ language. The frontend shows `Expected <value> ±1e-9` for close problems.
 
 ## Interactive problem framework
 
-Needed to judge `minimum-path-cost-in-a-hidden-grid` (the one deferred
-BETTERCODE 替代题): the solution queries a hidden oracle (`GridMaster`
-API), so the judge must mediate a multi-turn protocol per case instead of
-one function call. Design questions: protocol between wrapper and harness,
-how the oracle is encoded per case, and limits modeling (query count?).
+DONE — invocation type `"interactive"`: the judge builds an oracle object
+from the case's hidden state and hands it to the solution (python3 + java
+only). First oracle: `GridMaster` (canMove/move/isTarget with a query
+budget, default 1M per case), used by 1810 Minimum Path Cost in a Hidden
+Grid — the 48th BETTERCODE 替代题, now imported. New oracles are added as
+harness classes (runner/python_harness.py + runner/java/<Oracle>.java).
 
 ## Trim bundled flat problem set after the openoj-problems migration
 

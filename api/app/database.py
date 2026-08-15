@@ -105,7 +105,7 @@ def list_submissions(
             """
             SELECT id, problem_slug, language, status, passed, total, runtime_ms, created_at
             FROM submissions
-            WHERE problem_slug = ? AND (session_id = ? OR session_id IS NULL)
+            WHERE problem_slug = ? AND session_id = ?
             ORDER BY id DESC LIMIT ?
             """,
             (slug, session_id, limit),
@@ -116,7 +116,7 @@ def list_submissions(
 def get_submission(submission_id: int, session_id: str | None = None) -> dict[str, Any] | None:
     with connect() as connection:
         row = connection.execute(
-            "SELECT * FROM submissions WHERE id = ? AND (session_id = ? OR session_id IS NULL)",
+            "SELECT * FROM submissions WHERE id = ? AND session_id = ?",
             (submission_id, session_id),
         ).fetchone()
     if row is None:
