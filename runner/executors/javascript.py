@@ -182,6 +182,24 @@ class JavaScriptExecutor(CompiledExecutor):
 {struct_codecs}                finished() {{ if (this.offset !== this.data.length) throw new Error("Trailing judge input"); }}
             }}
             function openojIdentity(value) {{ return value; }}
+            // JSON.stringify renders integer doubles beyond 2^53 in exponent
+            // notation ("4.611686018427388e+18"), which loses the exact value
+            // when the judge parses it back. Emit such integers as exact
+            // decimal digits instead — BigInt(value) is exact whenever the
+            // double is an integer (Number.isInteger above guarantees it).
+            function openojSerialize(value) {{
+                if (value === undefined) return "null";
+                if (typeof value === "number") {{
+                    if (Number.isInteger(value) && !Number.isSafeInteger(value)) return BigInt(value).toString();
+                    return JSON.stringify(value);
+                }}
+                if (value !== null && typeof value === "object") {{
+                    if (Array.isArray(value)) return "[" + value.map(openojSerialize).join(",") + "]";
+                    const entries = Object.entries(value).map(([key, item]) => JSON.stringify(key) + ":" + openojSerialize(item));
+                    return "{{" + entries.join(",") + "}}";
+                }}
+                return JSON.stringify(value);
+            }}
 
             (() => {{
                 try {{
@@ -189,7 +207,7 @@ class JavaScriptExecutor(CompiledExecutor):
             {declarations}
                     openojReader.finished();
                     const openojActual = {result_wrapper}({method}({arguments}));
-                    const openojEncoded = JSON.stringify(openojActual);
+                    const openojEncoded = openojSerialize(openojActual);
                     if (typeof openojEncoded !== "string") throw new Error("Return value is not JSON serializable");
                     process.stdout.write(`__OPENOJ_RESULT__{{"status":"completed","actual":${{openojEncoded}}}}\n`);
                 }} catch (error) {{

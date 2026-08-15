@@ -83,10 +83,50 @@ public final class OpenOJJavaHarness {
         if ("design".equals(type)) {
             return invokeDesign(targetClass, rawInput);
         }
+        if ("interactive".equals(type)) {
+            return invokeInteractive(targetClass, invocation, rawInput);
+        }
         if (!"function".equals(type)) {
             throw new IllegalArgumentException("Unsupported invocation type: " + type);
         }
         return invokeFunction(targetClass, invocation, rawInput);
+    }
+
+    private static Object invokeInteractive(
+        Class<?> targetClass,
+        Map<String, Object> invocation,
+        Object rawInput
+    ) throws Exception {
+        String oracle = invocation.getOrDefault("oracle", "GridMaster").toString();
+        if (!"GridMaster".equals(oracle)) {
+            throw new IllegalArgumentException("Unsupported interactive oracle: " + oracle);
+        }
+        Map<String, Object> state = asMap(rawInput, "Interactive input must be an object");
+        List<Object> grid = asList(state.get("grid"), "Interactive grid must be a list");
+        List<Object> start = asList(state.get("start"), "Interactive start must be [row, col]");
+        List<Object> target = asList(state.get("target"), "Interactive target must be [row, col]");
+        long budget = numberValue(invocation.getOrDefault("query_limit", 1_000_000)).longValue();
+        GridMaster master = new GridMaster(
+            grid,
+            numberValue(start.get(0)).intValue(),
+            numberValue(start.get(1)).intValue(),
+            numberValue(target.get(0)).intValue(),
+            numberValue(target.get(1)).intValue(),
+            budget
+        );
+
+        Constructor<?> constructor = targetClass.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        Object instance = constructor.newInstance();
+        String method = asString(invocation.get("method"), "Invocation method must be a string");
+        for (Method candidate : targetClass.getDeclaredMethods()) {
+            if (!candidate.getName().equals(method)) {
+                continue;
+            }
+            candidate.setAccessible(true);
+            return candidate.invoke(instance, master);
+        }
+        throw new IllegalArgumentException("Method not found on solution class: " + method);
     }
 
     private static Object invokeFunction(

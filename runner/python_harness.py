@@ -55,6 +55,7 @@ def _load_solution(solution_path: Path):
             "Node": Node,
             "NestedInteger": NestedInteger,
             "HtmlParser": HtmlParser,
+            "GridMaster": GridMaster,
         }
     )
     spec.loader.exec_module(module)
@@ -90,12 +91,66 @@ def _invoke_design(module, invocation: dict[str, Any], raw_input: Any) -> Any:
     return output
 
 
+class GridMaster:
+    """Interactive oracle for hidden-grid problems (invocation type
+    "interactive"). Mirrors runner/java/GridMaster.java exactly."""
+
+    DELTAS = {"U": (-1, 0), "D": (1, 0), "L": (0, -1), "R": (0, 1)}
+
+    def __init__(self, grid: list[list[int]], start: list[int], target: list[int], budget: int):
+        self.cost = grid
+        self.rows, self.cols = len(grid), len(grid[0]) if grid else 0
+        self.row, self.col = start
+        self.target_row, self.target_col = target
+        self.budget = budget
+
+    def _spend(self) -> None:
+        if self.budget <= 0:
+            raise RuntimeError("GridMaster query budget exhausted")
+        self.budget -= 1
+
+    def _enterable(self, row: int, col: int) -> bool:
+        return 0 <= row < self.rows and 0 <= col < self.cols and self.cost[row][col] > 0
+
+    def canMove(self, direction: str) -> bool:  # noqa: N802 — LeetCode API
+        self._spend()
+        delta_row, delta_col = self.DELTAS[direction]
+        return self._enterable(self.row + delta_row, self.col + delta_col)
+
+    def move(self, direction: str) -> int:
+        self._spend()
+        delta_row, delta_col = self.DELTAS[direction]
+        row, col = self.row + delta_row, self.col + delta_col
+        if not self._enterable(row, col):
+            return -1
+        self.row, self.col = row, col
+        return self.cost[row][col]
+
+    def isTarget(self) -> bool:  # noqa: N802 — LeetCode API
+        self._spend()
+        return (self.row, self.col) == (self.target_row, self.target_col)
+
+
+def _invoke_interactive(module, invocation: dict[str, Any], raw_input: Any) -> Any:
+    oracle_name = invocation.get("oracle", "GridMaster")
+    if oracle_name != "GridMaster":
+        raise ValueError(f"Unsupported interactive oracle: {oracle_name}")
+    if not isinstance(raw_input, dict):
+        raise ValueError("Interactive input must be an object")
+    budget = int(invocation.get("query_limit", 1_000_000))
+    master = GridMaster(raw_input["grid"], raw_input["start"], raw_input["target"], budget)
+    instance = getattr(module, invocation["class_name"])()
+    return getattr(instance, invocation["method"])(master)
+
+
 def _invoke(module, invocation: dict[str, Any], raw_input: Any) -> Any:
     invocation_type = invocation.get("type", "function")
     if invocation_type == "function":
         return _invoke_function(module, invocation, raw_input)
     if invocation_type == "design":
         return _invoke_design(module, invocation, raw_input)
+    if invocation_type == "interactive":
+        return _invoke_interactive(module, invocation, raw_input)
     raise ValueError(f"Unsupported invocation type: {invocation_type}")
 
 

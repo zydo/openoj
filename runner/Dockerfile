@@ -52,7 +52,8 @@ RUN mkdir -p /runner/java-classes /runner/benchmarks \
         -d /runner/java-classes \
         /runner/java/OpenOJJavaHarness.java \
         /runner/java/ListNode.java \
-        /runner/java/TreeNode.java
+        /runner/java/TreeNode.java \
+        /runner/java/GridMaster.java
 RUN g++ -std=c++20 -O2 \
         -o /runner/benchmarks/cpp /runner/benchmark-sources/benchmark.cpp \
     && go build -trimpath \
