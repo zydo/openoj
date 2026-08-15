@@ -26,7 +26,7 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { api } from "./api";
+import { api, onUnauthorized } from "./api";
 import type { JudgeResult, Problem, ProblemSummary, Submission } from "./types";
 
 type Theme = "light" | "dark";
@@ -53,31 +53,8 @@ function slugFromPath(): string | null {
   return match ? match[1] : null;
 }
 
-function draftKey(slug: string, language: string) {
-  return `openoj:${slug}:${language}`;
-}
-
-// Editor state (language preference and per-problem drafts) is session-local:
-// it survives page refreshes but is scoped to the tab, per the multi-user
-// design in TODO.md. Accounts and server-persisted state arrive later.
-function readDraft(slug: string, language: string) {
-  try {
-    return sessionStorage.getItem(draftKey(slug, language));
-  } catch {
-    return null;
-  }
-}
-
-function writeDraft(slug: string, language: string, code: string) {
-  try {
-    sessionStorage.setItem(draftKey(slug, language), code);
-  } catch {
-    /* Drafts are best-effort; judging works without them. */
-  }
-}
-
 // The last chosen language carries across problems within the session; each
-// problem still keeps its own per-language draft.
+// problem still keeps its own per-language server-side draft.
 const LANGUAGE_STORAGE_KEY = "openoj:language";
 
 function storedLanguage(): string {
@@ -165,6 +142,12 @@ function formatJson(value: unknown) {
 function App() {
   const [themeOverride, setThemeOverride] = useState<Theme | null>(storedTheme);
   const [systemTheme, setSystemTheme] = useState<Theme>(preferredTheme);
+  // Guest-session gate: "checking" while the session cookie is validated,
+  // "gate" shows the Continue-as-guest entrance (the only way in until
+  // accounts exist), "active" runs the app. An idle-expired session mid-use
+  // returns to the gate with a notice.
+  const [sessionPhase, setSessionPhase] = useState<"checking" | "gate" | "active">("checking");
+  const [sessionExpired, setSessionExpired] = useState(false);
   // Full problem list, fetched lazily only when the editor opens (prev/next
   // navigation and the drawer need the whole ordering). The landing page
   // fetches its own paginated slice instead.
@@ -190,6 +173,63 @@ function App() {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
   const theme = themeOverride ?? systemTheme;
+
+  // Server-side drafts (session-scoped): loaded per problem, cached locally
+  // for instant language switches, and flushed to the server on a short
+  // debounce so editor state survives refreshes and idle-expiry clears it.
+  const draftCache = useRef(new Map<string, string>());
+  const pendingDrafts = useRef(new Map<string, { slug: string; language: string; code: string }>());
+  const draftTimer = useRef<number | null>(null);
+  const flushDrafts = useCallback(() => {
+    if (draftTimer.current !== null) {
+      window.clearTimeout(draftTimer.current);
+      draftTimer.current = null;
+    }
+    const pending = [...pendingDrafts.current.values()];
+    pendingDrafts.current.clear();
+    for (const draft of pending) {
+      api.putDraft(draft.slug, draft.language, draft.code).catch(() => undefined);
+    }
+  }, []);
+  const saveDraft = useCallback((slug: string, language: string, code: string) => {
+    draftCache.current.set(`${slug}:${language}`, code);
+    pendingDrafts.current.set(`${slug}:${language}`, { slug, language, code });
+    if (draftTimer.current === null) {
+      draftTimer.current = window.setTimeout(flushDrafts, 700);
+    }
+  }, [flushDrafts]);
+
+  useEffect(() => {
+    api.sessionStatus()
+      .then(() => setSessionPhase("active"))
+      .catch(() => setSessionPhase("gate"))
+      .finally(() => {
+        // Registered after the boot probe so the expected first-visit 401
+        // does not read as "your session expired". Any later 401 (idle
+        // expiry mid-use) routes back to the gate with the notice.
+        onUnauthorized(() => {
+          setSessionPhase("gate");
+          setSessionExpired(true);
+        });
+      });
+    const onHide = () => {
+      if (document.visibilityState === "hidden") flushDrafts();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      flushDrafts();
+    };
+  }, [flushDrafts]);
+
+  const enterAsGuest = useCallback(() => {
+    api.startSession()
+      .then(() => {
+        setSessionExpired(false);
+        setSessionPhase("active");
+      })
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -265,18 +305,25 @@ function App() {
     setSubmissions([]);
     setBottomTab("testcase");
     let cancelled = false;
-    api.getProblem(activeSlug).then((loaded) => {
+    Promise.all([
+      api.getProblem(activeSlug),
+      api.getDrafts(activeSlug).catch(() => []),
+    ]).then(([loaded, draftRows]) => {
       if (cancelled) return;
       setProblem(loaded);
+      for (const row of draftRows) {
+        draftCache.current.set(`${loaded.slug}:${row.language}`, row.code);
+      }
+      const enabled = (key: string) => loaded.languages[key]?.enabled;
+      const recent = draftRows.find((row) => enabled(row.language))?.language;
       const preferred = storedLanguage();
-      const initialLanguage = loaded.languages[preferred]?.enabled
-        ? preferred
-        : (Object.keys(loaded.languages).find((key) => loaded.languages[key].enabled) ?? "python3");
+      const initialLanguage = (recent && enabled(recent) ? recent : undefined)
+        ?? (enabled(preferred) ? preferred : undefined)
+        ?? (Object.keys(loaded.languages).find(enabled) ?? "python3");
       setLanguage(initialLanguage);
-      const saved = readDraft(loaded.slug, initialLanguage);
+      const saved = draftCache.current.get(`${loaded.slug}:${initialLanguage}`);
       const initialCode = saved ?? loaded.languages[initialLanguage].starter;
       setCode(initialCode);
-      writeDraft(loaded.slug, initialLanguage, initialCode);
       setDrafts(loaded.public_cases.map((test) =>
         Object.fromEntries(Object.entries(test.input).map(([key, value]) => [key, JSON.stringify(value)])),
       ));
@@ -343,10 +390,10 @@ function App() {
   const changeLanguage = (key: string) => {
     if (!problem) return;
     try { sessionStorage.setItem(LANGUAGE_STORAGE_KEY, key); } catch { /* Preference is best-effort. */ }
-    const next = readDraft(problem.slug, key) ?? problem.languages[key].starter;
+    flushDrafts();
+    const next = draftCache.current.get(`${problem.slug}:${key}`) ?? problem.languages[key].starter;
     setLanguage(key);
     setCode(next);
-    writeDraft(problem.slug, key, next);
   };
 
   const dragHorizontal = (event: React.PointerEvent) => {
@@ -377,6 +424,12 @@ function App() {
     window.addEventListener("pointerup", stop);
   };
 
+  if (sessionPhase !== "active") {
+    if (sessionPhase === "checking") {
+      return <FullPageMessage icon={<LoaderCircle className="spin" />} title="Preparing the judge bench" detail="Checking your session…" />;
+    }
+    return <GuestGate expired={sessionExpired} onEnter={enterAsGuest} theme={theme} onToggleTheme={toggleTheme} />;
+  }
   if (loadError) return <FullPageMessage icon={<CircleAlert />} title="OpenOJ could not load" detail={loadError} />;
   if (activeSlug === null) return <Landing theme={theme} onToggleTheme={toggleTheme} onOpen={openProblem} />;
   if (problemsError && allProblems === null) {
@@ -517,7 +570,7 @@ function App() {
                 value={code}
                 onChange={(value) => {
                   setCode(value ?? "");
-                  writeDraft(problem.slug, language, value ?? "");
+                  saveDraft(problem.slug, language, value ?? "");
                 }}
                 theme={theme === "dark" ? "openoj-dark" : "openoj-light"}
                 loading={<div className="editor-loading"><LoaderCircle className="spin" size={18} /> Loading syntax engine…</div>}
@@ -595,7 +648,7 @@ function App() {
           onConfirm={() => {
             setConfirmRestore(false);
             setCode(languageConfig.starter);
-            writeDraft(problem.slug, language, languageConfig.starter);
+            saveDraft(problem.slug, language, languageConfig.starter);
           }}
           onClose={() => setConfirmRestore(false)}
         />
@@ -1181,6 +1234,38 @@ function ConsoleEmpty({ icon, title, detail, tone = "" }: { icon: React.ReactNod
 
 function FullPageMessage({ icon, title, detail }: { icon: React.ReactNode; title: string; detail: string }) {
   return <main className="full-page-message"><span>{icon}</span><h1>{title}</h1><p>{detail}</p></main>;
+}
+
+// The only entrance until accounts exist: every visitor works as a guest
+// session that idles out after about an hour.
+function GuestGate({ expired, onEnter, theme, onToggleTheme }: {
+  expired: boolean;
+  onEnter: () => void;
+  theme: Theme;
+  onToggleTheme: () => void;
+}) {
+  return (
+    <main className="guest-gate">
+      <button
+        className="icon-button theme-toggle gate-theme"
+        onClick={onToggleTheme}
+        title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+        aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+      >
+        {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+      </button>
+      <div className="guest-card">
+        <span className="brand-mark gate-mark"><Code2 size={22} strokeWidth={2.4} /></span>
+        <h1>OpenOJ</h1>
+        {expired && <p className="gate-notice">Your session idled out — drafts and submissions from it are gone.</p>}
+        <p className="gate-copy">
+          Sessions are guest-only and ephemeral: pick problems, write solutions, get verdicts.
+          Editor drafts persist for the session and clear after about an hour of inactivity.
+        </p>
+        <button className="gate-enter" onClick={onEnter}>Continue as guest</button>
+      </div>
+    </main>
+  );
 }
 
 export default App;

@@ -1,9 +1,20 @@
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response
 
-from .database import get_submission, initialize_database, list_submissions, save_submission
+from .database import (
+    SESSION_IDLE_SECONDS,
+    create_session,
+    get_submission,
+    initialize_database,
+    list_drafts,
+    list_submissions,
+    purge_expired_sessions,
+    save_draft,
+    save_submission,
+    validate_session,
+)
 from .judge import RunnerUnavailable, execute
 from .models import RunRequest, SubmitRequest
 from .problems import (
@@ -15,10 +26,13 @@ from .problems import (
     public_problem,
 )
 
+SESSION_COOKIE = "openoj_session"
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_database()
+    purge_expired_sessions()
     yield
 
 
@@ -30,8 +44,58 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def current_session(openoj_session: Annotated[str | None, Cookie()] = None) -> str:
+    """Require an active guest session; 401 otherwise (the frontend then
+    shows the Continue-as-guest entrance)."""
+    if openoj_session and validate_session(openoj_session):
+        return openoj_session
+    raise HTTPException(status_code=401, detail="No active session")
+
+
+@app.post("/session")
+def start_session(response: Response) -> dict[str, Any]:
+    session_id = create_session()
+    purge_expired_sessions()
+    response.set_cookie(
+        SESSION_COOKIE,
+        session_id,
+        max_age=SESSION_IDLE_SECONDS,
+        httponly=True,
+        samesite="lax",
+    )
+    return {"status": "active", "idle_seconds": SESSION_IDLE_SECONDS}
+
+
+@app.get("/session")
+def session_status(session_id: Annotated[str, Depends(current_session)]) -> dict[str, Any]:
+    return {"status": "active", "idle_seconds": SESSION_IDLE_SECONDS}
+
+
+@app.get("/drafts/{slug}")
+def drafts(slug: str, session_id: Annotated[str, Depends(current_session)]) -> list[dict[str, Any]]:
+    return list_drafts(session_id, slug)
+
+
+@app.put("/drafts/{slug}/{language}")
+def put_draft(
+    slug: str,
+    language: str,
+    body: dict[str, str],
+    session_id: Annotated[str, Depends(current_session)],
+) -> dict[str, str]:
+    code = body.get("code", "")
+    if len(code) > 256_000:
+        raise HTTPException(status_code=400, detail="Draft too large")
+    save_draft(session_id, slug, language, code)
+    return {"status": "saved"}
+
+
 @app.get("/problems")
-def problems(page: int = 1, page_size: int = 0) -> dict[str, Any]:
+def problems(
+    page: int = 1,
+    page_size: int = 0,
+    session_id: Annotated[str, Depends(current_session)] = None,
+) -> dict[str, Any]:
     """List problems, optionally paginated.
 
     Without query params the full list is returned in a single page (the
@@ -62,7 +126,7 @@ def problems(page: int = 1, page_size: int = 0) -> dict[str, Any]:
 
 
 @app.get("/problems/{slug}")
-def problem(slug: str) -> dict[str, Any]:
+def problem(slug: str, session_id: Annotated[str, Depends(current_session)] = None) -> dict[str, Any]:
     try:
         return public_problem(load_problem(slug))
     except (ProblemError, OSError, ValueError) as error:
@@ -90,7 +154,7 @@ def _run_judge(
 
 
 @app.post("/run")
-def run(request: RunRequest) -> dict[str, Any]:
+def run(request: RunRequest, session_id: Annotated[str, Depends(current_session)] = None) -> dict[str, Any]:
     try:
         problem_data = load_problem(request.slug)
     except ProblemError as error:
@@ -157,7 +221,7 @@ def _reference_runtime_ms(
 
 
 @app.post("/submit")
-def submit(request: SubmitRequest) -> dict[str, Any]:
+def submit(request: SubmitRequest, session_id: Annotated[str, Depends(current_session)] = None) -> dict[str, Any]:
     try:
         problem_data = load_problem(request.slug)
         cases, public_count = load_all_cases(request.slug)
@@ -178,6 +242,7 @@ def submit(request: SubmitRequest) -> dict[str, Any]:
         summary["total"],
         summary["runtime_ms"],
         results,
+        session_id,
     )
     summary["submission_id"] = submission_id
     return summary
@@ -202,13 +267,17 @@ def _summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 @app.get("/submissions")
-def submissions(slug: str = Query(min_length=1), limit: int = Query(default=30, ge=1, le=100)):
-    return list_submissions(slug, limit)
+def submissions(
+    slug: str = Query(min_length=1),
+    limit: int = Query(default=30, ge=1, le=100),
+    session_id: Annotated[str, Depends(current_session)] = None,
+):
+    return list_submissions(slug, limit, session_id)
 
 
 @app.get("/submissions/{submission_id}")
-def submission(submission_id: int):
-    result = get_submission(submission_id)
+def submission(submission_id: int, session_id: Annotated[str, Depends(current_session)] = None):
+    result = get_submission(submission_id, session_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Submission not found")
     return result

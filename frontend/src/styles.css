@@ -289,6 +289,17 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .full-page-message h1 { margin: 14px 0 5px; font-size: 20px; }
 .full-page-message p { margin: 0; font-size: 13px; }
 
+.guest-gate { position: relative; height: 100%; display: grid; place-items: center; background: var(--canvas); }
+.gate-theme { position: absolute; top: 16px; right: 16px; }
+.guest-card { width: min(400px, 88vw); display: flex; flex-direction: column; align-items: center; text-align: center; padding: 34px 30px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 18px 50px #0006; }
+.gate-mark { width: 44px; height: 44px; margin-bottom: 14px; }
+.guest-card h1 { margin: 0; font-size: 24px; letter-spacing: -.03em; }
+.gate-notice { margin: 12px 0 0; padding: 7px 11px; width: 100%; background: #39281a; border: 1px solid #5b3a1f; border-radius: 6px; color: var(--orange); font-size: 12px; }
+.gate-copy { margin: 12px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.gate-enter { margin-top: 20px; min-width: 200px; padding: 9px 18px; background: linear-gradient(180deg, #f2bd61, #e1a84b); border: none; border-radius: 7px; color: #241a09; font: 600 13px "IBM Plex Sans", sans-serif; cursor: pointer; }
+.gate-enter:hover { filter: brightness(1.05); }
+.gate-enter:active { transform: translateY(1px); }
+
 .results-view { min-height: 100%; padding: 13px; }
 .result-summary { display: flex; align-items: center; gap: 11px; min-height: 56px; padding: 10px 13px; background: #111518; border: 1px solid var(--line); border-radius: 5px; }
 .seal {
@@ -477,6 +488,8 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 [data-theme="light"] .case-field textarea.invalid { background: #fff0f0; }
 [data-theme="light"] .console-empty strong { color: #3f4c54; }
 [data-theme="light"] .result-summary { background: #f7f9fa; }
+[data-theme="light"] .guest-card { background: #ffffff; border-color: #d9e0e3; box-shadow: 0 18px 50px #00000022; }
+[data-theme="light"] .gate-notice { background: #f8eadc; border-color: #dcc0a4; }
 [data-theme="light"] .case-status.success { background: #dff2e7; }
 [data-theme="light"] .case-status.danger { background: #f8e3e3; }
 [data-theme="light"] .case-status.warning { background: #f8eadc; }
