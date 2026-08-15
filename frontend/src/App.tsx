@@ -102,6 +102,22 @@ function statusLabel(status: string) {
   return labels[status] ?? status.replaceAll("_", " ");
 }
 
+// The judge's own short-hand for a verdict — what competitive programmers
+// read at a glance (AC, WA, TLE…). Stamped on the result seal.
+function verdictCode(status: string) {
+  const codes: Record<string, string> = {
+    accepted: "AC",
+    completed: "OK",
+    wrong_answer: "WA",
+    compile_error: "CE",
+    runtime_error: "RE",
+    time_limit_exceeded: "TLE",
+    memory_limit_exceeded: "MLE",
+    system_error: "JE",
+  };
+  return codes[status] ?? status.replaceAll("_", " ").split(" ").map((word) => word[0]?.toUpperCase() ?? "").join("").slice(0, 3);
+}
+
 function statusTone(status?: string) {
   if (!status) return "idle";
   if (status === "accepted" || status === "completed") return "success";
@@ -503,7 +519,7 @@ function App() {
                   setCode(value ?? "");
                   writeDraft(problem.slug, language, value ?? "");
                 }}
-                theme={theme === "dark" ? "vs-dark" : "light"}
+                theme={theme === "dark" ? "openoj-dark" : "openoj-light"}
                 loading={<div className="editor-loading"><LoaderCircle className="spin" size={18} /> Loading syntax engine…</div>}
                 options={{
                   automaticLayout: true,
@@ -524,6 +540,7 @@ function App() {
             </div>
             <div className="editor-status">
               <span><span className="saved-dot" /> Saved locally</span>
+              <span className="editor-shortcut" aria-hidden="true">⏎ run · ⇧⏎ submit</span>
               <span>{problem.limits.time_ms / 1000}s · {problem.limits.memory_mb} MB</span>
             </div>
           </section>
@@ -770,13 +787,20 @@ function ConfirmDialog({ title, body, confirmLabel, cancelLabel = "Cancel", onCo
 const LANDING_PAGE_SIZE = 50;
 
 function pageNumbers(current: number, pages: number): Array<number | "ellipsis-start" | "ellipsis-end"> {
-  if (pages <= 7) return Array.from({ length: pages }, (_, index) => index + 1);
+  // Small sets get every page; larger ones keep the first and last page and
+  // a seven-page window around the current one, shifted to stay full when the
+  // current page hugs either end.
+  if (pages <= 9) return Array.from({ length: pages }, (_, index) => index + 1);
+  let start = Math.max(2, current - 3);
+  let end = Math.min(pages - 1, current + 3);
+  if (end - start < 6) {
+    if (start === 2) end = Math.min(pages - 1, start + 6);
+    else start = Math.max(2, end - 6);
+  }
   const numbers: Array<number | "ellipsis-start" | "ellipsis-end"> = [1];
-  if (current > 4) numbers.push("ellipsis-start");
-  const start = Math.max(2, current - 1);
-  const end = Math.min(pages - 1, current + 1);
+  if (start > 2) numbers.push("ellipsis-start");
   for (let page = start; page <= end; page += 1) numbers.push(page);
-  if (current < pages - 3) numbers.push("ellipsis-end");
+  if (end < pages - 1) numbers.push("ellipsis-end");
   numbers.push(pages);
   return numbers;
 }
@@ -880,13 +904,19 @@ function Landing({ theme, onToggleTheme, onOpen }: {
       <main className="landing">
         <div className="landing-inner">
           <section className="landing-index" ref={listRef}>
-            <header className="index-header">
-              <h2>All problems</h2>
-              <span>
-                {filtered !== null
-                  ? `${filtered.length} of ${allItems?.length ?? total} problems`
-                  : `${total} ${total === 1 ? "problem" : "problems"}`}
-              </span>
+            <header className="landing-masthead">
+              <span className="eyebrow">Practice library</span>
+              <div className="landing-masthead-row">
+                <h1>All problems</h1>
+                <span className="landing-count">
+                  {filtered !== null
+                    ? `${filtered.length} of ${allItems?.length ?? total} problems`
+                    : `${total} ${total === 1 ? "problem" : "problems"}`}
+                </span>
+              </div>
+              <p className="landing-tagline">
+                Curated problems, judged in isolation — pick one, write a solution, get a verdict.
+              </p>
             </header>
             <div className="landing-filter">
               <input
@@ -1003,15 +1033,15 @@ function Testcases({ problem, drafts, setDrafts, activeCase, setActiveCase }: {
 function Results({ result, busy, error }: { result: JudgeResult | null; busy: string | null; error: string }) {
   const [openCase, setOpenCase] = useState(0);
   useEffect(() => setOpenCase(0), [result]);
-  if (busy) return <ConsoleEmpty icon={<LoaderCircle className="spin" />} title={busy === "submit" ? "Judging every case" : "Running testcases"} detail="Code is executing inside the isolated language runner." />;
+  if (busy) return <ConsoleEmpty icon={<LoaderCircle className="spin" />} title={busy === "submit" ? "Judging every case" : "Running testcases"} detail="Code is executing inside the isolated judge — the verdict lands when it finishes." />;
   if (error) return <ConsoleEmpty icon={<CircleAlert />} title="Execution stopped" detail={error} tone="danger" />;
-  if (!result) return <ConsoleEmpty icon={<TerminalSquare />} title="No results yet" detail="Run your code against visible cases, or submit it to the full judge." />;
+  if (!result) return <ConsoleEmpty icon={<TerminalSquare />} title="No results yet" detail="Run to check your code against the visible cases, or Submit to face the full judge." />;
   const active = result.results[openCase];
   const tone = statusTone(result.status);
   return (
     <div className="results-view">
       <div className={`result-summary ${tone}`}>
-        <div className="verdict-icon">{tone === "success" ? <Check size={20} /> : <X size={20} />}</div>
+        <span className="seal" title={statusLabel(result.status)}>{verdictCode(result.status)}</span>
         <div>
           <strong>{statusLabel(result.status)}</strong>
           <span>{result.passed} of {result.total} cases passed</span>
@@ -1071,7 +1101,10 @@ function Submissions({ submissions, problem }: { submissions: Submission[]; prob
       <div className="submission-header"><span>Verdict</span><span>Language</span><span>Runtime</span><span>Submitted</span></div>
       {submissions.map((submission) => (
         <div className="submission-row" key={submission.id}>
-          <span className={`status-text ${statusTone(submission.status)}`}>{statusLabel(submission.status)}</span>
+          <span className="submission-status">
+            <span className={`result-dot ${statusTone(submission.status)}`} />
+            <span className={`status-text ${statusTone(submission.status)}`}>{statusLabel(submission.status)}</span>
+          </span>
           <span>{problem.languages[submission.language]?.display_name ?? submission.language}</span>
           <span>{submission.runtime_ms} ms</span>
           <time>{new Date(submission.created_at).toLocaleString()}</time>
