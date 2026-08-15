@@ -19,6 +19,7 @@ sys.path.insert(0, "/runner")
 
 from executors import get_executor, supported_languages
 from executors.base import ExecutorError, LanguageExecutor, PreparedProgram
+from executors.go import WRAPPER_IMPORTS
 
 
 QUEUE_DIR = Path(os.environ.get("OPENOJ_QUEUE_DIR", "/queue"))
@@ -263,7 +264,17 @@ def _prewarm_toolchains_once() -> None:
         go_dir = warm_dir / "go"
         go_dir.mkdir(exist_ok=True)
         (go_dir / "go.mod").write_text("module warm\n\ngo 1.24\n", encoding="utf-8")
-        (go_dir / "main.go").write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
+        # Every submission imports the wrapper stdlib packages (see
+        # GoExecutor), so the warm build must import them too — blank imports
+        # pull their archives into the shared GOCACHE without needing symbols.
+        # An empty main only warms the runtime chain, leaving fmt, json, math,
+        # os, io, and binary cold for the first submission.
+        (go_dir / "main.go").write_text(
+            "package main\n\n"
+            + "".join(f'import _ "{package}"\n' for package in WRAPPER_IMPORTS)
+            + "\nfunc main() {}\n",
+            encoding="utf-8",
+        )
         # The cache is shared with real submissions (see GoExecutor), so this
         # build leaves the standard library precompiled for every job. The Go
         # toolchain refuses to reuse a build cache written by another uid, so
