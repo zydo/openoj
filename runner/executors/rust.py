@@ -232,12 +232,24 @@ class RustExecutor(CompiledExecutor):
                 {result_expression}
             }}
 
+            fn openoj_emit(line: &str) {{
+                // Judge protocol prefers the dedicated fd so submission code
+                // cannot forge verdicts on stdout; stdout is the fallback.
+                use std::io::Write;
+                use std::os::unix::io::FromRawFd;
+                let mut channel = unsafe {{ std::fs::File::from_raw_fd(63) }};
+                if write!(channel, "{{}}\\n", line).is_ok() {{
+                    return;
+                }}
+                println!("{{}}", line);
+            }}
+
             fn main() {{
                 let response = std::panic::catch_unwind(openoj_run);
                 match response {{
-                    Ok(Ok(actual)) => println!("__OPENOJ_RESULT__{{{{\\\"status\\\":\\\"completed\\\",\\\"actual\\\":{{}}}}}}", actual),
-                    Ok(Err(error)) => println!("__OPENOJ_RESULT__{{{{\\\"status\\\":\\\"runtime_error\\\",\\\"error\\\":{{}}}}}}", openoj_json_string(&error)),
-                    Err(_) => println!("{{}}", "__OPENOJ_RESULT__{{\\\"status\\\":\\\"runtime_error\\\",\\\"error\\\":\\\"Solution panicked\\\"}}"),
+                    Ok(Ok(actual)) => openoj_emit(&format!("__OPENOJ_RESULT__{{{{\\\"status\\\":\\\"completed\\\",\\\"actual\\\":{{}}}}}}", actual)),
+                    Ok(Err(error)) => openoj_emit(&format!("__OPENOJ_RESULT__{{{{\\\"status\\\":\\\"runtime_error\\\",\\\"error\\\":{{}}}}}}", openoj_json_string(&error))),
+                    Err(_) => openoj_emit("__OPENOJ_RESULT__{{{{\\\"status\\\":\\\"runtime_error\\\",\\\"error\\\":\\\"Solution panicked\\\"}}}}"),
                 }}
             }}
             """

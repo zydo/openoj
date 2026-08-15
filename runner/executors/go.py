@@ -249,11 +249,22 @@ class GoExecutor(CompiledExecutor):
                 return map[string]any{{"status": "completed", "actual": openojActual}}
             }}
 
+            func openojEmit(line string) {{
+                // Judge protocol prefers the dedicated fd so submission code
+                // cannot forge verdicts on stdout; stdout is the fallback.
+                if channel := os.NewFile(63, "protocol"); channel != nil {{
+                    if _, errorValue := channel.WriteString(line + "\\n"); errorValue == nil {{
+                        return
+                    }}
+                }}
+                fmt.Println(line)
+            }}
+
             func main() {{
                 response := openojExecute()
                 encoded, errorValue := json.Marshal(response)
                 if errorValue != nil {{ encoded, _ = json.Marshal(map[string]any{{"status": "runtime_error", "error": errorValue.Error()}}) }}
-                fmt.Println("__OPENOJ_RESULT__" + string(encoded))
+                openojEmit("__OPENOJ_RESULT__" + string(encoded))
             }}
             """
         ).lstrip()

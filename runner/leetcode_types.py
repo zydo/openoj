@@ -5,6 +5,7 @@ judge: linked lists are value arrays, binary trees are trimmed level-order
 arrays, and N-ary trees use ``null`` delimiters between child groups.
 """
 
+import sys
 from collections import deque
 from typing import Any
 
@@ -182,3 +183,19 @@ def encode(value: Any, codec: str) -> Any:
     if codec == "nary_tree":
         return _serialize_nary_tree(value)
     raise ValueError(f"Unsupported output codec: {codec}")
+
+
+# The judge protocol line prefers the dedicated protocol fd so submission
+# code cannot forge verdicts on stdout; it falls back to stdout when the fd
+# is absent (local authoring tooling runs harnesses without it).
+PROTOCOL_FD = 63
+
+
+def emit_protocol(line: str) -> None:
+    import os
+
+    payload = (line + "\n").encode("utf-8")
+    try:
+        os.write(PROTOCOL_FD, payload)
+    except OSError:
+        sys.stdout.write(line + "\n")

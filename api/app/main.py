@@ -1,7 +1,8 @@
+import time
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response
 
 from .database import (
     SESSION_IDLE_SECONDS,
@@ -58,17 +59,22 @@ def current_session(openoj_session: Annotated[str | None, Cookie()] = None) -> s
     raise HTTPException(status_code=401, detail="No active session")
 
 
-@app.post("/session")
-def start_session(response: Response) -> dict[str, Any]:
-    session_id = create_session()
-    purge_expired_sessions()
+def _set_session_cookie(response: Response, session_id: str) -> None:
     response.set_cookie(
         SESSION_COOKIE,
         session_id,
         max_age=SESSION_IDLE_SECONDS,
         httponly=True,
+        secure=True,
         samesite="lax",
     )
+
+
+@app.post("/session")
+def start_session(response: Response) -> dict[str, Any]:
+    session_id = create_session()
+    purge_expired_sessions()
+    _set_session_cookie(response, session_id)
     return {"status": "active", "idle_seconds": SESSION_IDLE_SECONDS}
 
 
@@ -85,6 +91,23 @@ def session_status(session_id: Annotated[str, Depends(current_session)]) -> dict
 # --- user accounts (backend-only; the UI stays guest-only for now) -----------
 # Fresh-start bootstrap: the very first account must be the fixed-name admin;
 # afterwards registration is closed until the accounts UI ships.
+
+# Minimal in-memory login throttle: per source, allow 10 failures per minute.
+_LOGIN_WINDOW_SECONDS = 60.0
+_LOGIN_MAX_FAILURES = 10
+_login_failures: dict[str, list[float]] = {}
+
+
+def _register_login_failure(source: str) -> bool:
+    """Record a failure; returns False when the source is throttled."""
+    now = time.monotonic()
+    recent = [stamp for stamp in _login_failures.get(source, []) if now - stamp < _LOGIN_WINDOW_SECONDS]
+    if len(recent) >= _LOGIN_MAX_FAILURES:
+        _login_failures[source] = recent
+        return False
+    recent.append(now)
+    _login_failures[source] = recent
+    return True
 
 
 @app.post("/auth/register")
@@ -103,25 +126,23 @@ def auth_register(
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     try:
         create_user(username, password, is_admin=True)
-    except Exception as error:  # noqa: BLE001 — username uniqueness
-        raise HTTPException(status_code=400, detail=f"Could not create the account: {error}") from error
-    response.set_cookie(
-        SESSION_COOKIE,
-        create_session(),
-        max_age=SESSION_IDLE_SECONDS,
-        httponly=True,
-        samesite="lax",
-    )
+    except Exception:  # noqa: BLE001 — username uniqueness races
+        raise HTTPException(status_code=400, detail="That username is not available")
+    _set_session_cookie(response, create_session())
     return {"status": "registered", "username": username}
 
 
 @app.post("/auth/login")
 def auth_login(
     body: dict[str, str],
+    request: Request,
     session_id: Annotated[str, Depends(current_session)],
 ) -> dict[str, Any]:
+    source = request.client.host if request.client else "unknown"
     user = verify_user(body.get("username", ""), body.get("password", ""))
     if user is None:
+        if not _register_login_failure(source):
+            raise HTTPException(status_code=429, detail="Too many failed attempts; wait a minute")
         raise HTTPException(status_code=401, detail="Invalid username or password")
     bind_session_user(session_id, user["id"])
     return {"status": "logged_in", "username": user["username"], "is_admin": user["is_admin"]}

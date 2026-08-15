@@ -214,6 +214,10 @@ class TypeScriptExecutor(CompiledExecutor):
                 return JSON.stringify(value);
             }}
 
+            function openojEmit(line: string) {{
+                try {{ require("fs").writeSync(63, line + "\\n"); }}
+                catch (error) {{ process.stdout.write(line + "\\n"); }}
+            }}
             (() => {{
                 try {{
                     const openojReader = new OpenOJReader(require("fs").readFileSync(0));
@@ -222,10 +226,10 @@ class TypeScriptExecutor(CompiledExecutor):
                     const openojActual = {result_wrapper}({method}({arguments}));
                     const openojEncoded = openojSerialize(openojActual);
                     if (typeof openojEncoded !== "string") throw new Error("Return value is not JSON serializable");
-                    process.stdout.write(`__OPENOJ_RESULT__{{"status":"completed","actual":${{openojEncoded}}}}\n`);
+                    openojEmit(`__OPENOJ_RESULT__{{"status":"completed","actual":${{openojEncoded}}}}`);
                 }} catch (error) {{
                     const message = error instanceof Error ? `${{error.name}}: ${{error.message}}` : String(error);
-                    process.stdout.write(`__OPENOJ_RESULT__{{"status":"runtime_error","error":${{JSON.stringify(message.slice(0, 4096))}}}}\n`);
+                    openojEmit(`__OPENOJ_RESULT__{{"status":"runtime_error","error":${{JSON.stringify(message.slice(0, 4096))}}}}`);
                 }}
             }})();
             """

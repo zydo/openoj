@@ -3,6 +3,10 @@ import sqlite3
 import sys
 from pathlib import Path
 
+sys.path.insert(0, "/runner")
+
+from leetcode_types import emit_protocol
+
 PROTOCOL_PREFIX = "__OPENOJ_RESULT__"
 MAX_CAPTURED_OUTPUT = 16_384
 
@@ -54,7 +58,7 @@ def main() -> None:
             "error": f"{type(error).__name__}: {error}"[:1000],
             "stdout": "\n".join(captured),
         }
-    print(PROTOCOL_PREFIX + json.dumps(response, allow_nan=False, separators=(",", ":")))
+    emit_protocol(PROTOCOL_PREFIX + json.dumps(response, allow_nan=False, separators=(",", ":")))
 
 
 if __name__ == "__main__":

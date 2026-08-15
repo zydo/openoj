@@ -19,6 +19,7 @@ from leetcode_types import (
     Node,
     TreeNode,
     decode,
+    emit_protocol,
     encode,
 )
 
@@ -180,7 +181,7 @@ def main() -> None:
                 -2000:
             ],
         }
-    print(
+    emit_protocol(
         PROTOCOL_PREFIX + json.dumps(response, allow_nan=False, separators=(",", ":"))
     )
 

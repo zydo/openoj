@@ -62,6 +62,12 @@ def _parse_protocol(output: str) -> dict[str, Any]:
     return {"status": "runtime_error", "error": "Solution did not produce a valid judge response"}
 
 
+# The judge protocol travels on a dedicated inherited fd so submission code
+# cannot forge a verdict by printing the protocol prefix to stdout. Harnesses
+# fall back to stdout only when the fd is absent (local authoring tooling).
+PROTOCOL_FD = 63
+
+
 def _kill_lingering_children() -> None:
     """Remove processes a submission attempted to leave behind."""
     for status_path in Path("/proc").glob("[0-9]*/status"):
@@ -105,36 +111,47 @@ def _run_case(
     else:
         payload = executor.encode_case(invocation, case_input)
 
-    with tempfile.TemporaryFile(mode="w+b", dir="/tmp") as output_file:
+    with tempfile.TemporaryFile(mode="w+b", dir="/tmp") as output_file, \
+            tempfile.TemporaryFile(mode="w+b", dir="/tmp") as protocol_file:
+        protocol_fd = protocol_file.fileno()
+        channel = os.dup2(protocol_fd, PROTOCOL_FD)
         started = time.monotonic()
-        process = subprocess.Popen(
-            _sandboxed_runtime_command(program.command, effective_limits, output_limit),
-            cwd=scratch,
-            stdin=subprocess.PIPE,
-            stdout=output_file,
-            stderr=subprocess.STDOUT,
-            env=program.environment,
-            start_new_session=True,
-        )
         try:
-            process.communicate(payload, timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
+            process = subprocess.Popen(
+                _sandboxed_runtime_command(program.command, effective_limits, output_limit),
+                cwd=scratch,
+                stdin=subprocess.PIPE,
+                stdout=output_file,
+                stderr=subprocess.STDOUT,
+                env=program.environment,
+                start_new_session=True,
+                pass_fds=(channel,),
+            )
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-            _kill_lingering_children()
-            return {
-                "status": "time_limit_exceeded",
-                "runtime_ms": int((time.monotonic() - started) * 1000),
-                "timeout_ms": calibrated_time_ms,
-            }
+                process.communicate(payload, timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+                _kill_lingering_children()
+                return {
+                    "status": "time_limit_exceeded",
+                    "runtime_ms": int((time.monotonic() - started) * 1000),
+                    "timeout_ms": calibrated_time_ms,
+                }
 
-        runtime_ms = int((time.monotonic() - started) * 1000)
-        output_file.seek(0)
-        output = output_file.read(output_limit).decode("utf-8", errors="replace")
-        parsed = _parse_protocol(output)
+            runtime_ms = int((time.monotonic() - started) * 1000)
+            output_file.seek(0)
+            output = output_file.read(output_limit).decode("utf-8", errors="replace")
+            protocol_file.seek(0)
+            protocol = protocol_file.read(1 << 20).decode("utf-8", errors="replace")
+            # Trust the dedicated protocol channel; stdout parsing remains
+            # only as the fallback for harnesses that could not use it.
+            parsed = _parse_protocol(protocol) if protocol.strip() else _parse_protocol(output)
+        finally:
+            os.close(channel)
         parsed["runtime_ms"] = runtime_ms
         parsed["timeout_ms"] = calibrated_time_ms
         if process.returncode != 0 and parsed["status"] == "runtime_error" and not parsed.get("error"):

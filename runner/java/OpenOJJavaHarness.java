@@ -30,7 +30,7 @@ public final class OpenOJJavaHarness {
             return;
         }
 
-        PrintStream protocolOutput = System.out;
+        PrintStream protocolOutput = openProtocolChannel();
         CappedOutputStream capturedBytes = new CappedOutputStream(MAX_CAPTURED_OUTPUT);
         PrintStream capturedOutput = new PrintStream(capturedBytes, true, StandardCharsets.UTF_8);
         Map<String, Object> response = new LinkedHashMap<>();
@@ -62,6 +62,20 @@ public final class OpenOJJavaHarness {
             fallback.put("error", boundedError(unwrap(serializationError)));
             fallback.put("stdout", capturedBytes.asString());
             protocolOutput.println(PROTOCOL_PREFIX + Json.stringify(fallback));
+        }
+    }
+
+    /**
+     * The judge protocol prefers a dedicated inherited fd (63) so submission
+     * code cannot forge verdicts on stdout; stdout is the fallback when the
+     * fd is absent (local authoring tooling).
+     */
+    private static PrintStream openProtocolChannel() {
+        try {
+            java.io.FileOutputStream channel = new java.io.FileOutputStream("/dev/fd/63");
+            return new PrintStream(channel, true, StandardCharsets.UTF_8);
+        } catch (Throwable unavailable) {
+            return System.out;
         }
     }
 

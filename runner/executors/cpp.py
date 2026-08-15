@@ -273,14 +273,11 @@ class CppExecutor(CompiledExecutor):
                     openoj_reader.finished();
                     {class_name} openoj_solution;
                     auto openoj_actual = openoj_solution.{method}({arguments});
-                    std::cout << "__OPENOJ_RESULT__{{\\\"status\\\":\\\"completed\\\",\\\"actual\\\":"
-                              << openoj_json(openoj_actual) << "}}\\n";
+                    openojEmit("__OPENOJ_RESULT__{{\\\"status\\\":\\\"completed\\\",\\\"actual\\\":\" + openoj_json(openoj_actual) + \"}}\");
                 }} catch (const std::exception& error) {{
-                    std::cout << "__OPENOJ_RESULT__{{\\\"status\\\":\\\"runtime_error\\\",\\\"error\\\":"
-                              << openoj_json(std::string(error.what())) << "}}\\n";
+                    openojEmit("__OPENOJ_RESULT__{{\\\"status\\\":\\\"runtime_error\\\",\\\"error\\\":\" + openoj_json(std::string(error.what())) + \"}}\");
                 }} catch (...) {{
-                    std::cout << "__OPENOJ_RESULT__{{\\\"status\\\":\\\"runtime_error\\\","
-                                 "\\\"error\\\":\\\"Unknown C++ exception\\\"}}\\n";
+                    openojEmit("__OPENOJ_RESULT__{{\\\"status\\\":\\\"runtime_error\\\",\\\"error\\\":\\\"Unknown C++ exception\\\"}}\");
                 }}
                 return 0;
             }}
@@ -289,7 +286,18 @@ class CppExecutor(CompiledExecutor):
         source_path = job_root / "main.cpp"
         executable = job_root / "solution"
         source_path.write_text(
-            "#include <bits/stdc++.h>\nusing namespace std;\n"
+            "#include <bits/stdc++.h>\n"
+            "#include <unistd.h>\n"
+            "using namespace std;\n"
+            "\n"
+            "// Judge protocol prefers the dedicated fd so submission code cannot\n"
+            "// forge verdicts on stdout; stdout remains the fallback.\n"
+            "void openojEmit(const std::string& line) {\n"
+            "    std::string payload = line + \"\\n\";\n"
+            "    if (::write(63, payload.data(), payload.size()) < 0) {\n"
+            "        std::cout << payload << std::flush;\n"
+            "    }\n"
+            "}\n"
             + struct_decls
             + code
             + "\n"
