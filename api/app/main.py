@@ -31,8 +31,34 @@ def health() -> dict[str, str]:
 
 
 @app.get("/problems")
-def problems() -> list[dict[str, Any]]:
-    return list_problems()
+def problems(page: int = 1, page_size: int = 0) -> dict[str, Any]:
+    """List problems, optionally paginated.
+
+    Without query params the full list is returned in a single page (the
+    editor needs the whole ordering for prev/next and the drawer). With
+    page_size set, only that page's items come back so the landing page's
+    load stays small."""
+    items = list_problems()
+    total = len(items)
+    if page_size <= 0:
+        return {
+            "items": items,
+            "total": total,
+            "page": 1,
+            "page_size": total,
+            "pages": 1 if total else 0,
+        }
+    page_size = min(page_size, 500)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = max(1, min(page, pages))
+    start = (page - 1) * page_size
+    return {
+        "items": items[start : start + page_size],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
+    }
 
 
 @app.get("/problems/{slug}")

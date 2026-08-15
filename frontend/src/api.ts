@@ -1,4 +1,4 @@
-import type { JudgeResult, Problem, Submission } from "./types";
+import type { JudgeResult, Problem, ProblemPage, Submission } from "./types";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
@@ -14,7 +14,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   getProblem: (slug: string) => request<Problem>(`/problems/${slug}`),
-  getProblems: () => request<Array<Pick<Problem, "id" | "slug" | "title" | "difficulty" | "tags">>>("/problems"),
+  // pageSize of 0 (default) returns the full list in one page — the editor
+  // needs the whole ordering for prev/next and the drawer. The landing page
+  // passes an explicit page_size to fetch just the page it renders.
+  getProblems: (page = 1, pageSize = 0) =>
+    request<ProblemPage>(`/problems?page=${page}&page_size=${pageSize}`),
   run: (slug: string, language: string, code: string, cases: Record<string, unknown>[]) =>
     request<JudgeResult>("/run", {
       method: "POST",

@@ -1,3 +1,19 @@
+export type ProblemSummary = {
+  id: number;
+  slug: string;
+  title: string;
+  difficulty: string;
+  tags: string[];
+};
+
+export type ProblemPage = {
+  items: ProblemSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+};
+
 export type Language = {
   display_name: string;
   monaco_language: string;

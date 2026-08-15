@@ -27,9 +27,8 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./api";
-import type { JudgeResult, Problem, Submission } from "./types";
+import type { JudgeResult, Problem, ProblemSummary, Submission } from "./types";
 
-type ProblemSummary = Pick<Problem, "id" | "slug" | "title" | "difficulty" | "tags">;
 type Theme = "light" | "dark";
 
 const THEME_STORAGE_KEY = "openoj:theme";
@@ -110,8 +109,11 @@ function formatJson(value: unknown) {
 function App() {
   const [themeOverride, setThemeOverride] = useState<Theme | null>(storedTheme);
   const [systemTheme, setSystemTheme] = useState<Theme>(preferredTheme);
-  const [problems, setProblems] = useState<ProblemSummary[] | null>(null);
-  const [listError, setListError] = useState("");
+  // Full problem list, fetched lazily only when the editor opens (prev/next
+  // navigation and the drawer need the whole ordering). The landing page
+  // fetches its own paginated slice instead.
+  const [allProblems, setAllProblems] = useState<ProblemSummary[] | null>(null);
+  const [problemsError, setProblemsError] = useState("");
   const [activeSlug, setActiveSlug] = useState<string | null>(slugFromPath);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -159,9 +161,12 @@ function App() {
     setThemeOverride(next);
   };
 
-  useEffect(() => {
-    api.getProblems().then(setProblems).catch((error: Error) => setListError(error.message));
-  }, []);
+  const ensureProblems = useCallback(() => {
+    if (allProblems !== null) return;
+    api.getProblems().then((page) => {
+      setAllProblems(page.items);
+    }).catch((error: Error) => setProblemsError(error.message));
+  }, [allProblems]);
 
   // Keep activeSlug in sync with the URL when the user navigates back/forward.
   useEffect(() => {
@@ -195,6 +200,7 @@ function App() {
       setProblemListOpen(false);
       return;
     }
+    ensureProblems();
     setProblem(null);
     setLoadError("");
     setResult(null);
@@ -219,7 +225,7 @@ function App() {
       if (!cancelled) setLoadError(error.message);
     });
     return () => { cancelled = true; };
-  }, [activeSlug]);
+  }, [activeSlug, ensureProblems]);
 
   const refreshSubmissions = useCallback(() => {
     if (!problem) return;
@@ -311,16 +317,16 @@ function App() {
     window.addEventListener("pointerup", stop);
   };
 
-  if (listError) return <FullPageMessage icon={<CircleAlert />} title="The problem set could not load" detail={listError} />;
-  if (!problems) return <FullPageMessage icon={<LoaderCircle className="spin" />} title="Preparing the judge bench" detail="Loading the problem set…" />;
   if (loadError) return <FullPageMessage icon={<CircleAlert />} title="OpenOJ could not load" detail={loadError} />;
-  if (activeSlug === null) return <Landing problems={problems} theme={theme} onToggleTheme={toggleTheme} onOpen={openProblem} />;
+  if (activeSlug === null) return <Landing theme={theme} onToggleTheme={toggleTheme} onOpen={openProblem} />;
+  if (problemsError && allProblems === null) {
+    return <FullPageMessage icon={<CircleAlert />} title="The problem set could not load" detail={problemsError} />;
+  }
+  if (!problem || !allProblems) return <FullPageMessage icon={<LoaderCircle className="spin" />} title="Preparing the judge bench" detail="Loading problem resources…" />;
 
-  const currentIndex = problems.findIndex((entry) => entry.slug === activeSlug);
-  const prevSlug = currentIndex > 0 ? problems[currentIndex - 1].slug : null;
-  const nextSlug = currentIndex >= 0 && currentIndex + 1 < problems.length ? problems[currentIndex + 1].slug : null;
-
-  if (!problem) return <FullPageMessage icon={<LoaderCircle className="spin" />} title="Preparing the judge bench" detail="Loading problem resources…" />;
+  const currentIndex = allProblems.findIndex((entry) => entry.slug === activeSlug);
+  const prevSlug = currentIndex > 0 ? allProblems[currentIndex - 1].slug : null;
+  const nextSlug = currentIndex >= 0 && currentIndex + 1 < allProblems.length ? allProblems[currentIndex + 1].slug : null;
 
   const languageConfig = problem.languages[language];
   const verdictTone = statusTone(result?.status);
@@ -510,7 +516,7 @@ function App() {
 
       {problemListOpen && (
         <ProblemDrawer
-          problems={problems}
+          problems={allProblems!}
           activeSlug={activeSlug}
           onSelect={(slug) => {
             setProblemListOpen(false);
@@ -717,12 +723,55 @@ function ConfirmDialog({ title, body, confirmLabel, cancelLabel = "Cancel", onCo
   );
 }
 
-function Landing({ problems, theme, onToggleTheme, onOpen }: {
-  problems: ProblemSummary[];
+const LANDING_PAGE_SIZE = 50;
+
+function pageNumbers(current: number, pages: number): Array<number | "ellipsis-start" | "ellipsis-end"> {
+  if (pages <= 7) return Array.from({ length: pages }, (_, index) => index + 1);
+  const numbers: Array<number | "ellipsis-start" | "ellipsis-end"> = [1];
+  if (current > 4) numbers.push("ellipsis-start");
+  const start = Math.max(2, current - 1);
+  const end = Math.min(pages - 1, current + 1);
+  for (let page = start; page <= end; page += 1) numbers.push(page);
+  if (current < pages - 3) numbers.push("ellipsis-end");
+  numbers.push(pages);
+  return numbers;
+}
+
+function Landing({ theme, onToggleTheme, onOpen }: {
   theme: Theme;
   onToggleTheme: () => void;
   onOpen: (slug: string) => void;
 }) {
+  const [items, setItems] = useState<ProblemSummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pages, setPages] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const loadPage = useCallback((target: number) => {
+    setLoading(true);
+    setError("");
+    api.getProblems(target, LANDING_PAGE_SIZE).then((data) => {
+      setItems(data.items);
+      setTotal(data.total);
+      setPage(data.page);
+      setPages(data.pages);
+    }).catch((loadError: Error) => setError(loadError.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    loadPage(1);
+  }, [loadPage]);
+
+  const goToPage = (target: number) => {
+    if (target < 1 || target > pages || target === page) return;
+    loadPage(target);
+    listRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  };
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -755,26 +804,58 @@ function Landing({ problems, theme, onToggleTheme, onOpen }: {
       </header>
       <main className="landing">
         <div className="landing-inner">
-          <section className="landing-index">
+          <section className="landing-index" ref={listRef}>
             <header className="index-header">
               <h2>All problems</h2>
-              <span>{problems.length} {problems.length === 1 ? "problem" : "problems"}</span>
+              <span>{total} {total === 1 ? "problem" : "problems"}</span>
             </header>
-            <div className="landing-list">
-              {problems.map((entry) => (
-                <button
-                  key={entry.slug}
-                  className="problem-row"
-                  onClick={() => onOpen(entry.slug)}
-                >
-                  <span className="problem-row-main">
-                    <strong>{entry.title}</strong>
-                    <small>{entry.tags.join(" · ")}</small>
-                  </span>
-                  <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{entry.difficulty}</span>
-                </button>
-              ))}
-            </div>
+            {error ? (
+              <p className="landing-error">{error}</p>
+            ) : loading && items.length === 0 ? (
+              <div className="landing-list">
+                <p className="landing-loading"><LoaderCircle className="spin" size={16} /> Loading the problem set…</p>
+              </div>
+            ) : (
+              <>
+                <div className="landing-list">
+                  {items.map((entry) => (
+                    <button
+                      key={entry.slug}
+                      className="problem-row"
+                      onClick={() => onOpen(entry.slug)}
+                    >
+                      <span className="problem-row-main">
+                        <strong>{entry.title}</strong>
+                      </span>
+                      <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{entry.difficulty}</span>
+                    </button>
+                  ))}
+                </div>
+                {pages > 1 && (
+                  <nav className="pagination" aria-label="Problem pages">
+                    <button className="page-button" disabled={page <= 1} onClick={() => goToPage(1)} aria-label="First page">«</button>
+                    <button className="page-button" disabled={page <= 1} onClick={() => goToPage(page - 1)} aria-label="Previous page">‹</button>
+                    {pageNumbers(page, pages).map((entry) =>
+                      typeof entry === "number" ? (
+                        <button
+                          key={entry}
+                          className={`page-button${entry === page ? " active" : ""}`}
+                          onClick={() => goToPage(entry)}
+                          aria-current={entry === page ? "page" : undefined}
+                        >
+                          {entry}
+                        </button>
+                      ) : (
+                        <span key={entry} className="page-ellipsis">…</span>
+                      ),
+                    )}
+                    <button className="page-button" disabled={page >= pages} onClick={() => goToPage(page + 1)} aria-label="Next page">›</button>
+                    <button className="page-button" disabled={page >= pages} onClick={() => goToPage(pages)} aria-label="Last page">»</button>
+                    <span className="page-status">Page {page} of {pages}</span>
+                  </nav>
+                )}
+              </>
+            )}
           </section>
         </div>
       </main>
