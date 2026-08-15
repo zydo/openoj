@@ -30,11 +30,14 @@ export type Problem = {
   description: string;
   hints: string[];
   invocation: {
-    type: "function" | "design";
+    type: "function" | "design" | "interactive";
     class_name: string;
     method: string;
     parameters: Array<{ name: string; codec: string }>;
     return_codec: string;
+    // "exact" (default), "sorted", "multiset", "close", or
+    // { mode: "close", tolerance } for float-tolerant comparison.
+    comparison?: string | { mode: string; tolerance?: number };
   };
   limits: {
     time_ms: number;

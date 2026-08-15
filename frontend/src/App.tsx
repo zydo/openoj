@@ -592,7 +592,7 @@ function App() {
               />
             </div>
             <div className="editor-status">
-              <span><span className="saved-dot" /> Saved locally</span>
+              <span><span className="saved-dot" /> Saved</span>
               <span className="editor-shortcut" aria-hidden="true">⏎ run · ⇧⏎ submit</span>
               <span>{problem.limits.time_ms / 1000}s · {problem.limits.memory_mb} MB</span>
             </div>
@@ -621,7 +621,7 @@ function App() {
                   setActiveCase={setActiveCase}
                 />
               ) : (
-                <Results result={result} busy={busy} error={actionError} />
+                <Results result={result} busy={busy} error={actionError} comparison={problem.invocation.comparison} />
               )}
             </div>
           </section>
@@ -958,7 +958,6 @@ function Landing({ theme, onToggleTheme, onOpen }: {
         <div className="landing-inner">
           <section className="landing-index" ref={listRef}>
             <header className="landing-masthead">
-              <span className="eyebrow">Practice library</span>
               <div className="landing-masthead-row">
                 <h1>All problems</h1>
                 <span className="landing-count">
@@ -967,9 +966,6 @@ function Landing({ theme, onToggleTheme, onOpen }: {
                     : `${total} ${total === 1 ? "problem" : "problems"}`}
                 </span>
               </div>
-              <p className="landing-tagline">
-                Curated problems, judged in isolation — pick one, write a solution, get a verdict.
-              </p>
             </header>
             <div className="landing-filter">
               <input
@@ -1083,10 +1079,10 @@ function Testcases({ problem, drafts, setDrafts, activeCase, setActiveCase }: {
   );
 }
 
-function Results({ result, busy, error }: { result: JudgeResult | null; busy: string | null; error: string }) {
+function Results({ result, busy, error, comparison }: { result: JudgeResult | null; busy: string | null; error: string; comparison?: unknown }) {
   const [openCase, setOpenCase] = useState(0);
   useEffect(() => setOpenCase(0), [result]);
-  if (busy) return <ConsoleEmpty icon={<LoaderCircle className="spin" />} title={busy === "submit" ? "Judging every case" : "Running testcases"} detail="Code is executing inside the isolated judge — the verdict lands when it finishes." />;
+  if (busy) return <ConsoleEmpty icon={<LoaderCircle className="spin" />} title={busy === "submit" ? "Judging every case" : "Running testcases"} detail="Executing code and judging" />;
   if (error) return <ConsoleEmpty icon={<CircleAlert />} title="Execution stopped" detail={error} tone="danger" />;
   if (!result) return <ConsoleEmpty icon={<TerminalSquare />} title="No results yet" detail="Run to check your code against the visible cases, or Submit to face the full judge." />;
   const active = result.results[openCase];
@@ -1132,7 +1128,10 @@ function Results({ result, busy, error }: { result: JudgeResult | null; busy: st
               <>
                 <ResultValue label="Input" value={active.input} />
                 {active.actual !== undefined && <ResultValue label="Output" value={active.actual} />}
-                {active.expected !== undefined && <ResultValue label="Expected" value={active.expected} />}
+                {active.expected !== undefined && <ResultValue
+                    label={comparison === "close" || (typeof comparison === "object" && comparison !== null && (comparison as { mode?: string }).mode === "close") ? "Expected ±1e-9" : "Expected"}
+                    value={active.expected}
+                  />}
                 {active.stdout && <ResultValue label="Stdout" value={active.stdout} raw />}
               </>
             ) : <p className="hidden-copy">Hidden testcase details stay sealed inside the judge.</p>}
