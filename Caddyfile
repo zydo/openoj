@@ -3,3 +3,10 @@
 openoj.dongziyu.com {
 	reverse_proxy web:8080
 }
+
+# Optional direct-API endpoint (see docs/API.md). Compose mounts an extra
+# site block here only when OPENOJ_CADDY_EXTRA is set — e.g.
+#   OPENOJ_CADDY_EXTRA=./deploy/api.caddy docker compose up -d
+# Without it this imports nothing and the API is reachable only through the
+# web UI's same-origin /api/ route.
+import /etc/caddy/extra/*.caddy

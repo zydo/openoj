@@ -42,16 +42,18 @@ languages) folded series into one representative and excluded all 48
 
 ## Multi-user support (guest sessions → accounts)
 
-Serve multiple users:
+Guest sessions DONE (phase 1):
 
-- First visit lands on a **"Continue as guest"** page. Keep this entrance
-  even after accounts exist — it is the only way in until login is built.
-- A guest is a cookie session (or equivalent temporary identity) with an
-  **idle expiry of ~1 hour**. Session-local storage persists editor state
-  per problem and survives page refreshes; after the idle timeout the
-  session is cleared and the visitor must "Continue as guest" again.
-- Later, openwebui-style **user accounts**, persisted in the container's
-  storage:
+- First visit lands on a **"Continue as guest"** page — the only entrance
+  until accounts exist.
+- A guest is an HttpOnly cookie session with an **idle expiry of 1 hour**;
+  expired sessions and everything they own (drafts, submissions) are purged.
+- Editor drafts are server-side and session-scoped: they persist per problem
+  and survive refreshes; a mid-use expiry returns the visitor to the gate
+  with a notice. Pre-session (legacy) submissions remain visible to all.
+
+Later, openwebui-style **user accounts**, persisted in the container's
+storage:
   - First start prompts to create the admin account: conventional
     username + password (no email), password typed twice.
   - `admin` is a reserved username.
@@ -61,15 +63,12 @@ Serve multiple users:
 
 ## Tolerance comparison for float returns
 
-15 problems return floats under `comparison: "exact"`, which is fragile
-across compilers/hardware (FMA fusion, rounding order — already bit us on
-1230 toss-strange-coins, 2548, and 0399 evaluate-division, and 0837
-new-21-game's expected values even depend on Python ≥3.12's
-Neumaier-compensated `sum()`, forcing a compensated-summation port in all
-7 languages). Proposal: a `comparison: "close"` mode with an explicit
-tolerance (e.g. `1e-9` relative), applied per scalar in nested results,
-then re-generate the affected bundles' expected values. Needs a sweep of
-the affected bundles and a judge/UI story for presenting near-miss values.
+DONE — the judge supports `comparison: "close"` (string, default 1e-9
+relative+absolute per scalar, recursive through nested lists/objects; or
+`{"mode": "close", "tolerance": …}` for a custom tolerance). The 15
+float-returning bundles are switched to close mode; expected values were
+already the Python-reference values, and all 15 verify green across every
+language. The frontend shows `Expected <value> ±1e-9` for close problems.
 
 ## Interactive problem framework
 
@@ -88,21 +87,19 @@ deleted; `problems/` now keeps only the offline fallback (`0001_two-sum.md`,
 
 ## Expose and document the REST API
 
-The submission API (`POST /api/run`, `POST /api/submit`,
-`GET /api/problems…`) exists and is used by the web UI, but is not
-documented or exposed as a public interface. Work items:
-
-- **Expose** the API for external/scripted callers (e.g. route `/api/*`
-  through the caddy edge proxy alongside the web UI; decide ports and
-  whether exposure is opt-in).
-- Decide **auth/rate limiting** before it is internet-facing (guest
-  sessions and accounts from the multi-user design tie in here).
-- Write API docs (or OpenAPI annotations surfacing in `/docs`).
-- This also unblocks scripted/CI use beyond the openoj-problems workflow.
+DONE — `docs/API.md` documents the full surface (sessions, problems, drafts,
+run, submit, submissions, comparison modes, errors, limits). The API is
+always reachable same-origin through the web UI; an opt-in direct endpoint
+(`api.openoj.dongziyu.com`) is enabled with
+`OPENOJ_CADDY_EXTRA=./deploy/api.caddy` (caddy imports the extra site block;
+default mounts an empty file). Auth/rate limiting stays open until accounts
+exist — guest sessions are the only gate, so edge rate limiting is on the
+operator.
 
 ## JS/TS exact serialization of large i64 returns
 
-A case in 3749 (expected 2^62) cannot pass in JS/TS: the wrapper serializes
-via `JSON.stringify`, whose canonical string for doubles beyond 2^53 parses
-back to a different integer. If more such cases appear, either add a
-big-int-safe serializer to the JS/TS wrappers or re-cap those cases.
+DONE — the JS/TS wrappers now serialize return values through a custom
+`openojSerialize` that emits integer doubles beyond 2^53 as exact decimal
+digits (`BigInt(value).toString()`), instead of `JSON.stringify`'s lossy
+exponent notation. Verified: 3749 js/ts 20/20 (the 2^62 case included), 0001
+js/ts regression-clean, test suite green.

@@ -277,6 +277,12 @@ dedicated disposable VM or node and add a stronger runtime such as gVisor,
 Kata Containers, or Firecracker, plus ingress rate limits. That keeps a future
 container-runtime or kernel escape away from the API and stored submissions.
 
+## REST API
+
+The judge's HTTP API (problems, run, submit, submissions, guest sessions,
+drafts) is available to scripted callers — see [docs/API.md](docs/API.md) for
+endpoints, the session model, and the opt-in direct-API endpoint.
+
 ## Persistence
 
 SQLite data lives at `/data/openoj.sqlite3` in the `openoj_data` named volume.
