@@ -9,6 +9,7 @@ from .base import PreparedProgram
 class Python3Executor:
     """CPython 3.14 executor plugin for LeetCode-style invocations."""
 
+    encode_case_with_limits = True
     language = "python3"
     address_space_overhead_mb = 0
     max_processes = 16
@@ -55,9 +56,10 @@ class Python3Executor:
             },
         )
 
-    def encode_case(self, invocation: dict[str, Any], case_input: Any) -> bytes:
-        return json.dumps(
-            {"invocation": invocation, "input": case_input},
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode()
+    def encode_case(
+        self, invocation: dict[str, Any], case_input: Any, limits: dict[str, Any] | None = None
+    ) -> bytes:
+        payload: dict[str, Any] = {"invocation": invocation, "input": case_input}
+        if limits is not None:
+            payload["limits"] = {"output_kb": int(limits.get("output_kb", 64))}
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()

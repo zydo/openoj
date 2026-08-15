@@ -35,10 +35,10 @@ class BoundedText(io.StringIO):
         return len(value)
 
 
-def _json_safe(value: Any) -> Any:
+def _json_safe(value: Any, output_limit: int = 65_536) -> Any:
     encoded = json.dumps(value, allow_nan=False, separators=(",", ":"))
-    if len(encoded) > 65_536:
-        raise ValueError("Return value exceeds the 64 KiB limit")
+    if len(encoded) > output_limit:
+        raise ValueError(f"Return value exceeds the {output_limit // 1024} KiB output limit")
     return json.loads(encoded)
 
 
@@ -105,12 +105,13 @@ def main() -> None:
     try:
         payload = json.load(sys.stdin)
         invocation = payload["invocation"]
+        output_limit = int(payload.get("limits", {}).get("output_kb", 64)) * 1024
         with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
             module = _load_solution(Path(sys.argv[1]))
             actual = _invoke(module, invocation, payload["input"])
         response = {
             "status": "completed",
-            "actual": _json_safe(actual),
+            "actual": _json_safe(actual, output_limit),
             "stdout": captured.getvalue(),
         }
     except BaseException as error:

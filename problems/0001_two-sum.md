@@ -6,12 +6,8 @@
 {
   "schema_version": 1,
   "slug": "two-sum",
-  "difficulty": "Easy",
-  "tags": ["Array", "Hash Table"],
-  "source": {
-    "label": "LeetCode — Two Sum",
-    "url": "https://leetcode.com/problems/two-sum/description/"
-  }
+  "difficulty": "H2",
+  "tags": ["Array", "Hash Table"]
 }
 ```
 

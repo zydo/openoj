@@ -28,12 +28,75 @@ saved in browser storage. Submitted code and verdict history are stored in the
 
 ## Problem packages
 
+OpenOJ loads problems from two package formats. The canonical, split format
+is one directory per problem (this is what
+[openoj-problems](https://github.com/zydo/openoj-problems) uses):
+
+```text
+problems/
+└── 0001_two-sum/
+    ├── problem.json     metadata, invocation schema, limits
+    ├── cases.json       testcase corpus ({public, hidden} display grouping)
+    ├── statement.md     pure-prose statement with a fixed heading grammar
+    ├── starter.py       generated from problem.json — never handcrafted
+    └── solution.*       recommended solutions (not served by the API)
+```
+
+The flat single-file format (`0001_two-sum.md` with `## Metadata`,
+`## Description`, … `## Test Cases` sections) is still supported and the
+bundled `./problems` set uses it. Both formats can coexist in one directory;
+the split format's statement grammar is `# <Title>`, required `## Description`
+with `### Example N` and `### Constraints` (optional for SQL problems), and
+optional `## Hints` with `### Hint N` headings.
+
 Problems are mounted read-only from `./problems` by default. Sideload another
 set without rebuilding images:
 
 ```bash
 OPENOJ_PROBLEMS_PATH=/absolute/path/to/problems docker compose up --build
 ```
+
+### Selecting a problem set with `OPENOJ_PROBLEMS`
+
+Instead of a bind mount, point OpenOJ at an external problem-set repository.
+The specification follows git's disambiguation convention: a bare
+two-segment `owner/name` **always means GitHub**; a local directory with that
+shape must be referenced explicitly and never shadows the shorthand.
+
+```bash
+OPENOJ_PROBLEMS=zydo/openoj-problems              docker compose up --build  # GitHub shorthand
+OPENOJ_PROBLEMS=zydo/openoj-problems@v1.2.0       docker compose up --build  # pinned branch/tag
+OPENOJ_PROBLEMS=https://github.com/myname/set.git docker compose up --build  # full git URL
+OPENOJ_PROBLEMS=./name/repo                       docker compose up --build  # local, explicit
+```
+
+Accepted forms:
+
+- `owner/name[@ref]` — a GitHub repository, optionally pinned to a branch or
+  tag (`release/v2`-style refs work).
+- `https://host/owner/name.git[#ref]` (or `http://`) — a full git URL, pinned
+  via a `#ref` fragment.
+- `git@host:owner/name.git` — an SSH git URL (read access to the API
+  container's deploy key required).
+- `/abs/path`, `./rel`, `../rel`, `~/rel`, `file:///abs/path` — a local
+  directory. Relative and home paths resolve inside the `api` container, so
+  pair them with a bind mount.
+
+Remote sets are cloned (shallow) into a git-ignored `./.cache` directory
+next to this repo (override with `OPENOJ_PROBLEMS_CACHE_DIR`); the clone's
+commit hash is recorded in `.openoj-commit`. On each start the fetcher asks
+the remote for its current hash for the pinned ref with one `ls-remote`:
+if it matches the record, nothing is re-fetched; if it moved, the ref is
+fetched and the working tree hard-reset to converge; if the remote is
+unreachable (offline start) the cached revision is kept. The API container
+itself has no external network — a one-shot `problems-fetcher` service (the
+only component allowed to reach github.com) maintains the cache before the
+API starts, and a missing cache fails startup loudly rather than silently
+serving a different set. Local sets are used in place with no caching: bind
+mounts update in realtime. In both cases,
+if the resolved repository contains a `problems/` subdirectory, it is used as
+the package root; otherwise the repository root is. When `OPENOJ_PROBLEMS`
+is unset, problems come from the `OPENOJ_PROBLEMS_DIR` mount as before.
 
 Each problem is one self-contained, flattened Markdown document:
 
@@ -72,11 +135,12 @@ Function inputs use positional argument arrays (`[[2,7,11,15], 9]` for Two
 Sum). Design problems use `{"actions": [...], "params": [...]}` sequences.
 
 Static-language function wrappers use the same neutral `value_type` shapes on
-parameters and return values. The initial schema supports signed 32/64-bit
-integers, finite numbers, booleans, UTF-8 strings, and nested arrays. The API
-never sends expected values to the runner; executor plugins encode testcase
-inputs into a typed binary stream and serialize only the submitted function's
-result back to JSON.
+parameters and return values. The schema supports signed 32/64-bit integers,
+finite numbers, booleans, UTF-8 strings, nested arrays, and LeetCode-style
+linked lists (`linked_list`) and binary trees (`binary_tree`) carried as value
+and level-order arrays. The API never sends expected values to the runner;
+executor plugins encode testcase inputs into a typed binary stream and
+serialize only the submitted function's result back to JSON.
 
 The API renders only `## Description`; schema data, starters, and testcases do
 not cross into the problem pane. Starter templates are neither global nor
@@ -89,21 +153,43 @@ that prepares or compiles source, returns the per-test command/environment, and
 encodes the neutral testcase payload. Sandboxing, queueing, verdicts, storage,
 and the HTTP API remain language-independent.
 
-Python currently supplies `json`, `list_node`, `tree_node`, `nary_tree`,
-`nested_integer_list`, and `html_parser` input codecs. Their wire forms match
-LeetCode conventions, and the familiar `ListNode`, `TreeNode`, `Node`,
-`NestedInteger`, and `HtmlParser` names are injected into submitted modules.
-Java 21 supports the neutral `json` codec, including primitive values, arrays,
-nested arrays, collections, and maps. Its executor compiles once per submission
-with annotation processing disabled, then starts a fresh JVM for each testcase.
-C++, TypeScript, Go, and Rust compile once with generated wrappers derived from
-the neutral typed signature, then start a fresh process for each testcase.
-JavaScript uses the same generated wrapper on Node without a compile step.
+Python currently supplies `json`, `list_node`, `tree_node`,
+`list_node_array`, `tree_node_array`, `nary_tree`, `nested_integer_list`,
+and `html_parser` input codecs. Their wire forms match LeetCode conventions,
+and the familiar `ListNode`, `TreeNode`, `Node`, `NestedInteger`, and
+`HtmlParser` names are injected into submitted modules. Java 21 supports the
+`json`, `list_node`, `tree_node`, `list_node_array`, and `tree_node_array`
+codecs, injecting the matching node classes. Its executor compiles once per
+submission with annotation processing disabled, then starts a fresh JVM for
+each testcase. C++, TypeScript, Go, Rust, and JavaScript use generated
+wrappers derived from the neutral typed signature; the wrapper supplies
+`ListNode`/`TreeNode` definitions for tree and linked-list problems (Rust
+starters define them, following LeetCode convention), builds the structures
+from the wire arrays, and serializes returned nodes back to level-order
+arrays. C++, TypeScript, Go, and Rust compile once per submission, then start
+a fresh process for each testcase; JavaScript runs the same generated wrapper
+on Node without a compile step.
+
+SQL problems are single `SELECT` queries judged against SQLite. Their
+invocation carries the schema DDL in `sql.schema`, each testcase's `dataset`
+value seeds the tables with `INSERT` statements, and the harness returns the
+query's rows for row-set or exact-order comparison. SQL problems list only
+`SQL` in their languages block, so the editor's language selector shows SQL
+alone, and non-SQL problems never offer it.
+
+At startup the runner calibrates every executor, then a background thread
+pre-warms and periodically re-warms the compilers (rustc, g++, go build,
+javac, tsc) by building throwaway programs. First submissions therefore pay
+the same compile cost as later ones — Go additionally shares one persistent
+build cache across submissions so its standard library is compiled once per
+container, not once per job.
 
 The bundled Two Sum demo has three visible and fifteen hidden cases covering
 duplicates, zeros, negative values, non-adjacent answers, minimum input size,
-and integer boundaries. It is adapted from the user-provided LeetCode reference
-and links back to the source.
+and integer boundaries. The remaining problem set was imported from a curated
+LeetCode selection: statements and hints were adapted locally, difficulty
+labels (H1–H5) come from the curated source, and every testcase's expected
+value was produced by running a reference solution.
 
 ## Judging and time limits
 
@@ -117,6 +203,19 @@ Both wall-clock and CPU limits are enforced. An infinite loop is killed as a
 process group, remaining cases are skipped, and any processes left behind by a
 submission UID are terminated. Memory, process count, open files, output size,
 and core dumps are limited independently.
+
+### Reference-relative timing
+
+Absolute milliseconds mean nothing across machines, so accepted submissions
+are also compared against the problem's built-in solution. When a submission
+is accepted and the problem bundle ships a `solution.<ext>` for the submitted
+language, the judge immediately runs that reference through the same
+container, the same calibrated executor, and the same cases, and the response
+carries `reference_runtime_ms` alongside the user's `runtime_ms`. The UI
+shows the ratio ("162% of reference"). The comparison is same-language by
+construction, indicative rather than precise for very fast solutions, and
+best-effort: without a bundled reference, or if the reference run cannot be
+completed, the ratio is simply omitted.
 
 Inspect the current calibration with:
 

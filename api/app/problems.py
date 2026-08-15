@@ -6,8 +6,23 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
+from .problem_source import resolve_spec
 
-PROBLEMS_DIR = Path(os.environ.get("OPENOJ_PROBLEMS_DIR", "problems")).resolve()
+
+def _problems_dir() -> Path:
+    # OPENOJ_PROBLEMS selects the source (GitHub shorthand, git URL, or an
+    # explicit local path — see problem_source); without it problems come
+    # from OPENOJ_PROBLEMS_DIR as before.
+    spec = os.environ.get("OPENOJ_PROBLEMS", "").strip()
+    if spec:
+        cache = os.environ.get("OPENOJ_PROBLEMS_CACHE", "").strip()
+        # update=False: the API container has no network — the
+        # problems-fetcher service populated the cache before startup
+        return resolve_spec(spec, Path(cache) if cache else None, update=False).resolve()
+    return Path(os.environ.get("OPENOJ_PROBLEMS_DIR", "problems")).resolve()
+
+
+PROBLEMS_DIR = _problems_dir()
 REQUIRED_SECTIONS = (
     "Metadata",
     "Description",
@@ -32,6 +47,40 @@ FENCED_BLOCK = re.compile(
 
 class ProblemError(ValueError):
     pass
+
+
+# Bundle format (one directory per problem: problem.json, cases.json,
+# statement.md, starter.<ext>): language metadata comes from this registry
+# and the set of starter.* files selects the languages. The flat single-file
+# format above remains supported.
+LANGUAGE_REGISTRY = {
+    "python3": {"display_name": "Python 3", "monaco_language": "python", "version": "3.14.7"},
+    "javascript": {"display_name": "JavaScript", "monaco_language": "javascript", "version": "Node 22.23.2"},
+    "typescript": {
+        "display_name": "TypeScript",
+        "monaco_language": "typescript",
+        "version": "TypeScript 7.0.2 / Node 22.23.2",
+    },
+    "java": {"display_name": "Java", "monaco_language": "java", "version": "JDK 21.0.12"},
+    "cpp": {"display_name": "C++", "monaco_language": "cpp", "version": "G++ 14.2.0"},
+    "go": {"display_name": "Go", "monaco_language": "go", "version": "Go 1.24.4"},
+    "rust": {"display_name": "Rust", "monaco_language": "rust", "version": "Rust 1.85.0"},
+    "sql": {"display_name": "SQL", "monaco_language": "sql", "version": "SQLite 3.45"},
+}
+EXTENSION_LANGUAGE = {
+    "py": "python3",
+    "js": "javascript",
+    "ts": "typescript",
+    "java": "java",
+    "cpp": "cpp",
+    "go": "go",
+    "rust": "rust",
+    "sql": "sql",
+}
+PROBLEM_BUNDLE_DIR = re.compile(
+    r"^(?P<number>[0-9]{4,})_(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)$"
+)
+LANGUAGE_EXTENSION = {extension: language for language, extension in EXTENSION_LANGUAGE.items()}
 
 
 def _headings(markdown: str) -> list[tuple[int, str, int]]:
@@ -157,7 +206,7 @@ def parse_problem_markdown(
     metadata = _json_object(sections["Metadata"], "Metadata")
     _require_exact_keys(
         metadata,
-        {"schema_version", "slug", "difficulty", "tags", "source"},
+        {"schema_version", "slug", "difficulty", "tags"},
         "Metadata",
     )
     if metadata["schema_version"] != 1:
@@ -171,12 +220,6 @@ def parse_problem_markdown(
         isinstance(tag, str) and tag for tag in metadata["tags"]
     ):
         raise ProblemError("Metadata tags must be an array of non-empty strings")
-    source = metadata["source"]
-    if not isinstance(source, dict):
-        raise ProblemError("Metadata source must be an object")
-    _require_exact_keys(source, {"label", "url"}, "Metadata source")
-    if not all(isinstance(source[key], str) and source[key] for key in source):
-        raise ProblemError("Metadata source values must be non-empty strings")
 
     if source_path is not None:
         filename = PROBLEM_FILE.fullmatch(source_path.name)
@@ -246,7 +289,158 @@ def parse_problem_markdown(
         "title": title,
         "difficulty": metadata["difficulty"],
         "tags": metadata["tags"],
-        "source": source,
+        "description": description + "\n",
+        "hints": hints,
+        "invocation": invocation,
+        "limits": limits,
+        "languages": languages,
+    }
+    return problem, public + hidden, len(public)
+
+
+def _level3_sections(text: str) -> list[tuple[str, str]]:
+    """Split a statement section into its level-three child sections,
+    tolerating prose before the first child."""
+    lines = text.splitlines(keepends=True)
+    headings = [(level, title, line) for level, title, line in _headings(text) if level == 3]
+    sections = []
+    start_of_first = headings[0][2] if headings else 0
+    for index, (_, title, line_number) in enumerate(headings):
+        end = headings[index + 1][2] if index + 1 < len(headings) else len(lines)
+        sections.append((title, "".join(lines[line_number + 1 : end]).strip("\n")))
+    del start_of_first
+    return sections
+
+
+def _numbered_subheadings(text: str, heading: str, parent: str) -> tuple[list[str], list[str]]:
+    """Return (all child names, bodies of the consecutively numbered
+    '<heading> N' children)."""
+    sections = _level3_sections(text)
+    names = [name for name, _ in sections]
+    expected = 1
+    bodies = []
+    for name, body in sections:
+        if name == f"{heading} {expected}":
+            if not body.strip():
+                raise ProblemError(f"### {heading} {expected} under {parent} cannot be empty")
+            bodies.append(body.strip())
+            expected += 1
+    if not bodies:
+        raise ProblemError(f"{parent} requires at least one ### {heading} heading")
+    return names, bodies
+
+
+def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+    """Parse one problem bundle directory (problem.json, cases.json,
+    statement.md, starter.*)."""
+    matched = PROBLEM_BUNDLE_DIR.fullmatch(path.name)
+    if matched is None:
+        raise ProblemError("Problem bundle directory must use '<zero-padded id>_<slug>'")
+
+    def _read_json(name: str) -> Any:
+        file_path = path / name
+        if not file_path.is_file():
+            raise ProblemError(f"Problem bundle is missing {name}")
+        return json.loads(file_path.read_text(encoding="utf-8"))
+
+    problem_data = _read_json("problem.json")
+    if not isinstance(problem_data, dict):
+        raise ProblemError("problem.json must contain an object")
+    _require_exact_keys(
+        problem_data,
+        {"schema_version", "id", "slug", "title", "difficulty", "tags", "invocation", "limits"},
+        "problem.json",
+    )
+    if problem_data["schema_version"] != 1:
+        raise ProblemError("Unsupported problem bundle schema version")
+    if problem_data["id"] != int(matched.group("number")) or problem_data["slug"] != matched.group("slug"):
+        raise ProblemError("Bundle directory name must match problem.json id and slug")
+    if not isinstance(problem_data["title"], str) or not problem_data["title"].strip():
+        raise ProblemError("problem.json title must be a non-empty string")
+    if not isinstance(problem_data["difficulty"], str) or not problem_data["difficulty"]:
+        raise ProblemError("problem.json difficulty must be a non-empty string")
+    if not isinstance(problem_data["tags"], list) or not all(
+        isinstance(tag, str) and tag for tag in problem_data["tags"]
+    ):
+        raise ProblemError("problem.json tags must be an array of non-empty strings")
+    invocation = problem_data["invocation"]
+    if not isinstance(invocation, dict) or not invocation:
+        raise ProblemError("problem.json invocation must be an object")
+    limits = problem_data["limits"]
+    _require_exact_keys(limits, {"time_ms", "memory_mb", "output_kb"}, "Limits")
+    if not all(isinstance(value, int) and value > 0 for value in limits.values()):
+        raise ProblemError("## Limits values must be positive integers")
+
+    # statement.md: '# Title', '## Description' (with ### Example N and
+    # ### Constraints), optional '## Hints' with ### Hint N.
+    statement_path = path / "statement.md"
+    if not statement_path.is_file():
+        raise ProblemError("Problem bundle is missing statement.md")
+    statement = statement_path.read_text(encoding="utf-8")
+    statement_headings = _headings(statement)
+    top = [(level, title, line) for level, title, line in statement_headings if level <= 2]
+    if not top or top[0][0] != 1:
+        raise ProblemError("statement.md must start with a '# <Title>' heading")
+    if top[0][1].strip() != problem_data["title"].strip():
+        raise ProblemError("statement.md title must match problem.json")
+    section_names = [title for level, title, _ in top[1:] if level == 2]
+    if section_names != ["Description"]:
+        if section_names == ["Description", "Hints"]:
+            pass
+        else:
+            raise ProblemError("statement.md requires '## Description' followed by optional '## Hints'")
+    description_lines = statement.splitlines(keepends=True)
+    description_start = top[1][2] + 1
+    description_end = top[2][2] if len(top) > 2 else len(description_lines)
+    description = "".join(description_lines[description_start:description_end]).strip("\n")
+    if not description.strip():
+        raise ProblemError("## Description cannot be empty")
+    names, examples = _numbered_subheadings(description, "Example", "Description")
+    # SQL problems state their contract as the schema DDL, not prose limits
+    if "Constraints" not in names and invocation.get("type", "function") != "sql":
+        raise ProblemError("## Description requires ### Constraints")
+    hints: list[str] = []
+    if len(top) > 2:
+        hints_lines = description_lines[top[2][2] + 1 :]
+        _, hints = _numbered_subheadings("".join(hints_lines), "Hint", "Hints")
+
+    # cases.json: public = statement examples, hidden = the rest (display
+    # grouping only; all case data is public by design).
+    cases_data = _read_json("cases.json")
+    if not isinstance(cases_data, dict) or set(cases_data) != {"public", "hidden"}:
+        raise ProblemError("cases.json must contain exactly 'public' and 'hidden'")
+    public = _validate_cases(cases_data["public"], "Public")
+    hidden = _validate_cases(cases_data["hidden"], "Hidden")
+    if not public:
+        raise ProblemError("At least one public testcase is required")
+    if len(public) != len(examples):
+        raise ProblemError("Public cases must correspond one-to-one with statement examples")
+
+    # starter.* files select the languages
+    languages: dict[str, Any] = {}
+    for starter_path in sorted(path.glob("starter.*")):
+        extension = starter_path.name[len("starter.") :]
+        language = EXTENSION_LANGUAGE.get(extension)
+        if language is None:
+            raise ProblemError(f"Unknown starter extension {extension!r}")
+        starter = starter_path.read_text(encoding="utf-8")
+        if not starter.strip():
+            raise ProblemError(f"Starter for {language!r} cannot be empty")
+        languages[language] = {
+            **LANGUAGE_REGISTRY[language],
+            "enabled": True,
+            "starter": starter.rstrip("\n") + "\n",
+        }
+    if not languages:
+        raise ProblemError("Problem bundle needs at least one starter.* file")
+
+    problem = {
+        "schema_version": problem_data["schema_version"],
+        "id": problem_data["id"],
+        "slug": problem_data["slug"],
+        "title": problem_data["title"],
+        "difficulty": problem_data["difficulty"],
+        "tags": problem_data["tags"],
         "description": description + "\n",
         "hints": hints,
         "invocation": invocation,
@@ -264,10 +458,20 @@ def _cached_problem(
 ) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
     del modified_ns, size
     path = Path(path_string)
+    if path.is_dir():
+        return parse_problem_bundle(path)
     return parse_problem_markdown(path.read_text(encoding="utf-8"), path)
 
 
 def _load_path(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+    if path.is_dir():
+        signature_modified = 0
+        signature_size = 0
+        for member in sorted(path.iterdir()):
+            stat = member.stat()
+            signature_modified = max(signature_modified, stat.st_mtime_ns)
+            signature_size += stat.st_size
+        return copy.deepcopy(_cached_problem(str(path), signature_modified, signature_size))
     stat = path.stat()
     return copy.deepcopy(_cached_problem(str(path), stat.st_mtime_ns, stat.st_size))
 
@@ -276,9 +480,18 @@ def _safe_problem_path(slug: str) -> Path:
     if SLUG.fullmatch(slug) is None:
         raise ProblemError("Invalid problem slug")
     matches = []
-    for candidate in PROBLEMS_DIR.glob(f"*_{slug}.md"):
+    candidates = sorted(
+        [*(PROBLEMS_DIR.glob(f"*_{slug}.md")), *(PROBLEMS_DIR.glob(f"*_{slug}"))],
+        key=lambda path: (path.name, path.is_dir()),
+    )
+    for candidate in candidates:
         path = candidate.resolve()
-        if path.parent != PROBLEMS_DIR or PROBLEM_FILE.fullmatch(path.name) is None:
+        if path.parent != PROBLEMS_DIR:
+            continue
+        if path.is_dir():
+            if PROBLEM_BUNDLE_DIR.fullmatch(path.name) is None:
+                continue
+        elif PROBLEM_FILE.fullmatch(path.name) is None:
             continue
         problem, _, _ = _load_path(path)
         if problem["slug"] == slug:
@@ -314,14 +527,36 @@ def load_all_cases(slug: str) -> tuple[list[dict[str, Any]], int]:
     return named_cases, public_count
 
 
+def load_reference_solution(slug: str, language: str) -> Optional[str]:
+    """The bundle's recommended solution for a language, if it provides one.
+
+    Only bundle-format problems carry solutions; flat markdown packages have
+    none, and a bundle may legitimately lack a given language."""
+    path = _safe_problem_path(slug)
+    if not path.is_dir():
+        return None
+    extension = LANGUAGE_EXTENSION.get(language)
+    if extension is None:
+        return None
+    solution = path / f"solution.{extension}"
+    if not solution.is_file():
+        return None
+    return solution.read_text(encoding="utf-8")
+
+
 def list_problems() -> list[dict[str, Any]]:
     problems = []
     if not PROBLEMS_DIR.exists():
         return problems
-    for markdown_path in sorted(PROBLEMS_DIR.glob("*.md")):
+    for candidate in sorted(PROBLEMS_DIR.iterdir()):
         try:
-            path = markdown_path.resolve()
-            if path.parent != PROBLEMS_DIR or PROBLEM_FILE.fullmatch(path.name) is None:
+            path = candidate.resolve()
+            if path.parent != PROBLEMS_DIR:
+                continue
+            if path.is_dir():
+                if PROBLEM_BUNDLE_DIR.fullmatch(path.name) is None:
+                    continue
+            elif PROBLEM_FILE.fullmatch(path.name) is None:
                 continue
             data, _, _ = _load_path(path)
             problems.append(
@@ -334,8 +569,8 @@ def list_problems() -> list[dict[str, Any]]:
 
 def public_problem(problem: dict[str, Any]) -> dict[str, Any]:
     allowed = {
-        "id", "slug", "title", "difficulty", "tags", "description", "hints",
-        "invocation", "limits", "languages", "public_cases", "source",
+        "slug", "title", "difficulty", "tags", "description", "hints",
+        "invocation", "limits", "languages", "public_cases",
     }
     result = {key: value for key, value in problem.items() if key in allowed}
     result["languages"] = {

@@ -26,7 +26,6 @@ export type Problem = {
   };
   languages: Record<string, Language>;
   public_cases: Array<{ name: string; input: Record<string, unknown> }>;
-  source?: { label: string; url: string };
 };
 
 export type CaseResult = {
@@ -47,6 +46,7 @@ export type JudgeResult = {
   passed: number;
   total: number;
   runtime_ms: number;
+  reference_runtime_ms?: number | null;
   results: CaseResult[];
   submission_id?: number;
 };

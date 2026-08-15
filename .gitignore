@@ -8,3 +8,12 @@ __pycache__/
 *.pyc
 *.sqlite3
 
+.localonly/
+
+# external problem-set cache (OPENOJ_PROBLEMS clones)
+.cache/
+
+# frontend build byproducts
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts

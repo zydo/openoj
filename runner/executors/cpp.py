@@ -4,7 +4,13 @@ from typing import Any
 
 from .base import ExecutorError, PreparedProgram
 from .compiled import CompiledExecutor
-from .typed import cpp_type, encode_case, function_signature
+from .typed import (
+    cpp_type,
+    encode_case,
+    function_signature,
+    struct_item_spec,
+    uses_struct_kinds,
+)
 
 
 class CppExecutor(CompiledExecutor):
@@ -27,6 +33,115 @@ class CppExecutor(CompiledExecutor):
         class_name = invocation.get("class_name", "Solution")
         if not isinstance(class_name, str) or not class_name.isidentifier():
             raise ExecutorError("Invalid C++ entry class")
+
+        structs = uses_struct_kinds(invocation)
+        item_spec = struct_item_spec(invocation)
+        struct_decls = ""
+        if "list" in structs:
+            struct_decls += (
+                "struct ListNode { "
+                f"{cpp_type(item_spec)} val; ListNode *next; "
+                f"explicit ListNode({cpp_type(item_spec)} x) : val(x), next(nullptr) {{}} }};\n"
+            )
+        if "tree" in structs:
+            struct_decls += (
+                "struct TreeNode { "
+                f"{cpp_type(item_spec)} val; TreeNode *left; TreeNode *right; "
+                f"explicit TreeNode({cpp_type(item_spec)} x) : val(x), left(nullptr), right(nullptr) {{}} }};\n"
+            )
+
+        struct_codecs = ""
+        if "list" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                template <> struct OpenOJDecoder<ListNode*> {{
+                    static ListNode* read(OpenOJReader& reader) {{
+                        if (reader.byte() == 0) return nullptr;
+                        uint32_t length = reader.u32();
+                        ListNode* head = nullptr;
+                        ListNode** cursor = &head;
+                        for (uint32_t index = 0; index < length; ++index) {{
+                            *cursor = new ListNode(OpenOJDecoder<{cpp_type(item_spec)}>::read(reader));
+                            cursor = &((*cursor)->next);
+                        }}
+                        return head;
+                    }}
+                }};
+                static std::string openoj_json(const ListNode* head) {{
+                    std::string output = "[";
+                    bool first = true;
+                    for (const ListNode* node = head; node; node = node->next) {{
+                        if (!first) output += ',';
+                        first = false;
+                        output += openoj_json(node->val);
+                    }}
+                    return output + "]";
+                }}
+                """
+            )
+        if "tree" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                template <> struct OpenOJDecoder<TreeNode*> {{
+                    static TreeNode* read(OpenOJReader& reader) {{
+                        uint32_t length = reader.u32();
+                        std::vector<std::pair<bool, {cpp_type(item_spec)}>> slots;
+                        slots.reserve(length);
+                        for (uint32_t index = 0; index < length; ++index) {{
+                            if (reader.byte() == 1) slots.emplace_back(true, OpenOJDecoder<{cpp_type(item_spec)}>::read(reader));
+                            else slots.emplace_back(false, {cpp_type(item_spec)}());
+                        }}
+                        if (length == 0 || !slots[0].first) return nullptr;
+                        TreeNode* root = new TreeNode(slots[0].second);
+                        std::deque<TreeNode*> queue{{root}};
+                        size_t index = 1;
+                        while (!queue.empty() && index < slots.size()) {{
+                            TreeNode* node = queue.front();
+                            queue.pop_front();
+                            if (index < slots.size()) {{
+                                if (slots[index].first) {{
+                                    node->left = new TreeNode(slots[index].second);
+                                    queue.push_back(node->left);
+                                }}
+                                ++index;
+                            }}
+                            if (index < slots.size()) {{
+                                if (slots[index].first) {{
+                                    node->right = new TreeNode(slots[index].second);
+                                    queue.push_back(node->right);
+                                }}
+                                ++index;
+                            }}
+                        }}
+                        return root;
+                    }}
+                }};
+                static std::string openoj_json(const TreeNode* root) {{
+                    std::vector<std::string> items;
+                    std::deque<const TreeNode*> queue;
+                    if (root) queue.push_back(root);
+                    while (!queue.empty()) {{
+                        const TreeNode* node = queue.front();
+                        queue.pop_front();
+                        if (node == nullptr) {{
+                            items.push_back("null");
+                            continue;
+                        }}
+                        items.push_back(openoj_json(node->val));
+                        queue.push_back(node->left);
+                        queue.push_back(node->right);
+                    }}
+                    while (!items.empty() && items.back() == "null") items.pop_back();
+                    std::string output = "[";
+                    for (size_t index = 0; index < items.size(); ++index) {{
+                        if (index) output += ',';
+                        output += items[index];
+                    }}
+                    return output + "]";
+                }}
+                """
+            )
+
         declarations = "\n".join(
             f"        auto openoj_arg_{index} = OpenOJDecoder<{cpp_type(spec)}>::read(openoj_reader);"
             for index, spec in enumerate(parameters)
@@ -147,12 +262,12 @@ class CppExecutor(CompiledExecutor):
                 }}
                 return output + "]";
             }}
-
+{struct_codecs}
             int main() {{
                 try {{
-                    std::vector<unsigned char> bytes(
+                    std::vector<unsigned char> bytes{{
                         std::istreambuf_iterator<char>(std::cin), std::istreambuf_iterator<char>()
-                    );
+                    }};
                     OpenOJReader openoj_reader(std::move(bytes));
             {declarations}
                     openoj_reader.finished();
@@ -174,7 +289,11 @@ class CppExecutor(CompiledExecutor):
         source_path = job_root / "main.cpp"
         executable = job_root / "solution"
         source_path.write_text(
-            "#include <bits/stdc++.h>\nusing namespace std;\n" + code + "\n" + wrapper,
+            "#include <bits/stdc++.h>\nusing namespace std;\n"
+            + struct_decls
+            + code
+            + "\n"
+            + wrapper,
             encoding="utf-8",
         )
         source_path.chmod(0o444)

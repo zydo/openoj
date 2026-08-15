@@ -1,11 +1,13 @@
 import math
 import struct
-from typing import Any
+from typing import Any, Optional
 
 from .base import ExecutorError
 
 
-SUPPORTED_KINDS = {"integer", "number", "boolean", "string", "array"}
+SUPPORTED_KINDS = {
+    "integer", "number", "boolean", "string", "array", "linked_list", "binary_tree",
+}
 
 
 def type_spec(value: Any, location: str) -> dict[str, Any]:
@@ -16,6 +18,11 @@ def type_spec(value: Any, location: str) -> dict[str, Any]:
         raise ExecutorError(f"{location} integer bits must be 32 or 64")
     if kind == "array":
         type_spec(value.get("items"), f"{location} array items")
+    if kind in {"linked_list", "binary_tree"}:
+        items = value.get("items")
+        if not isinstance(items, dict) or items.get("kind") != "integer":
+            raise ExecutorError(f"{location} {kind} items must be integers")
+        type_spec(items, f"{location} {kind} items")
     return value
 
 
@@ -90,6 +97,32 @@ def _encode_value(value: Any, spec: dict[str, Any], location: str) -> bytes:
             _encode_value(item, spec["items"], f"{location}[{index}]")
             for index, item in enumerate(value)
         )
+    if kind == "linked_list":
+        if value is None:
+            return b"\x00"
+        if not isinstance(value, list) or len(value) > 0xFFFFFFFF:
+            raise ExecutorError(f"{location} must be an array or null")
+        return (
+            b"\x01"
+            + struct.pack(">I", len(value))
+            + b"".join(
+                _encode_value(item, spec["items"], f"{location}[{index}]")
+                for index, item in enumerate(value)
+            )
+        )
+    if kind == "binary_tree":
+        if not isinstance(value, list) or len(value) > 0xFFFFFFFF:
+            raise ExecutorError(f"{location} must be a level-order array")
+        chunks = [struct.pack(">I", len(value))]
+        for index, item in enumerate(value):
+            if item is None:
+                chunks.append(b"\x00")
+            else:
+                chunks.append(b"\x01")
+                chunks.append(
+                    _encode_value(item, spec["items"], f"{location}[{index}]")
+                )
+        return b"".join(chunks)
     raise ExecutorError(f"Unsupported type at {location}")
 
 
@@ -103,6 +136,8 @@ def cpp_type(spec: dict[str, Any]) -> str:
             "boolean": "bool",
             "string": "std::string",
             "array": "std::vector<{item}>",
+            "linked_list": "ListNode*",
+            "binary_tree": "TreeNode*",
         },
     )
 
@@ -117,6 +152,8 @@ def typescript_type(spec: dict[str, Any]) -> str:
             "boolean": "boolean",
             "string": "string",
             "array": "Array<{item}>",
+            "linked_list": "ListNode | null",
+            "binary_tree": "TreeNode | null",
         },
     )
 
@@ -131,6 +168,8 @@ def go_type(spec: dict[str, Any]) -> str:
             "boolean": "bool",
             "string": "string",
             "array": "[]{item}",
+            "linked_list": "*ListNode",
+            "binary_tree": "*TreeNode",
         },
     )
 
@@ -145,8 +184,52 @@ def rust_type(spec: dict[str, Any]) -> str:
             "boolean": "bool",
             "string": "String",
             "array": "Vec<{item}>",
+            "linked_list": "Option<Box<ListNode>>",
+            "binary_tree": "Option<Box<TreeNode>>",
         },
     )
+
+
+def uses_struct_kinds(invocation: dict[str, Any]) -> set[str]:
+    """Report which LeetCode structures an invocation needs defined."""
+    specs = [parameter.get("value_type") for parameter in invocation.get("parameters", [])]
+    specs.append(invocation.get("return_type"))
+    found = set()
+
+    def walk(spec: Any) -> None:
+        if not isinstance(spec, dict):
+            return
+        if spec.get("kind") == "linked_list":
+            found.add("list")
+        elif spec.get("kind") == "binary_tree":
+            found.add("tree")
+        elif spec.get("kind") == "array":
+            walk(spec.get("items"))
+
+    for spec in specs:
+        walk(spec)
+    return found
+
+
+def struct_item_spec(invocation: dict[str, Any]) -> dict[str, Any]:
+    """Return the integer item spec shared by the invocation's struct kinds."""
+    specs = [parameter.get("value_type") for parameter in invocation.get("parameters", [])]
+    specs.append(invocation.get("return_type"))
+
+    def walk(spec: Any) -> Optional[dict[str, Any]]:
+        if not isinstance(spec, dict):
+            return None
+        if spec.get("kind") in {"linked_list", "binary_tree"}:
+            return spec.get("items")
+        if spec.get("kind") == "array":
+            return walk(spec.get("items"))
+        return None
+
+    for spec in specs:
+        items = walk(spec)
+        if items is not None:
+            return items
+    return {"kind": "integer", "bits": 32}
 
 
 def _render_type(spec: dict[str, Any], names: dict[str, str]) -> str:

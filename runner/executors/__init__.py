@@ -5,6 +5,7 @@ from .go import GoExecutor
 from .java import JavaExecutor
 from .python3 import Python3Executor
 from .rust import RustExecutor
+from .sql import SqlExecutor
 from .typescript import TypeScriptExecutor
 
 _EXECUTORS: dict[str, LanguageExecutor] = {
@@ -14,6 +15,7 @@ _EXECUTORS: dict[str, LanguageExecutor] = {
     JavaExecutor.language: JavaExecutor(),
     Python3Executor.language: Python3Executor(),
     RustExecutor.language: RustExecutor(),
+    SqlExecutor.language: SqlExecutor(),
     TypeScriptExecutor.language: TypeScriptExecutor(),
 }
 

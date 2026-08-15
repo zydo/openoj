@@ -6,6 +6,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -98,7 +99,10 @@ def _run_case(
         "processes": executor.max_processes,
     }
     timeout_seconds = calibrated_time_ms / 1000
-    payload = executor.encode_case(invocation, case_input)
+    if getattr(executor, "encode_case_with_limits", False):
+        payload = executor.encode_case(invocation, case_input, limits)
+    else:
+        payload = executor.encode_case(invocation, case_input)
 
     with tempfile.TemporaryFile(mode="w+b", dir="/tmp") as output_file:
         started = time.monotonic()
@@ -228,6 +232,77 @@ def _process_job(job_dir: Path) -> None:
     (job_dir / "ready").unlink(missing_ok=True)
 
 
+def _prewarm_toolchains_once() -> None:
+    """Compile throwaway programs so a user's first submission never pays
+    the cold toolchain cost (page-cache faults dominate rustc/g++/javac/tsc
+    cold starts; the shared compile budget measures wall clock)."""
+    warm_dir = Path(os.environ.get("OPENOJ_PREWARM_DIR", "/tmp/openoj-prewarm"))
+    try:
+        warm_dir.mkdir(parents=True, exist_ok=True)
+        environment = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/nonexistent", "TMPDIR": str(warm_dir)}
+        jobs = []
+        rust_source = warm_dir / "warm.rs"
+        rust_source.write_text("fn main() {}\n", encoding="utf-8")
+        jobs.append((
+            ("/usr/bin/rustc", "--edition=2021", "-C", "opt-level=2", "-C", "debuginfo=0",
+             "-C", "strip=symbols", "-o", str(warm_dir / "warm-rust"), str(rust_source)),
+            environment,
+        ))
+        cpp_source = warm_dir / "warm.cpp"
+        cpp_source.write_text("int main() { return 0; }\n", encoding="utf-8")
+        jobs.append((
+            ("/usr/bin/g++", "-std=c++20", "-O2", "-pipe", "-o", str(warm_dir / "warm-cpp"), str(cpp_source)),
+            environment,
+        ))
+        go_source = warm_dir / "warm-go"
+        go_dir = warm_dir / "go"
+        go_dir.mkdir(exist_ok=True)
+        (go_dir / "go.mod").write_text("module warm\n\ngo 1.24\n", encoding="utf-8")
+        (go_dir / "main.go").write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
+        # The cache is shared with real submissions (see GoExecutor), so this
+        # build leaves the standard library precompiled for every job. It is
+        # written by the privileged worker and consumed by the dropped-uid
+        # compiler, hence the permissive mode.
+        go_cache = Path("/tmp/openoj-gocache")
+        go_cache.mkdir(parents=True, exist_ok=True)
+        go_cache.chmod(0o1777)
+        jobs.append((
+            ("/usr/bin/go", "build", "-trimpath", "-o", str(warm_dir / "warm-go-bin"), str(go_dir / "main.go")),
+            {**environment, "GOCACHE": str(go_cache), "GOENV": "off", "GOPROXY": "off", "CGO_ENABLED": "0"},
+        ))
+        java_source = warm_dir / "Warm.java"
+        java_source.write_text("class Warm {}\n", encoding="utf-8")
+        jobs.append((
+            ("/usr/bin/javac", "-proc:none", "-g:none", "-d", str(warm_dir), str(java_source)),
+            environment,
+        ))
+        ts_source = warm_dir / "warm.ts"
+        ts_source.write_text("const value: number = 1;\nconsole.log(value);\n", encoding="utf-8")
+        jobs.append((
+            ("/usr/local/bin/tsc", "--target", "ES2022", "--module", "commonjs",
+             "--skipLibCheck", "--outDir", str(warm_dir / "ts"), str(ts_source)),
+            environment,
+        ))
+        for command, job_environment in jobs:
+            try:
+                subprocess.run(
+                    command, env=job_environment, cwd=warm_dir,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=90, check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as error:
+                print(f"OpenOJ pre-warm skipped {' '.join(command[:2])}: {error}", file=sys.stderr, flush=True)
+    except OSError as error:
+        print(f"OpenOJ pre-warm disabled: {error}", file=sys.stderr, flush=True)
+
+
+def _prewarm_loop() -> None:
+    interval = float(os.environ.get("OPENOJ_PREWARM_INTERVAL", "600"))
+    while True:
+        _prewarm_toolchains_once()
+        time.sleep(interval)
+
+
 def main() -> None:
     for language in supported_languages():
         elapsed_ms, factor = get_executor(language).calibrate()
@@ -237,6 +312,9 @@ def main() -> None:
             file=sys.stderr,
             flush=True,
         )
+    # Serve immediately; warming runs alongside queue polling so startup is
+    # never delayed, and repeats periodically to keep the toolchains warm.
+    threading.Thread(target=_prewarm_loop, name="openoj-prewarm", daemon=True).start()
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     while True:

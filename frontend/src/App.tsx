@@ -12,6 +12,7 @@ import {
   Clock3,
   Code2,
   FileText,
+  Github,
   GripVertical,
   History,
   List,
@@ -28,9 +29,11 @@ import {
 import { api } from "./api";
 import type { JudgeResult, Problem, Submission } from "./types";
 
-const SLUG = "two-sum";
-const THEME_STORAGE_KEY = "openoj:theme";
+type ProblemSummary = Pick<Problem, "id" | "slug" | "title" | "difficulty" | "tags">;
 type Theme = "light" | "dark";
+
+const DEFAULT_SLUG = "two-sum";
+const THEME_STORAGE_KEY = "openoj:theme";
 
 function storedTheme(): Theme | null {
   try {
@@ -43,6 +46,26 @@ function storedTheme(): Theme | null {
 
 function preferredTheme(): Theme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function draftKey(slug: string, language: string) {
+  return `openoj:${slug}:${language}`;
+}
+
+function readDraft(slug: string, language: string) {
+  try {
+    return localStorage.getItem(draftKey(slug, language));
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(slug: string, language: string, code: string) {
+  try {
+    localStorage.setItem(draftKey(slug, language), code);
+  } catch {
+    /* Drafts are best-effort; judging works without them. */
+  }
 }
 
 function statusLabel(status: string) {
@@ -66,6 +89,14 @@ function statusTone(status?: string) {
   return "warning";
 }
 
+function difficultyTone(difficulty: string) {
+  const level = Number.parseInt(difficulty.replace(/[^0-9]/g, ""), 10);
+  if (Number.isNaN(level)) return "easy";
+  if (level <= 2) return "easy";
+  if (level === 3) return "medium";
+  return "hard";
+}
+
 function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
@@ -73,6 +104,9 @@ function formatJson(value: unknown) {
 function App() {
   const [themeOverride, setThemeOverride] = useState<Theme | null>(storedTheme);
   const [systemTheme, setSystemTheme] = useState<Theme>(preferredTheme);
+  const [problems, setProblems] = useState<ProblemSummary[] | null>(null);
+  const [listError, setListError] = useState("");
+  const [activeSlug, setActiveSlug] = useState<string | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [loadError, setLoadError] = useState("");
   const [language, setLanguage] = useState("python3");
@@ -86,6 +120,7 @@ function App() {
   const [bottomTab, setBottomTab] = useState<"testcase" | "result">("testcase");
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [problemListOpen, setProblemListOpen] = useState(false);
+  const [confirmRestore, setConfirmRestore] = useState(false);
   const [splitX, setSplitX] = useState(46);
   const [splitY, setSplitY] = useState(61);
   const workspaceRef = useRef<HTMLDivElement>(null);
@@ -108,6 +143,10 @@ function App() {
     );
   }, [theme]);
 
+  useEffect(() => {
+    document.title = problem ? `OpenOJ — ${problem.title}` : "OpenOJ — Practice library";
+  }, [problem]);
+
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
     try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch { /* Theme still changes for this session. */ }
@@ -115,21 +154,37 @@ function App() {
   };
 
   useEffect(() => {
-    api.getProblem(SLUG).then((loaded) => {
+    api.getProblems().then(setProblems).catch((error: Error) => setListError(error.message));
+  }, []);
+
+  const openProblem = useCallback((slug: string) => {
+    setActiveSlug(slug);
+    setProblem(null);
+    setLoadError("");
+    setResult(null);
+    setActionError("");
+    setActiveCase(0);
+    setSubmissions([]);
+    setBottomTab("testcase");
+    api.getProblem(slug).then((loaded) => {
       setProblem(loaded);
       const initialLanguage = Object.keys(loaded.languages).find((key) => loaded.languages[key].enabled) ?? "python3";
       setLanguage(initialLanguage);
-      const saved = localStorage.getItem(`openoj:${loaded.slug}:${initialLanguage}`);
-      setCode(saved ?? loaded.languages[initialLanguage].starter);
+      const saved = readDraft(loaded.slug, initialLanguage);
+      const initialCode = saved ?? loaded.languages[initialLanguage].starter;
+      setCode(initialCode);
+      writeDraft(loaded.slug, initialLanguage, initialCode);
       setDrafts(loaded.public_cases.map((test) =>
         Object.fromEntries(Object.entries(test.input).map(([key, value]) => [key, JSON.stringify(value)])),
       ));
     }).catch((error: Error) => setLoadError(error.message));
   }, []);
 
-  useEffect(() => {
-    if (problem && code) localStorage.setItem(`openoj:${problem.slug}:${language}`, code);
-  }, [code, language, problem]);
+  const goHome = useCallback(() => {
+    setActiveSlug(null);
+    setProblem(null);
+    setProblemListOpen(false);
+  }, []);
 
   const refreshSubmissions = useCallback(() => {
     if (!problem) return;
@@ -185,6 +240,14 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [execute]);
 
+  const changeLanguage = (key: string) => {
+    if (!problem) return;
+    const next = readDraft(problem.slug, key) ?? problem.languages[key].starter;
+    setLanguage(key);
+    setCode(next);
+    writeDraft(problem.slug, key, next);
+  };
+
   const dragHorizontal = (event: React.PointerEvent) => {
     const startX = event.clientX;
     const start = splitX;
@@ -213,7 +276,15 @@ function App() {
     window.addEventListener("pointerup", stop);
   };
 
+  if (listError) return <FullPageMessage icon={<CircleAlert />} title="The problem set could not load" detail={listError} />;
+  if (!problems) return <FullPageMessage icon={<LoaderCircle className="spin" />} title="Preparing the judge bench" detail="Loading the problem set…" />;
   if (loadError) return <FullPageMessage icon={<CircleAlert />} title="OpenOJ could not load" detail={loadError} />;
+  if (activeSlug === null) return <Landing problems={problems} theme={theme} onToggleTheme={toggleTheme} onOpen={openProblem} />;
+
+  const currentIndex = problems.findIndex((entry) => entry.slug === activeSlug);
+  const prevSlug = currentIndex > 0 ? problems[currentIndex - 1].slug : null;
+  const nextSlug = currentIndex >= 0 && currentIndex + 1 < problems.length ? problems[currentIndex + 1].slug : null;
+
   if (!problem) return <FullPageMessage icon={<LoaderCircle className="spin" />} title="Preparing the judge bench" detail="Loading problem resources…" />;
 
   const languageConfig = problem.languages[language];
@@ -223,7 +294,7 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="topbar-left">
-          <button className="brand" onClick={() => setProblemListOpen(true)} aria-label="Open problem list">
+          <button className="brand" onClick={goHome} aria-label="Back to all problems">
             <span className="brand-mark"><Code2 size={18} strokeWidth={2.4} /></span>
             <span>OpenOJ</span>
           </button>
@@ -231,8 +302,20 @@ function App() {
           <button className="problem-list-trigger" onClick={() => setProblemListOpen(true)}>
             <List size={16} /> Problem list
           </button>
-          <button className="icon-button" title="Previous problem" disabled><ChevronLeft size={18} /></button>
-          <button className="icon-button" title="Next problem" disabled><ChevronRight size={18} /></button>
+          <button
+            className="icon-button"
+            title="Previous problem"
+            aria-label="Previous problem"
+            disabled={!prevSlug}
+            onClick={() => prevSlug && openProblem(prevSlug)}
+          ><ChevronLeft size={18} /></button>
+          <button
+            className="icon-button"
+            title="Next problem"
+            aria-label="Next problem"
+            disabled={!nextSlug}
+            onClick={() => nextSlug && openProblem(nextSlug)}
+          ><ChevronRight size={18} /></button>
         </div>
         <div className="top-actions">
           <button className="run-button" onClick={() => void execute("run")} disabled={busy !== null} title="Run tests (Ctrl/⌘ + Enter)">
@@ -245,6 +328,16 @@ function App() {
           </button>
         </div>
         <div className="topbar-right">
+          <a
+            className="icon-button github-link"
+            href="https://github.com/zydo/openoj"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="OpenOJ on GitHub"
+            aria-label="OpenOJ on GitHub"
+          >
+            <Github size={16} />
+          </a>
           <button
             className="icon-button theme-toggle"
             onClick={toggleTheme}
@@ -253,9 +346,6 @@ function App() {
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
-          <div className="session-pill" title="Single-user workspace">
-            <span className="session-dot" /> Local session
-          </div>
         </div>
       </header>
 
@@ -272,10 +362,9 @@ function App() {
           {leftTab === "description" ? (
             <article className="problem-scroll">
               <div className="problem-heading">
-                <div className="problem-kicker">Problem {String(problem.id).padStart(3, "0")}</div>
-                <h1>{problem.id}. {problem.title}</h1>
+                <h1>{problem.title}</h1>
                 <div className="problem-meta">
-                  <span className="difficulty">{problem.difficulty}</span>
+                  <span className={`difficulty ${difficultyTone(problem.difficulty)}`}>{problem.difficulty}</span>
                   {problem.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
                 </div>
               </div>
@@ -291,9 +380,6 @@ function App() {
                   </details>
                 ))}
               </section>
-              <footer className="problem-source">
-                {problem.source && <>Demo adapted from <a href={problem.source.url} target="_blank" rel="noreferrer">{problem.source.label}</a>.</>}
-              </footer>
             </article>
           ) : (
             <Submissions submissions={submissions} problem={problem} />
@@ -309,23 +395,18 @@ function App() {
             <div className="panel-heading">
               <span className="panel-title"><Code2 size={16} /> Code</span>
               <div className="editor-tools">
-                <label className="select-wrap">
-                  <select value={language} onChange={(event) => {
-                    const next = event.target.value;
-                    setLanguage(next);
-                    setCode(localStorage.getItem(`openoj:${problem.slug}:${next}`) ?? problem.languages[next].starter);
-                  }} aria-label="Programming language">
-                    {Object.entries(problem.languages).map(([key, config]) => (
-                      <option key={key} value={key} disabled={!config.enabled}>
-                        {config.display_name}{config.enabled ? "" : " — coming soon"}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={14} />
-                </label>
-                <button className="icon-button" title="Restore starter code" onClick={() => {
-                  if (window.confirm("Restore the starter code? Your current draft will be replaced.")) setCode(languageConfig.starter);
-                }}><RotateCcw size={15} /></button>
+                <LanguageMenu
+                  value={language}
+                  options={Object.entries(problem.languages).map(([key, config]) => ({
+                    key,
+                    label: config.display_name,
+                    enabled: config.enabled,
+                  }))}
+                  onChange={changeLanguage}
+                />
+                <button className="icon-button" title="Restore starter code" onClick={() => setConfirmRestore(true)}>
+                  <RotateCcw size={15} />
+                </button>
               </div>
             </div>
             <div className="editor-wrap">
@@ -333,7 +414,10 @@ function App() {
                 height="100%"
                 language={languageConfig.monaco_language}
                 value={code}
-                onChange={(value) => setCode(value ?? "")}
+                onChange={(value) => {
+                  setCode(value ?? "");
+                  writeDraft(problem.slug, language, value ?? "");
+                }}
                 theme={theme === "dark" ? "vs-dark" : "light"}
                 loading={<div className="editor-loading"><LoaderCircle className="spin" size={18} /> Loading syntax engine…</div>}
                 options={{
@@ -389,7 +473,294 @@ function App() {
         </section>
       </main>
 
-      {problemListOpen && <ProblemDrawer problem={problem} onClose={() => setProblemListOpen(false)} />}
+      {problemListOpen && (
+        <ProblemDrawer
+          problems={problems}
+          activeSlug={activeSlug}
+          onSelect={(slug) => {
+            setProblemListOpen(false);
+            if (slug !== activeSlug) openProblem(slug);
+          }}
+          onClose={() => setProblemListOpen(false)}
+        />
+      )}
+
+      {confirmRestore && (
+        <ConfirmDialog
+          title="Restore starter code?"
+          body="Your current draft will be replaced. Saved drafts for other languages are kept."
+          confirmLabel="Restore starter"
+          onConfirm={() => {
+            setConfirmRestore(false);
+            setCode(languageConfig.starter);
+            writeDraft(problem.slug, language, languageConfig.starter);
+          }}
+          onClose={() => setConfirmRestore(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function LanguageMenu({ value, options, onChange }: {
+  value: string;
+  options: Array<{ key: string; label: string; enabled: boolean }>;
+  onChange: (key: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const selected = options.find((option) => option.key === value);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (open) listRef.current?.focus();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    document.getElementById(`language-option-${activeIndex}`)?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open]);
+
+  const enabledIndexes = options.map((option, index) => (option.enabled ? index : -1)).filter((index) => index >= 0);
+
+  const openMenu = () => {
+    const current = options.findIndex((option) => option.key === value && option.enabled);
+    setActiveIndex(current >= 0 ? current : (enabledIndexes[0] ?? 0));
+    setOpen(true);
+  };
+
+  const close = (focusButton = true) => {
+    setOpen(false);
+    if (focusButton) buttonRef.current?.focus();
+  };
+
+  const select = (index: number) => {
+    const option = options[index];
+    if (!option?.enabled) return;
+    onChange(option.key);
+    close();
+  };
+
+  const move = (direction: 1 | -1) => {
+    if (!enabledIndexes.length) return;
+    const position = enabledIndexes.indexOf(activeIndex);
+    const next = position === -1
+      ? (direction === 1 ? enabledIndexes[0] : enabledIndexes[enabledIndexes.length - 1])
+      : enabledIndexes[(position + direction + enabledIndexes.length) % enabledIndexes.length];
+    setActiveIndex(next);
+  };
+
+  return (
+    <div className="select-menu" ref={rootRef}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="select-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => (open ? close() : openMenu())}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            openMenu();
+          }
+        }}
+      >
+        {selected?.label ?? value}
+        <ChevronDown size={14} className={open ? "select-chevron flipped" : "select-chevron"} />
+      </button>
+      {open && (
+        <ul
+          ref={listRef}
+          className="select-popup"
+          role="listbox"
+          aria-label="Programming language"
+          aria-activedescendant={`language-option-${activeIndex}`}
+          tabIndex={-1}
+          onKeyDown={(event) => {
+          if (event.key === "ArrowDown") { event.preventDefault(); move(1); }
+          else if (event.key === "ArrowUp") { event.preventDefault(); move(-1); }
+          else if (event.key === "Home") { event.preventDefault(); if (enabledIndexes.length) setActiveIndex(enabledIndexes[0]); }
+          else if (event.key === "End") { event.preventDefault(); if (enabledIndexes.length) setActiveIndex(enabledIndexes[enabledIndexes.length - 1]); }
+          else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(activeIndex); }
+          else if (event.key === "Escape") { event.preventDefault(); close(); }
+          else if (event.key === "Tab") close(false);
+        }}>
+          {options.map((option, index) => (
+            <li
+              key={option.key}
+              id={`language-option-${index}`}
+              role="option"
+              aria-selected={option.key === value}
+              aria-disabled={!option.enabled}
+              className={[
+                "select-option",
+                index === activeIndex ? "active" : "",
+                option.key === value ? "selected" : "",
+                option.enabled ? "" : "disabled",
+              ].filter(Boolean).join(" ")}
+              onMouseEnter={() => option.enabled && setActiveIndex(index)}
+              onClick={() => select(index)}
+            >
+              <span>{option.label}{option.enabled ? "" : " — coming soon"}</span>
+              {option.key === value && <Check size={13} />}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ConfirmDialog({ title, body, confirmLabel, cancelLabel = "Cancel", onConfirm, onClose }: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  cancelLabel?: string;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    dialog.querySelector<HTMLElement>("button")?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusables = Array.from(dialog.querySelectorAll<HTMLElement>("button:not(:disabled)"));
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    dialog.addEventListener("keydown", onKeyDown);
+    return () => dialog.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="dialog-backdrop" onMouseDown={onClose}>
+      <div
+        ref={dialogRef}
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="dialog-title"
+        aria-describedby="dialog-body"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <h2 id="dialog-title">{title}</h2>
+        <p id="dialog-body">{body}</p>
+        <div className="dialog-actions">
+          <button type="button" className="dialog-cancel" onClick={onClose}>{cancelLabel}</button>
+          <button type="button" className="dialog-confirm" onClick={onConfirm} autoFocus>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Landing({ problems, theme, onToggleTheme, onOpen }: {
+  problems: ProblemSummary[];
+  theme: Theme;
+  onToggleTheme: () => void;
+  onOpen: (slug: string) => void;
+}) {
+  const featured = problems.find((entry) => entry.slug === DEFAULT_SLUG);
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div className="topbar-left">
+          <button className="brand" aria-label="OpenOJ home">
+            <span className="brand-mark"><Code2 size={18} strokeWidth={2.4} /></span>
+            <span>OpenOJ</span>
+          </button>
+        </div>
+        <div className="topbar-right">
+          <a
+            className="icon-button github-link"
+            href="https://github.com/zydo/openoj"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="OpenOJ on GitHub"
+            aria-label="OpenOJ on GitHub"
+          >
+            <Github size={16} />
+          </a>
+          <button
+            className="icon-button theme-toggle"
+            onClick={onToggleTheme}
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+          >
+            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+        </div>
+      </header>
+      <main className="landing">
+        <div className="landing-inner">
+          {featured && (
+            <section className="hero-card panel">
+              <div className="hero-main">
+                <div className="problem-kicker">Featured problem</div>
+                <h1>{featured.title}</h1>
+                <div className="problem-meta">
+                  <span className={`difficulty ${difficultyTone(featured.difficulty)}`}>{featured.difficulty}</span>
+                  {featured.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
+                </div>
+                <p>Return the indices of the two numbers in the array that add up to the target — the classic opener, and the fastest way to see the judge at work.</p>
+              </div>
+              <button className="hero-cta" onClick={() => onOpen(featured.slug)}>
+                <Play size={15} fill="currentColor" />
+                Open {featured.title}
+              </button>
+            </section>
+          )}
+          <section className="landing-index">
+            <header className="index-header">
+              <h2>All problems</h2>
+              <span>{problems.length} {problems.length === 1 ? "problem" : "problems"} · sorted alphabetically</span>
+            </header>
+            <div className="landing-list">
+              {problems.map((entry) => (
+                <button
+                  key={entry.slug}
+                  className="problem-row"
+                  onClick={() => onOpen(entry.slug)}
+                >
+                  <span className="problem-row-main">
+                    <strong>{entry.title}</strong>
+                    <small>{entry.tags.join(" · ")}</small>
+                  </span>
+                  <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{entry.difficulty}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      </main>
     </div>
   );
 }
@@ -465,6 +836,14 @@ function Results({ result, busy, error }: { result: JudgeResult | null; busy: st
           <span>{result.passed} of {result.total} cases passed</span>
         </div>
         <div className="runtime"><Clock3 size={14} /> {result.runtime_ms} ms</div>
+        {result.reference_runtime_ms != null && result.reference_runtime_ms > 0 && (
+          <div
+            className="runtime"
+            title={`Reference solution: ${result.reference_runtime_ms} ms on the same judge and cases`}
+          >
+            <Clock3 size={14} /> {Math.round((result.runtime_ms / result.reference_runtime_ms) * 100)}% of reference
+          </div>
+        )}
       </div>
       <div className="result-layout">
         <div className="result-case-list">
@@ -521,7 +900,33 @@ function Submissions({ submissions, problem }: { submissions: Submission[]; prob
   );
 }
 
-function ProblemDrawer({ problem, onClose }: { problem: Problem; onClose: () => void }) {
+function ProblemDrawer({ problems, activeSlug, onSelect, onClose }: {
+  problems: ProblemSummary[];
+  activeSlug: string;
+  onSelect: (slug: string) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const filterRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    filterRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  const normalized = query.trim().toLowerCase();
+  const filtered = normalized
+    ? problems.filter((entry) =>
+        entry.title.toLowerCase().includes(normalized)
+        || entry.slug.includes(normalized)
+        || entry.tags.some((tag) => tag.toLowerCase().includes(normalized)),
+      )
+    : problems;
+
   return (
     <div className="drawer-backdrop" onMouseDown={onClose}>
       <aside className="drawer" onMouseDown={(event) => event.stopPropagation()}>
@@ -529,12 +934,32 @@ function ProblemDrawer({ problem, onClose }: { problem: Problem; onClose: () => 
           <div><span>Problem set</span><strong>Practice library</strong></div>
           <button className="icon-button" onClick={onClose} aria-label="Close problem list"><X size={18} /></button>
         </div>
-        <div className="drawer-search">1 problem sideloaded from <code>/problems</code></div>
-        <button className="problem-row active" onClick={onClose}>
-          <span className="problem-number">{String(problem.id).padStart(3, "0")}</span>
-          <span><strong>{problem.title}</strong><small>{problem.tags.join(" · ")}</small></span>
-          <span className="difficulty">{problem.difficulty}</span>
-        </button>
+        <div className="drawer-tools">
+          <input
+            ref={filterRef}
+            className="drawer-filter"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Filter by title, slug, or tag"
+            aria-label="Filter problems"
+          />
+          <span className="drawer-count">{filtered.length} of {problems.length} problems</span>
+        </div>
+        <div className="drawer-list">
+          {filtered.length ? filtered.map((entry) => (
+            <button
+              key={entry.slug}
+              className={entry.slug === activeSlug ? "problem-row active" : "problem-row"}
+              onClick={() => onSelect(entry.slug)}
+            >
+              <span className="problem-row-main">
+                <strong>{entry.title}</strong>
+                <small>{entry.tags.join(" · ")}</small>
+              </span>
+              <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{entry.difficulty}</span>
+            </button>
+          )) : <p className="drawer-empty">No problems match “{query.trim()}”.</p>}
+        </div>
       </aside>
     </div>
   );

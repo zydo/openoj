@@ -4,7 +4,13 @@ from typing import Any
 
 from .base import PreparedProgram
 from .compiled import CompiledExecutor
-from .typed import encode_case, function_signature, rust_type
+from .typed import (
+    encode_case,
+    function_signature,
+    rust_type,
+    struct_item_spec,
+    uses_struct_kinds,
+)
 
 
 def _read_expression(spec: dict[str, Any], reader: str = "openoj_reader") -> str:
@@ -17,6 +23,10 @@ def _read_expression(spec: dict[str, Any], reader: str = "openoj_reader") -> str
         return f"{reader}.boolean()?"
     if kind == "string":
         return f"{reader}.text()?"
+    if kind == "linked_list":
+        return f"{reader}.linked_list()?"
+    if kind == "binary_tree":
+        return f"{reader}.binary_tree()?"
     nested = _read_expression(spec["items"], "reader")
     return f"{reader}.array(|reader| Ok({nested}))?"
 
@@ -26,6 +36,10 @@ class RustExecutor(CompiledExecutor):
     address_space_overhead_mb = 0
     max_processes = 16
     compiler_memory_mb = 2048
+    # rustc's first link on a cold page cache easily exceeds the shared
+    # 10-second budget; the worker pre-warms the toolchain at startup so this
+    # only covers genuinely large submissions.
+    compiler_timeout_seconds = 25
     compiler_path = "/usr/bin/rustc"
     benchmark_command = ("/runner/benchmarks/rust",)
     reference_benchmark_ms = 18.0
@@ -38,7 +52,108 @@ class RustExecutor(CompiledExecutor):
         invocation: dict[str, Any],
         limits: dict[str, Any],
     ) -> PreparedProgram:
-        parameters, _, method = function_signature(invocation, self.language)
+        parameters, return_type, method = function_signature(invocation, self.language)
+        structs = uses_struct_kinds(invocation)
+        item_read = _read_expression(struct_item_spec(invocation), "self")
+        struct_codecs = ""
+        result_expression = "openoj_actual.openoj_json()"
+        if "list" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                impl OpenOJReader {{
+                    fn linked_list(&mut self) -> Result<Option<Box<ListNode>>, String> {{
+                        if self.take(1)?[0] == 0 {{ return Ok(None); }}
+                        let length = self.u32()? as usize;
+                        let mut nodes: Vec<ListNode> = Vec::with_capacity(length);
+                        for _ in 0..length {{ nodes.push(ListNode {{ val: {item_read}, next: None }}); }}
+                        let mut head: Option<Box<ListNode>> = None;
+                        for node in nodes.into_iter().rev() {{
+                            head = Some(Box::new(ListNode {{ val: node.val, next: head }}));
+                        }}
+                        Ok(head)
+                    }}
+                }}
+                fn openoj_list_node_json(head: &Option<Box<ListNode>>) -> String {{
+                    let mut output = String::from("[");
+                    let mut current = head.as_deref();
+                    let mut first = true;
+                    while let Some(node) = current {{
+                        if !first {{ output.push(','); }}
+                        first = false;
+                        let _ = write!(output, "{{}}", node.val);
+                        current = node.next.as_deref();
+                    }}
+                    output.push(']');
+                    output
+                }}
+                """
+            )
+            if return_type.get("kind") == "linked_list":
+                result_expression = "Ok(openoj_list_node_json(&openoj_actual))"
+        if "tree" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                impl OpenOJReader {{
+                    fn binary_tree(&mut self) -> Result<Option<Box<TreeNode>>, String> {{
+                        let length = self.u32()? as usize;
+                        let mut pool: Vec<Option<Box<TreeNode>>> = Vec::with_capacity(length);
+                        for _ in 0..length {{
+                            if self.take(1)?[0] == 1 {{
+                                pool.push(Some(Box::new(TreeNode {{ val: {item_read}, left: None, right: None }})));
+                            }} else {{
+                                pool.push(None);
+                            }}
+                        }}
+                        if pool.is_empty() || pool[0].is_none() {{ return Ok(None); }}
+                        let mut root = pool[0].take();
+                        let mut queue: std::collections::VecDeque<*mut TreeNode> = std::collections::VecDeque::new();
+                        queue.push_back(root.as_mut().unwrap().as_mut());
+                        let mut index = 1usize;
+                        while let Some(node_pointer) = queue.pop_front() {{
+                            for side in 0..2 {{
+                                if index >= pool.len() {{ break; }}
+                                if pool[index].is_some() {{
+                                    let mut child = pool[index].take().unwrap();
+                                    queue.push_back(child.as_mut() as *mut TreeNode);
+                                    unsafe {{
+                                        if side == 0 {{ (*node_pointer).left = Some(child); }}
+                                        else {{ (*node_pointer).right = Some(child); }}
+                                    }}
+                                }}
+                                index += 1;
+                            }}
+                        }}
+                        Ok(root)
+                    }}
+                }}
+                fn openoj_tree_node_json(root: &Option<Box<TreeNode>>) -> String {{
+                    let mut items: Vec<String> = Vec::new();
+                    let mut queue: std::collections::VecDeque<Option<&TreeNode>> = std::collections::VecDeque::new();
+                    if root.is_some() {{ queue.push_back(root.as_deref()); }}
+                    while let Some(entry) = queue.pop_front() {{
+                        match entry {{
+                            None => items.push("null".to_string()),
+                            Some(node) => {{
+                                items.push(node.val.to_string());
+                                queue.push_back(node.left.as_deref());
+                                queue.push_back(node.right.as_deref());
+                            }}
+                        }}
+                    }}
+                    while items.last().map_or(false, |value| value == "null") {{ items.pop(); }}
+                    format!("[{{}}]", items.join(","))
+                }}
+                """
+            )
+            if return_type.get("kind") == "binary_tree":
+                result_expression = "Ok(openoj_tree_node_json(&openoj_actual))"
+            if return_type.get("kind") == "array" and return_type.get("items", {}).get("kind") == "binary_tree":
+                result_expression = (
+                    "Ok(format!(\"[{}]\", openoj_actual.iter()"
+                    ".map(|tree| openoj_tree_node_json(tree))"
+                    ".collect::<Vec<String>>().join(\",\")))"
+                )
+
         declarations = "\n".join(
             f"    let openoj_arg_{index}: {rust_type(spec)} = {_read_expression(spec)};"
             for index, spec in enumerate(parameters)
@@ -75,7 +190,7 @@ class RustExecutor(CompiledExecutor):
                 }}
                 fn finished(&self) -> Result<(), String> {{ if self.offset == self.data.len() {{ Ok(()) }} else {{ Err("Trailing judge input".into()) }} }}
             }}
-
+{struct_codecs}
             trait OpenOJToJson {{ fn openoj_json(&self) -> Result<String, String>; }}
             impl OpenOJToJson for i32 {{ fn openoj_json(&self) -> Result<String, String> {{ Ok(self.to_string()) }} }}
             impl OpenOJToJson for i64 {{ fn openoj_json(&self) -> Result<String, String> {{ Ok(self.to_string()) }} }}
@@ -114,7 +229,7 @@ class RustExecutor(CompiledExecutor):
             {declarations}
                 openoj_reader.finished()?;
                 let openoj_actual = Solution::{method}({arguments});
-                openoj_actual.openoj_json()
+                {result_expression}
             }}
 
             fn main() {{

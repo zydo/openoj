@@ -99,12 +99,10 @@ public final class OpenOJJavaHarness {
         if (parameterSpecs.size() != rawArguments.size()) {
             throw new IllegalArgumentException("Input argument count does not match the problem manifest");
         }
-        for (Object rawSpec : parameterSpecs) {
-            Map<String, Object> spec = asMap(rawSpec, "Parameter spec must be an object");
+        for (int index = 0; index < parameterSpecs.size(); index++) {
+            Map<String, Object> spec = asMap(parameterSpecs.get(index), "Parameter spec must be an object");
             String codec = spec.getOrDefault("codec", "json").toString();
-            if (!"json".equals(codec)) {
-                throw new IllegalArgumentException("Java executor does not support codec: " + codec);
-            }
+            rawArguments.set(index, decodeCodec(rawArguments.get(index), codec));
         }
 
         Constructor<?> constructor = targetClass.getDeclaredConstructor();
@@ -112,11 +110,142 @@ public final class OpenOJJavaHarness {
         Object instance = constructor.newInstance();
         String methodName = asString(invocation.get("method"), "Invocation method must be a string");
         InvocationPlan<Method> plan = findMethod(targetClass, methodName, rawArguments);
+        Object result;
         try {
-            return plan.executable().invoke(instance, plan.arguments());
+            result = plan.executable().invoke(instance, plan.arguments());
         } catch (InvocationTargetException error) {
             throw propagate(error.getTargetException());
         }
+        return encodeCodec(result, invocation.getOrDefault("return_codec", "json").toString());
+    }
+
+    private static Object decodeCodec(Object value, String codec) {
+        if ("json".equals(codec)) {
+            return value;
+        }
+        if ("list_node".equals(codec)) {
+            if (value == null) {
+                return null;
+            }
+            List<Object> values = asList(value, "list_node input must be an array");
+            ListNode head = null;
+            ListNode current = null;
+            for (Object item : values) {
+                ListNode node = new ListNode(numberValue(item).intValue());
+                if (current == null) {
+                    head = node;
+                } else {
+                    current.next = node;
+                }
+                current = node;
+            }
+            return head;
+        }
+        if ("tree_node".equals(codec)) {
+            if (value == null) {
+                return null;
+            }
+            List<Object> values = asList(value, "tree_node input must be a level-order array");
+            if (values.isEmpty() || values.get(0) == null) {
+                return null;
+            }
+            TreeNode root = new TreeNode(numberValue(values.get(0)).intValue());
+            // Null children are skipped below, so a growable list doubles as the BFS queue.
+            List<Object> pending = new ArrayList<>();
+            pending.add(root);
+            int readIndex = 1;
+            int writeIndex = 0;
+            while (writeIndex < pending.size() && readIndex < values.size()) {
+                Object entry = pending.get(writeIndex++);
+                if (!(entry instanceof TreeNode node)) {
+                    continue;
+                }
+                if (readIndex < values.size()) {
+                    if (values.get(readIndex) != null) {
+                        node.left = new TreeNode(numberValue(values.get(readIndex)).intValue());
+                        pending.add(node.left);
+                    }
+                    readIndex++;
+                }
+                if (readIndex < values.size()) {
+                    if (values.get(readIndex) != null) {
+                        node.right = new TreeNode(numberValue(values.get(readIndex)).intValue());
+                        pending.add(node.right);
+                    }
+                    readIndex++;
+                }
+            }
+            return root;
+        }
+        if ("list_node_array".equals(codec) || "tree_node_array".equals(codec)) {
+            List<Object> values = asList(value, codec + " input must be an array");
+            List<Object> nodes = new ArrayList<>();
+            for (Object item : values) {
+                nodes.add(decodeCodec(item, codec.substring(0, codec.length() - 6)));
+            }
+            return nodes;
+        }
+        throw new IllegalArgumentException("Java executor does not support codec: " + codec);
+    }
+
+    private static Object encodeCodec(Object value, String codec) {
+        if ("json".equals(codec)) {
+            return value;
+        }
+        if (value == null) {
+            // Every other executor serializes a missing head or root as [].
+            return List.of();
+        }
+        if ("list_node".equals(codec)) {
+            if (!(value instanceof ListNode node)) {
+                throw new IllegalArgumentException("list_node return value must be a ListNode");
+            }
+            List<Object> values = new ArrayList<>();
+            for (ListNode current = node; current != null; current = current.next) {
+                values.add(current.val);
+            }
+            return values;
+        }
+        if ("tree_node".equals(codec)) {
+            if (!(value instanceof TreeNode root)) {
+                throw new IllegalArgumentException("tree_node return value must be a TreeNode");
+            }
+            List<Object> values = new ArrayList<>();
+            List<Object> queue = new ArrayList<>();
+            queue.add(root);
+            int index = 0;
+            while (index < queue.size()) {
+                Object entry = queue.get(index++);
+                if (entry == null) {
+                    values.add(null);
+                    continue;
+                }
+                TreeNode node = (TreeNode) entry;
+                values.add(node.val);
+                queue.add(node.left);
+                queue.add(node.right);
+            }
+            while (!values.isEmpty() && values.get(values.size() - 1) == null) {
+                values.remove(values.size() - 1);
+            }
+            return values;
+        }
+        if ("list_node_array".equals(codec) || "tree_node_array".equals(codec)) {
+            List<?> items = asList(value, codec + " return value must be an array");
+            List<Object> values = new ArrayList<>();
+            for (Object item : items) {
+                values.add(encodeCodec(item, codec.substring(0, codec.length() - 6)));
+            }
+            return values;
+        }
+        throw new IllegalArgumentException("Java executor does not support codec: " + codec);
+    }
+
+    private static Number numberValue(Object value) {
+        if (value instanceof Number number) {
+            return number;
+        }
+        throw new IllegalArgumentException("Expected a JSON number but found: " + value);
     }
 
     private static Object invokeDesign(Class<?> targetClass, Object rawInput) throws Exception {

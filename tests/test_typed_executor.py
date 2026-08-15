@@ -38,6 +38,93 @@ class TypedExecutorTests(unittest.TestCase):
             )
             self.assertEqual(["array", "integer"], [item["kind"] for item in parameters])
             self.assertEqual("array", result["kind"])
+
+    def test_linked_list_cases_encode_as_nullable_value_arrays(self) -> None:
+        invocation = {
+            "type": "function",
+            "method": "mergeTwoLists",
+            "parameters": [
+                {
+                    "name": "head",
+                    "value_type": {
+                        "kind": "linked_list",
+                        "items": {"kind": "integer", "bits": 32},
+                    },
+                }
+            ],
+            "return_type": {"kind": "linked_list", "items": {"kind": "integer", "bits": 32}},
+        }
+        present = (
+            b"\x01"
+            + struct.pack(">I", 3)
+            + struct.pack(">iii", 1, 2, 4)
+        )
+        self.assertEqual(present, encode_case(invocation, [[1, 2, 4]], "cpp"))
+        self.assertEqual(b"\x00", encode_case(invocation, [None], "cpp"))
+
+    def test_binary_tree_cases_encode_as_level_order_slots(self) -> None:
+        invocation = {
+            "type": "function",
+            "method": "invertTree",
+            "parameters": [
+                {
+                    "name": "root",
+                    "value_type": {
+                        "kind": "binary_tree",
+                        "items": {"kind": "integer", "bits": 32},
+                    },
+                }
+            ],
+            "return_type": {"kind": "binary_tree", "items": {"kind": "integer", "bits": 32}},
+        }
+        expected = (
+            struct.pack(">I", 4)
+            + b"\x01" + struct.pack(">i", 1)
+            + b"\x00"
+            + b"\x01" + struct.pack(">i", 2)
+            + b"\x00"
+        )
+        self.assertEqual(expected, encode_case(invocation, [[1, None, 2, None]], "go"))
+        self.assertEqual(struct.pack(">I", 0), encode_case(invocation, [[]], "go"))
+
+    def test_struct_kinds_report_which_structures_are_needed(self) -> None:
+        from runner.executors.typed import uses_struct_kinds
+
+        tree_only = {
+            "parameters": [
+                {"value_type": {"kind": "binary_tree", "items": {"kind": "integer", "bits": 32}}}
+            ],
+            "return_type": {"kind": "integer", "bits": 32},
+        }
+        self.assertEqual({"tree"}, uses_struct_kinds(tree_only))
+        nested = {
+            "parameters": [
+                {
+                    "value_type": {
+                        "kind": "array",
+                        "items": {
+                            "kind": "linked_list",
+                            "items": {"kind": "integer", "bits": 32},
+                        },
+                    }
+                }
+            ],
+            "return_type": {"kind": "linked_list", "items": {"kind": "integer", "bits": 32}},
+        }
+        self.assertEqual({"list"}, uses_struct_kinds(nested))
+        self.assertEqual(set(), uses_struct_kinds(self.invocation))
+
+    def test_struct_items_must_be_integers(self) -> None:
+        from runner.executors.base import ExecutorError
+        from runner.executors.typed import type_spec
+
+        with self.assertRaises(ExecutorError):
+            type_spec({"kind": "linked_list", "items": {"kind": "string"}}, "Parameter 1")
+
+    def test_entrypoints_fall_back_to_the_shared_method_name(self) -> None:
+        methods = {}
+        for language in ("cpp", "javascript", "typescript", "go", "rust"):
+            _, _, methods[language] = function_signature(self.invocation, language)
         self.assertEqual(
             {
                 "cpp": "twoSum",

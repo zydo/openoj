@@ -39,16 +39,48 @@ services:
       - app
       - edge
 
+  problems-fetcher:
+    # One-shot: the only component allowed to reach github.com; fills the
+    # problems_cache volume before the networkless API starts. No-op when
+    # OPENOJ_PROBLEMS is unset or local.
+    build:
+      context: ./api
+    entrypoint: ["python", "-m", "app.fetch_problems"]
+    environment:
+      OPENOJ_PROBLEMS: ${OPENOJ_PROBLEMS:-}
+      OPENOJ_PROBLEMS_CACHE: /cache/problems
+      HOME: /tmp
+    volumes:
+      - ${OPENOJ_PROBLEMS_CACHE_DIR:-./.cache}:/cache
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    networks:
+      - edge
+
   api:
     build:
       context: ./api
+    depends_on:
+      problems-fetcher:
+        condition: service_completed_successfully
     environment:
+      OPENOJ_PROBLEMS: ${OPENOJ_PROBLEMS:-}
+      OPENOJ_PROBLEMS_CACHE: /cache/problems
       OPENOJ_PROBLEMS_DIR: /problems
       OPENOJ_DATA_DIR: /data
       OPENOJ_QUEUE_DIR: /queue
       OPENOJ_RUNNER_TIMEOUT_SECONDS: "20"
+      # Writable home so git (used to fetch remote problem sets) can operate
+      HOME: /tmp
     volumes:
       - "${OPENOJ_PROBLEMS_PATH:-./problems}:/problems:ro"
+      - ${OPENOJ_PROBLEMS_CACHE_DIR:-./.cache}:/cache:ro
       - openoj_data:/data
       - judge_queue:/queue
     healthcheck:

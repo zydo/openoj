@@ -151,6 +151,10 @@ def decode(value: Any, codec: str) -> Any:
         return _parse_list_node(value)
     if codec == "tree_node":
         return _parse_tree_node(value)
+    if codec == "list_node_array":
+        return [_parse_list_node(item) for item in value]
+    if codec == "tree_node_array":
+        return [_parse_tree_node(item) for item in value]
     if codec == "nary_tree":
         return _parse_nary_tree(value)
     if codec == "nested_integer_list":
@@ -171,6 +175,10 @@ def encode(value: Any, codec: str) -> Any:
         return _serialize_list_node(value)
     if codec == "tree_node":
         return _serialize_tree_node(value)
+    if codec == "list_node_array":
+        return [_serialize_list_node(item) for item in value]
+    if codec == "tree_node_array":
+        return [_serialize_tree_node(item) for item in value]
     if codec == "nary_tree":
         return _serialize_nary_tree(value)
     raise ValueError(f"Unsupported output codec: {codec}")

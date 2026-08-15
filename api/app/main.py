@@ -6,7 +6,14 @@ from fastapi import FastAPI, HTTPException, Query
 from .database import get_submission, initialize_database, list_submissions, save_submission
 from .judge import RunnerUnavailable, execute
 from .models import RunRequest, SubmitRequest
-from .problems import ProblemError, list_problems, load_all_cases, load_problem, public_problem
+from .problems import (
+    ProblemError,
+    list_problems,
+    load_all_cases,
+    load_problem,
+    load_reference_solution,
+    public_problem,
+)
 
 
 @asynccontextmanager
@@ -92,6 +99,37 @@ def run(request: RunRequest) -> dict[str, Any]:
     return _summarize(results)
 
 
+def _reference_runtime_ms(
+    request: SubmitRequest,
+    problem_data: dict[str, Any],
+    cases: list[dict[str, Any]],
+    public_count: int,
+    accepted: bool,
+) -> int | None:
+    """Run the bundle's reference solution and return its total runtime.
+
+    A hardware-independent baseline: both runs share the same container,
+    executor calibration, and cases, so the ratio of the user's total to this
+    total is meaningful even though absolute times vary by host. Best-effort —
+    absent references, unavailable runners, or a failing reference simply
+    yield None and the UI omits the comparison."""
+    if not accepted:
+        return None
+    try:
+        reference = load_reference_solution(request.slug, request.language)
+    except (ProblemError, OSError):
+        return None
+    if reference is None:
+        return None
+    try:
+        results = _run_judge(problem_data, request.language, reference, cases, public_count)
+    except HTTPException:
+        return None
+    if any(result["status"] not in {"accepted", "completed"} for result in results):
+        return None
+    return sum(result.get("runtime_ms", result.get("_runtime_ms", 0)) for result in results)
+
+
 @app.post("/submit")
 def submit(request: SubmitRequest) -> dict[str, Any]:
     try:
@@ -102,6 +140,9 @@ def submit(request: SubmitRequest) -> dict[str, Any]:
 
     results = _run_judge(problem_data, request.language, request.code, cases, public_count)
     summary = _summarize(results)
+    summary["reference_runtime_ms"] = _reference_runtime_ms(
+        request, problem_data, cases, public_count, summary["status"] == "accepted"
+    )
     submission_id = save_submission(
         request.slug,
         request.language,
