@@ -55,8 +55,12 @@ Guest sessions DONE (phase 1):
 
 Later, openwebui-style **user accounts**, persisted in the container's
 storage:
-  - First start prompts to create the admin account: conventional
-    username + password (no email), password typed twice.
+  - **Fresh-start flow**: on first startup with no previous account data,
+    show an admin sign-up page asking to set the admin password (the admin
+    username is fixed: `admin`) to create the admin account. The admin
+    account has the highest privilege.
+  - After that, conventional username + password (no email), password
+    typed twice.
   - `admin` is a reserved username.
   - Normal (non-admin) accounts can also be created.
   - Non-guest account data is persisted and **isolated**: a non-admin user
