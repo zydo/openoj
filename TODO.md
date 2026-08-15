@@ -61,6 +61,10 @@ storage:
   - Normal (non-admin) accounts can also be created.
   - Non-guest account data is persisted and **isolated**: a non-admin user
     never sees another non-admin user's data (submissions, drafts, state).
+  - Account state attaches to the **user, not the login session**: drafts,
+    last language selection per problem, and submission history are stored
+    under the user id — signing in again from any device or session
+    restores all of it. Ephemeral session scoping stays guest-only.
 
 ## Tolerance comparison for float returns
 
