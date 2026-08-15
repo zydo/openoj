@@ -463,6 +463,27 @@ def _cached_problem(
     return parse_problem_markdown(path.read_text(encoding="utf-8"), path)
 
 
+@lru_cache(maxsize=None)
+def _cached_summary(path_string: str, modified_ns: int, size: int) -> Optional[dict[str, Any]]:
+    """The home-page metadata for one problem, reading only problem.json.
+
+    The full bundle (cases.json, statement.md, starter.*) is ~450 KB/problem
+    on average, but the problem list needs just id/slug/title/difficulty/tags
+    — reading all 735 bundles to serve that made /problems take ~10s. This
+    reads the single small problem.json instead, keyed by its mtime/size so a
+    refreshed problem set invalidates automatically."""
+    del modified_ns, size
+    path = Path(path_string)
+    try:
+        if path.is_dir():
+            data = json.loads((path / "problem.json").read_text(encoding="utf-8"))
+            return {key: data[key] for key in ("id", "slug", "title", "difficulty", "tags")}
+        problem, _, _ = parse_problem_markdown(path.read_text(encoding="utf-8"), path)
+        return {key: problem[key] for key in ("id", "slug", "title", "difficulty", "tags")}
+    except (ProblemError, OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
 def _load_path(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
     if path.is_dir():
         signature_modified = 0
@@ -556,12 +577,15 @@ def list_problems() -> list[dict[str, Any]]:
             if path.is_dir():
                 if PROBLEM_BUNDLE_DIR.fullmatch(path.name) is None:
                     continue
+                signature = path / "problem.json"
             elif PROBLEM_FILE.fullmatch(path.name) is None:
                 continue
-            data, _, _ = _load_path(path)
-            problems.append(
-                {key: data[key] for key in ("id", "slug", "title", "difficulty", "tags")}
-            )
+            else:
+                signature = path
+            stat = signature.stat()
+            summary = _cached_summary(str(path), stat.st_mtime_ns, stat.st_size)
+            if summary is not None:
+                problems.append(summary)
         except (ProblemError, OSError, ValueError, json.JSONDecodeError):
             continue
     return sorted(problems, key=lambda item: item["id"])

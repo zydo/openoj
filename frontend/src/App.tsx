@@ -47,6 +47,13 @@ function preferredTheme(): Theme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+// The active problem lives in the URL (/problems/:slug) so each problem is a
+// page, browser back returns to the list, and links are shareable.
+function slugFromPath(): string | null {
+  const match = window.location.pathname.match(/^\/problems\/([a-z0-9]+(?:-[a-z0-9]+)*)\/?$/);
+  return match ? match[1] : null;
+}
+
 function draftKey(slug: string, language: string) {
   return `openoj:${slug}:${language}`;
 }
@@ -105,7 +112,7 @@ function App() {
   const [systemTheme, setSystemTheme] = useState<Theme>(preferredTheme);
   const [problems, setProblems] = useState<ProblemSummary[] | null>(null);
   const [listError, setListError] = useState("");
-  const [activeSlug, setActiveSlug] = useState<string | null>(null);
+  const [activeSlug, setActiveSlug] = useState<string | null>(slugFromPath);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [loadError, setLoadError] = useState("");
   const [language, setLanguage] = useState("python3");
@@ -156,8 +163,38 @@ function App() {
     api.getProblems().then(setProblems).catch((error: Error) => setListError(error.message));
   }, []);
 
+  // Keep activeSlug in sync with the URL when the user navigates back/forward.
+  useEffect(() => {
+    const onPopState = () => {
+      setActiveSlug(slugFromPath());
+      setProblemListOpen(false);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
   const openProblem = useCallback((slug: string) => {
+    if (slug === activeSlug) return;
+    window.history.pushState(null, "", `/problems/${slug}`);
     setActiveSlug(slug);
+  }, [activeSlug]);
+
+  const goHome = useCallback(() => {
+    if (activeSlug === null) return;
+    window.history.pushState(null, "", "/");
+    setActiveSlug(null);
+    setProblemListOpen(false);
+  }, [activeSlug]);
+
+  // Load the active problem. Keyed on the URL-derived activeSlug, so opening a
+  // problem, deep-linking to one, and back/forward navigation all go through
+  // the same path.
+  useEffect(() => {
+    if (!activeSlug) {
+      setProblem(null);
+      setProblemListOpen(false);
+      return;
+    }
     setProblem(null);
     setLoadError("");
     setResult(null);
@@ -165,7 +202,9 @@ function App() {
     setActiveCase(0);
     setSubmissions([]);
     setBottomTab("testcase");
-    api.getProblem(slug).then((loaded) => {
+    let cancelled = false;
+    api.getProblem(activeSlug).then((loaded) => {
+      if (cancelled) return;
       setProblem(loaded);
       const initialLanguage = Object.keys(loaded.languages).find((key) => loaded.languages[key].enabled) ?? "python3";
       setLanguage(initialLanguage);
@@ -176,14 +215,11 @@ function App() {
       setDrafts(loaded.public_cases.map((test) =>
         Object.fromEntries(Object.entries(test.input).map(([key, value]) => [key, JSON.stringify(value)])),
       ));
-    }).catch((error: Error) => setLoadError(error.message));
-  }, []);
-
-  const goHome = useCallback(() => {
-    setActiveSlug(null);
-    setProblem(null);
-    setProblemListOpen(false);
-  }, []);
+    }).catch((error: Error) => {
+      if (!cancelled) setLoadError(error.message);
+    });
+    return () => { cancelled = true; };
+  }, [activeSlug]);
 
   const refreshSubmissions = useCallback(() => {
     if (!problem) return;
