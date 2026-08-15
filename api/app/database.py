@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import os
 import sqlite3
@@ -45,6 +47,21 @@ def initialize_database() -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                is_admin INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL
+            )
+            """
+        )
+        # Sessions created before user management have no user binding.
+        session_columns = {row["name"] for row in connection.execute("PRAGMA table_info(sessions)")}
+        if "user_id" not in session_columns:
+            connection.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS drafts (
@@ -176,6 +193,90 @@ def validate_session(session_id: str) -> str | None:
             return None
         connection.execute("UPDATE sessions SET last_seen_at = ? WHERE id = ?", (now, session_id))
     return session_id
+
+
+# --- user accounts (backend-only; no UI yet) ----------------------------------
+#
+# Password hashing with the stdlib: scrypt with per-user salt.
+# Format: scrypt$N$r$p$salt-hex$hash-hex
+
+_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 16384, 8, 1
+
+
+def _hash_password(password: str, salt: bytes | None = None) -> str:
+    if salt is None:
+        salt = os.urandom(16)
+    digest = hashlib.scrypt(
+        password.encode("utf-8"), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, dklen=32
+    )
+    return f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${salt.hex()}${digest.hex()}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    try:
+        scheme, n, r, p, salt_hex, hash_hex = stored.split("$")
+        if scheme != "scrypt":
+            return False
+        digest = hashlib.scrypt(
+            password.encode("utf-8"),
+            salt=bytes.fromhex(salt_hex),
+            n=int(n), r=int(r), p=int(p), dklen=len(hash_hex) // 2,
+        )
+        return hmac.compare_digest(digest.hex(), hash_hex)
+    except (ValueError, TypeError):
+        return False
+
+
+def count_users() -> int:
+    with connect() as connection:
+        row = connection.execute("SELECT COUNT(*) AS total FROM users").fetchone()
+    return int(row["total"])
+
+
+def create_user(username: str, password: str, is_admin: bool = False) -> int:
+    with connect() as connection:
+        cursor = connection.execute(
+            "INSERT INTO users (username, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?)",
+            (username, _hash_password(password), int(is_admin), time.time()),
+        )
+        return int(cursor.lastrowid)
+
+
+def verify_user(username: str, password: str) -> dict[str, Any] | None:
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT id, username, password_hash, is_admin FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+    if row is None or not _verify_password(password, row["password_hash"]):
+        return None
+    return {"id": row["id"], "username": row["username"], "is_admin": bool(row["is_admin"])}
+
+
+def bind_session_user(session_id: str, user_id: int | None) -> None:
+    with connect() as connection:
+        connection.execute("UPDATE sessions SET user_id = ? WHERE id = ?", (user_id, session_id))
+
+
+def session_user(session_id: str) -> dict[str, Any] | None:
+    with connect() as connection:
+        row = connection.execute(
+            """
+            SELECT users.id, users.username, users.is_admin
+            FROM sessions JOIN users ON users.id = sessions.user_id
+            WHERE sessions.id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+    return None if row is None else {"id": row["id"], "username": row["username"], "is_admin": bool(row["is_admin"])}
+
+
+def scope_key(session_id: str) -> str:
+    """The storage key a session's drafts and submissions live under. A
+    logged-in session shares its user's scope (survives idle expiry and
+    restores on any later login); a guest session owns an ephemeral one."""
+    user = session_user(session_id)
+    return f"user:{user['id']}" if user else session_id
 
 
 # --- session drafts -----------------------------------------------------------

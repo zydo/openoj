@@ -5,7 +5,10 @@ from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response
 
 from .database import (
     SESSION_IDLE_SECONDS,
+    bind_session_user,
+    count_users,
     create_session,
+    create_user,
     get_submission,
     initialize_database,
     list_drafts,
@@ -13,7 +16,10 @@ from .database import (
     purge_expired_sessions,
     save_draft,
     save_submission,
+    scope_key,
+    session_user,
     validate_session,
+    verify_user,
 )
 from .judge import RunnerUnavailable, execute
 from .models import RunRequest, SubmitRequest
@@ -68,12 +74,68 @@ def start_session(response: Response) -> dict[str, Any]:
 
 @app.get("/session")
 def session_status(session_id: Annotated[str, Depends(current_session)]) -> dict[str, Any]:
-    return {"status": "active", "idle_seconds": SESSION_IDLE_SECONDS}
+    user = session_user(session_id)
+    return {
+        "status": "active",
+        "idle_seconds": SESSION_IDLE_SECONDS,
+        "user": None if user is None else {"username": user["username"], "is_admin": user["is_admin"]},
+    }
+
+
+# --- user accounts (backend-only; the UI stays guest-only for now) -----------
+# Fresh-start bootstrap: the very first account must be the fixed-name admin;
+# afterwards registration is closed until the accounts UI ships.
+
+
+@app.post("/auth/register")
+def auth_register(
+    body: dict[str, str],
+    response: Response,
+) -> dict[str, Any]:
+    username = body.get("username", "").strip()
+    password = body.get("password", "")
+    if count_users() == 0:
+        if username != "admin":
+            raise HTTPException(status_code=400, detail="The first account must be the admin (username 'admin')")
+    else:
+        raise HTTPException(status_code=403, detail="Registration is not open yet")
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    try:
+        create_user(username, password, is_admin=True)
+    except Exception as error:  # noqa: BLE001 — username uniqueness
+        raise HTTPException(status_code=400, detail=f"Could not create the account: {error}") from error
+    response.set_cookie(
+        SESSION_COOKIE,
+        create_session(),
+        max_age=SESSION_IDLE_SECONDS,
+        httponly=True,
+        samesite="lax",
+    )
+    return {"status": "registered", "username": username}
+
+
+@app.post("/auth/login")
+def auth_login(
+    body: dict[str, str],
+    session_id: Annotated[str, Depends(current_session)],
+) -> dict[str, Any]:
+    user = verify_user(body.get("username", ""), body.get("password", ""))
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    bind_session_user(session_id, user["id"])
+    return {"status": "logged_in", "username": user["username"], "is_admin": user["is_admin"]}
+
+
+@app.post("/auth/logout")
+def auth_logout(session_id: Annotated[str, Depends(current_session)]) -> dict[str, Any]:
+    bind_session_user(session_id, None)
+    return {"status": "logged_out"}
 
 
 @app.get("/drafts/{slug}")
 def drafts(slug: str, session_id: Annotated[str, Depends(current_session)]) -> list[dict[str, Any]]:
-    return list_drafts(session_id, slug)
+    return list_drafts(scope_key(session_id), slug)
 
 
 @app.put("/drafts/{slug}/{language}")
@@ -86,7 +148,7 @@ def put_draft(
     code = body.get("code", "")
     if len(code) > 256_000:
         raise HTTPException(status_code=400, detail="Draft too large")
-    save_draft(session_id, slug, language, code)
+    save_draft(scope_key(session_id), slug, language, code)
     return {"status": "saved"}
 
 
@@ -242,7 +304,7 @@ def submit(request: SubmitRequest, session_id: Annotated[str, Depends(current_se
         summary["total"],
         summary["runtime_ms"],
         results,
-        session_id,
+        scope_key(session_id),
     )
     summary["submission_id"] = submission_id
     return summary
@@ -272,12 +334,12 @@ def submissions(
     limit: int = Query(default=30, ge=1, le=100),
     session_id: Annotated[str, Depends(current_session)] = None,
 ):
-    return list_submissions(slug, limit, session_id)
+    return list_submissions(slug, limit, scope_key(session_id))
 
 
 @app.get("/submissions/{submission_id}")
 def submission(submission_id: int, session_id: Annotated[str, Depends(current_session)] = None):
-    result = get_submission(submission_id, session_id)
+    result = get_submission(submission_id, scope_key(session_id))
     if result is None:
         raise HTTPException(status_code=404, detail="Submission not found")
     return result
