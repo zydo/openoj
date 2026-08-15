@@ -59,22 +59,25 @@ def current_session(openoj_session: Annotated[str | None, Cookie()] = None) -> s
     raise HTTPException(status_code=401, detail="No active session")
 
 
-def _set_session_cookie(response: Response, session_id: str) -> None:
+def _set_session_cookie(response: Response, session_id: str, request: Request) -> None:
+    # Secure only when the client actually reaches us over https (caddy
+    # terminates TLS and forwards the scheme); localhost/CI stay usable.
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
     response.set_cookie(
         SESSION_COOKIE,
         session_id,
         max_age=SESSION_IDLE_SECONDS,
         httponly=True,
-        secure=True,
+        secure=scheme == "https",
         samesite="lax",
     )
 
 
 @app.post("/session")
-def start_session(response: Response) -> dict[str, Any]:
+def start_session(response: Response, request: Request) -> dict[str, Any]:
     session_id = create_session()
     purge_expired_sessions()
-    _set_session_cookie(response, session_id)
+    _set_session_cookie(response, session_id, request)
     return {"status": "active", "idle_seconds": SESSION_IDLE_SECONDS}
 
 
@@ -114,6 +117,7 @@ def _register_login_failure(source: str) -> bool:
 def auth_register(
     body: dict[str, str],
     response: Response,
+    request: Request,
 ) -> dict[str, Any]:
     username = body.get("username", "").strip()
     password = body.get("password", "")
@@ -128,7 +132,7 @@ def auth_register(
         create_user(username, password, is_admin=True)
     except Exception:  # noqa: BLE001 — username uniqueness races
         raise HTTPException(status_code=400, detail="That username is not available")
-    _set_session_cookie(response, create_session())
+    _set_session_cookie(response, create_session(), request)
     return {"status": "registered", "username": username}
 
 
