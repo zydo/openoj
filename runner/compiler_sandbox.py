@@ -33,7 +33,10 @@ def main() -> int:
         resource.RLIMIT_FSIZE,
         (32 * 1024 * 1024, 32 * 1024 * 1024),
     )
-    resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+    # Go's build cache keeps many package archives open while linking; 64
+    # was hit routinely once the shared GOCACHE warmed up. 1024 matches the
+    # container's default and still bounds a hostile compiler.
+    resource.setrlimit(resource.RLIMIT_NOFILE, (1024, 1024))
     resource.setrlimit(resource.RLIMIT_NPROC, (max_processes, max_processes))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     drop_privileges(COMPILER_UID, COMPILER_GID)

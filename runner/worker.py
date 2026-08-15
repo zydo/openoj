@@ -239,6 +239,9 @@ def _prewarm_toolchains_once() -> None:
     warm_dir = Path(os.environ.get("OPENOJ_PREWARM_DIR", "/tmp/openoj-prewarm"))
     try:
         warm_dir.mkdir(parents=True, exist_ok=True)
+        # The Go job runs as the compiler uid so it can share its build cache;
+        # make the directory writable by that uid.
+        warm_dir.chmod(0o1777)
         environment = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/nonexistent", "TMPDIR": str(warm_dir)}
         jobs = []
         rust_source = warm_dir / "warm.rs"
@@ -247,12 +250,14 @@ def _prewarm_toolchains_once() -> None:
             ("/usr/bin/rustc", "--edition=2021", "-C", "opt-level=2", "-C", "debuginfo=0",
              "-C", "strip=symbols", "-o", str(warm_dir / "warm-rust"), str(rust_source)),
             environment,
+            None,
         ))
         cpp_source = warm_dir / "warm.cpp"
         cpp_source.write_text("int main() { return 0; }\n", encoding="utf-8")
         jobs.append((
             ("/usr/bin/g++", "-std=c++20", "-O2", "-pipe", "-o", str(warm_dir / "warm-cpp"), str(cpp_source)),
             environment,
+            None,
         ))
         go_source = warm_dir / "warm-go"
         go_dir = warm_dir / "go"
@@ -260,21 +265,26 @@ def _prewarm_toolchains_once() -> None:
         (go_dir / "go.mod").write_text("module warm\n\ngo 1.24\n", encoding="utf-8")
         (go_dir / "main.go").write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
         # The cache is shared with real submissions (see GoExecutor), so this
-        # build leaves the standard library precompiled for every job. It is
-        # written by the privileged worker and consumed by the dropped-uid
-        # compiler, hence the permissive mode.
+        # build leaves the standard library precompiled for every job. The Go
+        # toolchain refuses to reuse a build cache written by another uid, so
+        # the warm build drops to the compiler uid (65534) that submissions
+        # run under; the directory is chowned to match.
         go_cache = Path("/tmp/openoj-gocache")
         go_cache.mkdir(parents=True, exist_ok=True)
         go_cache.chmod(0o1777)
+        os.chown(go_cache, NOBODY_UID, NOBODY_GID)
         jobs.append((
-            ("/usr/bin/go", "build", "-trimpath", "-o", str(warm_dir / "warm-go-bin"), str(go_dir / "main.go")),
+            (SUPERVISOR_PYTHON, "/runner/compiler_sandbox.py", "2048", "32",
+             "/usr/bin/go", "build", "-trimpath", "-o", str(warm_dir / "warm-go-bin"), str(go_dir / "main.go")),
             {**environment, "GOCACHE": str(go_cache), "GOENV": "off", "GOPROXY": "off", "CGO_ENABLED": "0"},
+            None,
         ))
         java_source = warm_dir / "Warm.java"
         java_source.write_text("class Warm {}\n", encoding="utf-8")
         jobs.append((
             ("/usr/bin/javac", "-proc:none", "-g:none", "-d", str(warm_dir), str(java_source)),
             environment,
+            None,
         ))
         ts_source = warm_dir / "warm.ts"
         ts_source.write_text("const value: number = 1;\nconsole.log(value);\n", encoding="utf-8")
@@ -282,11 +292,13 @@ def _prewarm_toolchains_once() -> None:
             ("/usr/local/bin/tsc", "--target", "ES2022", "--module", "commonjs",
              "--skipLibCheck", "--outDir", str(warm_dir / "ts"), str(ts_source)),
             environment,
+            None,
         ))
-        for command, job_environment in jobs:
+        for command, job_environment, preexec in jobs:
             try:
                 subprocess.run(
                     command, env=job_environment, cwd=warm_dir,
+                    preexec_fn=preexec,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     timeout=90, check=False,
                 )
