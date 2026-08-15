@@ -52,6 +52,12 @@ services:
       HOME: /tmp
     volumes:
       - ${OPENOJ_PROBLEMS_CACHE_DIR:-./.cache}:/cache
+    # The fetcher runs as root because it is the one component that must write
+    # to the host-shared ./.cache directory, which Docker creates root-owned.
+    # It stays read_only with all capabilities dropped and no-new-privileges;
+    # root-created clones (umask 022) remain world-readable so the unprivileged
+    # API container can serve them read-only.
+    user: "0:0"
     read_only: true
     tmpfs:
       - /tmp:size=64m
