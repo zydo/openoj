@@ -574,7 +574,7 @@ function App() {
               </section>
             </article>
           ) : leftTab === "solutions" ? (
-            <Solutions slug={problem.slug} fallbackLanguage={language} />
+            <Solutions key={problem.slug} slug={problem.slug} fallbackLanguage={language} languages={problem.languages} />
           ) : (
             <Submissions submissions={submissions} problem={problem} />
           )}
@@ -1188,11 +1188,19 @@ function ResultValue({ label, value, raw = false }: { label: string; value: unkn
   return <div className="result-value"><span>{label}</span><pre>{raw ? String(value) : formatJson(value)}</pre></div>;
 }
 
-function Solutions({ slug, fallbackLanguage }: { slug: string; fallbackLanguage: string }) {
+function Solutions({ slug, fallbackLanguage, languages }: {
+  slug: string;
+  fallbackLanguage: string;
+  languages: Problem["languages"];
+}) {
   const [content, setContent] = useState<SolutionsContent | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "empty">("loading");
   const [variantIndex, setVariantIndex] = useState(0);
   const [viewLanguage, setViewLanguage] = useState(fallbackLanguage);
+
+  useEffect(() => {
+    setViewLanguage(fallbackLanguage);
+  }, [fallbackLanguage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1231,8 +1239,8 @@ function Solutions({ slug, fallbackLanguage }: { slug: string; fallbackLanguage:
     return <FullPageMessage icon={<Braces />} title="No solutions published" detail="This problem has no solution guide yet." />;
   }
   const active = entries[Math.min(variantIndex, entries.length - 1)];
-  const languages = Object.keys(active.code);
-  const shown = languages.includes(viewLanguage) ? viewLanguage : languages[0];
+  const languageKeys = Object.keys(active.code);
+  const shown = languageKeys.includes(viewLanguage) ? viewLanguage : languageKeys[0];
 
   return (
     <article className="problem-scroll solutions">
@@ -1267,15 +1275,19 @@ function Solutions({ slug, fallbackLanguage }: { slug: string; fallbackLanguage:
       <div className="solutions-code">
         <div className="detail-heading">
           <span>{active.name ? `${active.name.toUpperCase()} · ` : ""}{shown}</span>
-          <span>{languages.length} language{languages.length === 1 ? "" : "s"}</span>
+          <span>{languageKeys.length} language{languageKeys.length === 1 ? "" : "s"}</span>
         </div>
         <pre><code>{active.code[shown]}</code></pre>
         <div className="solutions-languages">
-          {languages.map((key) => (
-            <button key={key} className={key === shown ? "variant-chip active" : "variant-chip"} onClick={() => setViewLanguage(key)}>
-              {key}
-            </button>
-          ))}
+          <LanguageMenu
+            value={shown}
+            options={languageKeys.map((key) => ({
+              key,
+              label: languages[key]?.display_name ?? key,
+              enabled: true,
+            }))}
+            onChange={setViewLanguage}
+          />
         </div>
       </div>
     </article>
