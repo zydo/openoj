@@ -280,13 +280,22 @@ function App() {
 
   const logoutAccount = useCallback(() => {
     flushDrafts();
-    api.logout()
-      .then(() => {
-        setSessionUser(null);
-        setSessionPhase("gate");
-      })
-      .catch(() => undefined);
-  }, [flushDrafts]);
+    const finish = () => {
+      setSessionUser(null);
+      setSessionExpired(false);
+      setSessionPhase("gate");
+    };
+    if (sessionUser) {
+      api.logout().then(finish).catch(finish);
+    } else {
+      // Guest: the session cookie stays server-side until it idles out, but
+      // exiting drops all local state and returns to the entrance; Continue
+      // as guest or Log in starts fresh.
+      draftCache.current.clear();
+      pendingDrafts.current.clear();
+      finish();
+    }
+  }, [flushDrafts, sessionUser]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -548,13 +557,13 @@ function App() {
           </button>
         </div>
 <div className="topbar-right">
-          {sessionUser && (
-            <span className="session-user" title={sessionUser.is_admin ? "Admin account" : "Signed-in account"}>
-              <span className={sessionUser.is_admin ? "user-dot admin" : "user-dot"} />
-              {sessionUser.username}
-              <button className="gate-link logout-link" onClick={logoutAccount}>Log out</button>
-            </span>
-          )}
+          <span className="session-user" title={sessionUser ? (sessionUser.is_admin ? "Admin account" : "Signed-in account") : "Guest session"}>
+            <span className={sessionUser?.is_admin ? "user-dot admin" : "user-dot"} />
+            {sessionUser ? sessionUser.username : "guest"}
+            <button className="gate-link logout-link" onClick={logoutAccount}>
+              {sessionUser ? "Log out" : "Exit"}
+            </button>
+          </span>
           <a
             className="icon-button github-link"
             href="https://github.com/zydo/openoj"
