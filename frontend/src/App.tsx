@@ -7,7 +7,6 @@ import {
   Check,
   ChevronDown,
   Copy,
-  ArrowRight,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
@@ -475,7 +474,7 @@ function App() {
           </button>
           <span className="topbar-divider" />
           <button className="problem-list-trigger" onClick={() => setProblemListOpen(true)}>
-            <List size={16} /> Problem list
+            <List size={16} /> Problem List
           </button>
           <button
             className="icon-button"
@@ -579,14 +578,10 @@ function App() {
             <Solutions
             key={problem.slug}
             slug={problem.slug}
-            fallbackLanguage={language}
+            language={language}
             languages={problem.languages}
             theme={theme}
-            onLoadInEditor={(loadedLanguage, loadedCode) => {
-              setLanguage(loadedLanguage);
-              setCode(loadedCode);
-              saveDraft(problem.slug, loadedLanguage, loadedCode);
-            }}
+            onLanguageChange={setLanguage}
           />
           ) : (
             <Submissions submissions={submissions} problem={problem} />
@@ -1201,24 +1196,15 @@ function ResultValue({ label, value, raw = false }: { label: string; value: unkn
   return <div className="result-value"><span>{label}</span><pre>{raw ? String(value) : formatJson(value)}</pre></div>;
 }
 
-function Solutions({ slug, fallbackLanguage, languages, theme, onLoadInEditor }: {
+function Solutions({ slug, language, languages, theme, onLanguageChange }: {
   slug: string;
-  fallbackLanguage: string;
+  language: string;
   languages: Problem["languages"];
   theme: Theme;
-  onLoadInEditor: (language: string, code: string) => void;
+  onLanguageChange: (language: string) => void;
 }) {
   const [content, setContent] = useState<SolutionsContent | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "empty">("loading");
-  const [langByVariant, setLangByVariant] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    setLangByVariant((current) => {
-      const next: Record<string, string> = {};
-      for (const key of Object.keys(current)) next[key] = fallbackLanguage;
-      return next;
-    });
-  }, [fallbackLanguage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1273,23 +1259,21 @@ function Solutions({ slug, fallbackLanguage, languages, theme, onLoadInEditor }:
           languages={languages}
           slug={slug}
           theme={theme}
-          onLoadInEditor={onLoadInEditor}
-          selected={langByVariant[entry.name || "canonical"]}
-          onSelect={(language) => setLangByVariant((current) => ({ ...current, [entry.name || "canonical"]: language }))}
+          selected={language}
+          onSelect={onLanguageChange}
         />
       ))}
     </article>
   );
 }
 
-function SolutionBlock({ title, body, code, languages, slug, theme, onLoadInEditor, selected, onSelect }: {
+function SolutionBlock({ title, body, code, languages, slug, theme, selected, onSelect }: {
   title: string;
   body: string;
   code: Record<string, string>;
   languages: Problem["languages"];
   slug: string;
   theme: Theme;
-  onLoadInEditor: (language: string, code: string) => void;
   selected: string | undefined;
   onSelect: (language: string) => void;
 }) {
@@ -1317,19 +1301,14 @@ function SolutionBlock({ title, body, code, languages, slug, theme, onLoadInEdit
           }))}
           onChange={onSelect}
         />
-        <div className="solution-actions">
-          <button className="solution-copy" onClick={() => onLoadInEditor(shown, code[shown])} title="Load this code into the editor and switch the editor to its language">
-            <ArrowRight size={14} /> To editor
-          </button>
-          <button className={copied ? "solution-copy copied" : "solution-copy"} onClick={copy} title="Copy solution code" aria-label="Copy solution code">
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            {copied ? "Copied" : "Copy"}
-          </button>
-        </div>
+        <button className={copied ? "solution-copy copied" : "solution-copy"} onClick={copy} title="Copy solution code" aria-label="Copy solution code">
+          {copied ? <Check size={14} /> : <Copy size={14} />}
+          {copied ? "Copied" : "Copy"}
+        </button>
       </div>
       <div className="solution-code-scroll">
         <Editor
-          height={360}
+          height={Math.min(360, Math.max(96, code[shown].split("\n").length * 19 + 21))}
           language={languages[shown]?.monaco_language ?? "plaintext"}
           value={code[shown]}
           theme={theme === "dark" ? "openoj-dark" : "openoj-light"}
