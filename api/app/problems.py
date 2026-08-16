@@ -529,6 +529,49 @@ def load_problem(slug: str) -> dict[str, Any]:
     return problem
 
 
+def load_solutions(slug: str) -> Optional[dict[str, Any]]:
+    """The bundle's Solutions-tab content: solutions.md (per-variant prose,
+    one `## <variant>` section per approach, optional) plus the code of every
+    solution_<variant>.<ext> file, keyed by variant then language.
+
+    Returns None when the bundle has neither solutions.md nor any solution
+    files (e.g. flat-format packages)."""
+    path = safe_problem_path(slug)
+    if not path.is_dir():
+        return None
+    implementations: dict[str, dict[str, str]] = {}
+    canonical: dict[str, str] = {}
+    for solution_path in sorted(path.glob("solution*.*")):
+        name = solution_path.name
+        matched = re.fullmatch(r"solution(?:_[a-z0-9]+)?\.([a-z0-9]+)", name)
+        if matched is None or solution_path.is_dir():
+            continue
+        # EXTENSION_LANGUAGE maps extension -> language registry key.
+        extension = matched.group(1)
+        language = EXTENSION_LANGUAGE.get(extension)
+        if language is None:
+            continue
+        variant = name[len("solution") : -(len(extension) + 1)].lstrip("_")
+        if variant:
+            implementations.setdefault(variant, {})[language] = solution_path.read_text(encoding="utf-8")
+        else:
+            canonical[language] = solution_path.read_text(encoding="utf-8")
+    guide_path = path / "solutions.md"
+    guide: dict[str, str] = {}
+    if guide_path.is_file():
+        text = guide_path.read_text(encoding="utf-8")
+        headings = _headings(text)
+        level2 = [(title, line) for level, title, line in headings if level == 2]
+        if level2:
+            lines = text.splitlines(keepends=True)
+            for index, (title, line_number) in enumerate(level2):
+                end = level2[index + 1][1] if index + 1 < len(level2) else len(lines)
+                guide[title.strip().lower()] = "".join(lines[line_number + 1:end]).strip("\n")
+    if not guide and not implementations and not canonical:
+        return None
+    return {"guide": guide, "implementations": implementations, "canonical": canonical}
+
+
 def load_all_cases(slug: str) -> tuple[list[dict[str, Any]], int]:
     _, cases, public_count = _load_path(safe_problem_path(slug))
     named_cases = [

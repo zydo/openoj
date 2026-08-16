@@ -27,7 +27,7 @@ import {
   X,
 } from "lucide-react";
 import { api, onUnauthorized } from "./api";
-import type { JudgeResult, Problem, ProblemSummary, Submission } from "./types";
+import type { JudgeResult, Problem, ProblemSummary, SolutionsContent, Submission } from "./types";
 
 type Theme = "light" | "dark";
 
@@ -169,7 +169,7 @@ function App() {
   const [result, setResult] = useState<JudgeResult | null>(null);
   const [busy, setBusy] = useState<"run" | "submit" | null>(null);
   const [actionError, setActionError] = useState("");
-  const [leftTab, setLeftTab] = useState<"description" | "submissions">("description");
+  const [leftTab, setLeftTab] = useState<"description" | "submissions" | "solutions">("description");
   const [bottomTab, setBottomTab] = useState<"testcase" | "result">("testcase");
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [problemListOpen, setProblemListOpen] = useState(false);
@@ -531,6 +531,9 @@ function App() {
             <button className={leftTab === "submissions" ? "tab active" : "tab"} onClick={() => setLeftTab("submissions")}>
               <History size={15} /> Submissions
             </button>
+            <button className={leftTab === "solutions" ? "tab active" : "tab"} onClick={() => setLeftTab("solutions")}>
+              <Braces size={15} /> Solutions
+            </button>
           </div>
           {leftTab === "description" ? (
             <article className="problem-scroll">
@@ -570,6 +573,8 @@ function App() {
                 ))}
               </section>
             </article>
+          ) : leftTab === "solutions" ? (
+            <Solutions slug={problem.slug} fallbackLanguage={language} />
           ) : (
             <Submissions submissions={submissions} problem={problem} />
           )}
@@ -1181,6 +1186,100 @@ function Results({ result, busy, error, comparison }: { result: JudgeResult | nu
 
 function ResultValue({ label, value, raw = false }: { label: string; value: unknown; raw?: boolean }) {
   return <div className="result-value"><span>{label}</span><pre>{raw ? String(value) : formatJson(value)}</pre></div>;
+}
+
+function Solutions({ slug, fallbackLanguage }: { slug: string; fallbackLanguage: string }) {
+  const [content, setContent] = useState<SolutionsContent | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "empty">("loading");
+  const [variantIndex, setVariantIndex] = useState(0);
+  const [viewLanguage, setViewLanguage] = useState(fallbackLanguage);
+
+  useEffect(() => {
+    let cancelled = false;
+    setState("loading");
+    api.getSolutions(slug).then((loaded) => {
+      if (cancelled) return;
+      setContent(loaded);
+      setVariantIndex(0);
+      setState("ready");
+    }).catch(() => {
+      if (!cancelled) setState("empty");
+    });
+    return () => { cancelled = true; };
+  }, [slug]);
+
+  if (state === "loading") {
+    return <FullPageMessage icon={<LoaderCircle className="spin" />} title="Loading solutions" detail="Fetching the solution guides…" />;
+  }
+  if (state === "empty" || content === null) {
+    return <FullPageMessage icon={<Braces />} title="No solutions published" detail="This problem has no solution guide yet." />;
+  }
+
+  // Variants are the named approaches (bfs, dfs, …); a canonical-only
+  // problem still shows its solution as one untitled approach.
+  const variants = Object.keys(content.implementations).sort();
+  const entries = variants.length > 0
+    ? variants.map((variant) => ({
+        name: variant,
+        body: content.guide[variant] ?? "",
+        code: content.implementations[variant],
+      }))
+    : Object.keys(content.canonical).length > 0
+      ? [{ name: "", body: Object.values(content.guide)[0] ?? "", code: content.canonical }]
+      : [];
+  if (entries.length === 0) {
+    return <FullPageMessage icon={<Braces />} title="No solutions published" detail="This problem has no solution guide yet." />;
+  }
+  const active = entries[Math.min(variantIndex, entries.length - 1)];
+  const languages = Object.keys(active.code);
+  const shown = languages.includes(viewLanguage) ? viewLanguage : languages[0];
+
+  return (
+    <article className="problem-scroll solutions">
+      <div className="solutions-variants">
+        {entries.map((entry, index) => (
+          <button
+            key={entry.name}
+            className={index === Math.min(variantIndex, entries.length - 1) ? "variant-chip active" : "variant-chip"}
+            onClick={() => setVariantIndex(index)}
+          >
+            {entry.name ? entry.name.toUpperCase() : "Solution"}
+          </button>
+        ))}
+      </div>
+      {active.body && (
+        <div className="markdown-body solutions-guide">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              img: ({ src, alt }) => (
+                <img
+                  className="statement-figure"
+                  src={typeof src === "string" && src.startsWith("figures/") ? `/api/problems/${slug}/${src}` : src}
+                  alt={alt ?? ""}
+                  loading="lazy"
+                />
+              ),
+            }}
+          >{active.body}</ReactMarkdown>
+        </div>
+      )}
+      <div className="solutions-code">
+        <div className="detail-heading">
+          <span>{active.name ? `${active.name.toUpperCase()} · ` : ""}{shown}</span>
+          <span>{languages.length} language{languages.length === 1 ? "" : "s"}</span>
+        </div>
+        <pre><code>{active.code[shown]}</code></pre>
+        <div className="solutions-languages">
+          {languages.map((key) => (
+            <button key={key} className={key === shown ? "variant-chip active" : "variant-chip"} onClick={() => setViewLanguage(key)}>
+              {key}
+            </button>
+          ))}
+        </div>
+      </div>
+    </article>
+  );
 }
 
 function Submissions({ submissions, problem }: { submissions: Submission[]; problem: Problem }) {

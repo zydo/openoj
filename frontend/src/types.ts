@@ -80,3 +80,10 @@ export type Submission = {
   runtime_ms: number;
   created_at: string;
 };
+
+// GET /problems/{slug}/solutions — the Solutions tab payload.
+export type SolutionsContent = {
+  guide: Record<string, string>;
+  implementations: Record<string, Record<string, string>>;
+  canonical: Record<string, string>;
+};

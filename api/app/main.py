@@ -33,6 +33,7 @@ from .problems import (
     load_all_cases,
     load_problem,
     load_reference_solutions,
+    load_solutions,
     public_problem,
 )
 
@@ -186,6 +187,19 @@ def problem_figure(slug: str, figure: str, session_id: Annotated[str, Depends(cu
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Figure not found")
     return Response(content=path.read_bytes(), media_type="image/svg+xml")
+
+
+@app.get("/problems/{slug}/solutions")
+def problem_solutions(slug: str, session_id: Annotated[str, Depends(current_session)] = None) -> dict[str, Any]:
+    """Solutions-tab content: per-variant explanations plus each variant's
+    implementation in every offered language."""
+    try:
+        loaded = load_solutions(slug)
+    except ProblemError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="No solutions published for this problem")
+    return loaded
 
 
 @app.get("/drafts/{slug}")
