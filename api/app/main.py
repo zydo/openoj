@@ -95,6 +95,17 @@ def session_status(session_id: Annotated[str, Depends(current_session)]) -> dict
     }
 
 
+@app.get("/auth/status")
+def auth_status() -> dict[str, Any]:
+    """Public: whether the admin bootstrap has happened. Drives the gate's
+    admin-setup vs login/signup choice. Tables may be missing if the data
+    volume was wiped mid-run; treat that as a fresh install."""
+    try:
+        return {"needs_setup": count_users() == 0}
+    except Exception:  # noqa: BLE001
+        return {"needs_setup": True}
+
+
 # --- user accounts (backend-only; the UI stays guest-only for now) -----------
 # Fresh-start bootstrap: the very first account must be the fixed-name admin;
 # afterwards registration is closed until the accounts UI ships.
@@ -125,19 +136,24 @@ def auth_register(
 ) -> dict[str, Any]:
     username = body.get("username", "").strip()
     password = body.get("password", "")
-    if count_users() == 0:
+    bootstrap = count_users() == 0
+    if bootstrap:
+        # Fresh start: the first account is the fixed-name admin with the
+        # highest privilege.
         if username != "admin":
             raise HTTPException(status_code=400, detail="The first account must be the admin (username 'admin')")
-    else:
-        raise HTTPException(status_code=403, detail="Registration is not open yet")
-    if len(password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    elif username == "admin":
+        raise HTTPException(status_code=400, detail="admin is a reserved username")
+    if not username or len(password) < 8:
+        raise HTTPException(status_code=400, detail="Username is required and the password must be at least 8 characters")
     try:
-        create_user(username, password, is_admin=True)
+        user_id = create_user(username, password, is_admin=bootstrap or username == "admin")
     except Exception:  # noqa: BLE001 — username uniqueness races
         raise HTTPException(status_code=400, detail="That username is not available")
-    _set_session_cookie(response, create_session(), request)
-    return {"status": "registered", "username": username}
+    session_id = create_session()
+    bind_session_user(session_id, user_id)
+    _set_session_cookie(response, session_id, request)
+    return {"status": "registered", "username": username, "is_admin": bootstrap or username == "admin"}
 
 
 @app.post("/auth/login")

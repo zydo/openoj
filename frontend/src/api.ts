@@ -30,13 +30,31 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export type SessionStatus = { status: string; idle_seconds: number };
+export type SessionStatus = {
+  status: string;
+  idle_seconds: number;
+  user: { username: string; is_admin: boolean } | null;
+};
 export type DraftRow = { language: string; code: string; updated_at: number };
 
 export const api = {
   sessionStatus: (): Promise<SessionStatus> => request<SessionStatus>("/session"),
   startSession: (): Promise<SessionStatus> =>
     request<SessionStatus>("/session", { method: "POST" }),
+  authStatus: (): Promise<{ needs_setup: boolean }> =>
+    request<{ needs_setup: boolean }>("/auth/status"),
+  register: (username: string, password: string): Promise<SessionStatus> =>
+    request<SessionStatus>("/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  login: (username: string, password: string): Promise<SessionStatus & { username: string; is_admin: boolean }> =>
+    request<SessionStatus & { username: string; is_admin: boolean }>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: (): Promise<{ status: string }> =>
+    request<{ status: string }>("/auth/logout", { method: "POST" }),
   getProblem: (slug: string) => request<Problem>(`/problems/${slug}`),
   // pageSize of 0 (default) returns the full list in one page — the editor
   // needs the whole ordering for prev/next and the drawer. The landing page

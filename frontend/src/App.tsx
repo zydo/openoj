@@ -155,6 +155,8 @@ function App() {
   const [sessionPhase, setSessionPhase] = useState<"checking" | "gate" | "active">("checking");
   const [sessionExpired, setSessionExpired] = useState(false);
   const [gateError, setGateError] = useState("");
+  const [needsSetup, setNeedsSetup] = useState(false);
+  const [sessionUser, setSessionUser] = useState<{ username: string; is_admin: boolean } | null>(null);
   // Full problem list, fetched lazily only when the editor opens (prev/next
   // navigation and the drawer need the whole ordering). The landing page
   // fetches its own paginated slice instead.
@@ -207,8 +209,14 @@ function App() {
   }, [flushDrafts]);
 
   useEffect(() => {
+    api.authStatus()
+      .then((status) => setNeedsSetup(status.needs_setup))
+      .catch(() => undefined);
     api.sessionStatus()
-      .then(() => setSessionPhase("active"))
+      .then((status) => {
+        setSessionUser(status.user);
+        setSessionPhase("active");
+      })
       .catch(() => setSessionPhase("gate"))
       .finally(() => {
         // Registered after the boot probe so the expected first-visit 401
@@ -218,6 +226,7 @@ function App() {
           flushDrafts();
           draftCache.current.clear();
           pendingDrafts.current.clear();
+          setSessionUser(null);
           setSessionPhase("gate");
           setSessionExpired(true);
         });
@@ -237,10 +246,47 @@ function App() {
       .then(() => {
         setSessionExpired(false);
         setGateError("");
+        setSessionUser(null);
+        setNeedsSetup(false);
         setSessionPhase("active");
       })
       .catch(() => setGateError("Could not start a session — check the connection and try again."));
   }, []);
+
+  const registerAccount = useCallback((username: string, password: string) => {
+    api.register(username, password)
+      .then(() => api.authStatus())
+      .then((status) => {
+        setNeedsSetup(status.needs_setup);
+        setSessionUser({ username: username === "admin" ? "admin" : username, is_admin: status.needs_setup ? false : username === "admin" });
+        setGateError("");
+        setSessionExpired(false);
+        setSessionPhase("active");
+      })
+      .catch((error: Error) => setGateError(error.message || "Could not create the account."));
+  }, []);
+
+  const loginAccount = useCallback((username: string, password: string) => {
+    api.startSession()
+      .then(() => api.login(username, password))
+      .then((result) => {
+        setSessionUser({ username: result.username, is_admin: result.is_admin });
+        setGateError("");
+        setSessionExpired(false);
+        setSessionPhase("active");
+      })
+      .catch((error: Error) => setGateError(error.message || "Could not sign in."));
+  }, []);
+
+  const logoutAccount = useCallback(() => {
+    flushDrafts();
+    api.logout()
+      .then(() => {
+        setSessionUser(null);
+        setSessionPhase("gate");
+      })
+      .catch(() => undefined);
+  }, [flushDrafts]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -448,7 +494,7 @@ function App() {
     if (sessionPhase === "checking") {
       return <FullPageMessage icon={<LoaderCircle className="spin" />} title="Preparing the judge bench" detail="Checking your session…" />;
     }
-    return <GuestGate expired={sessionExpired} error={gateError} onEnter={enterAsGuest} theme={theme} onToggleTheme={toggleTheme} />;
+    return <GuestGate expired={sessionExpired} error={gateError} needsSetup={needsSetup} onEnter={enterAsGuest} onRegister={registerAccount} onLogin={loginAccount} theme={theme} onToggleTheme={toggleTheme} />;
   }
   if (loadError) return <FullPageMessage icon={<CircleAlert />} title="OpenOJ could not load" detail={loadError} />;
   if (activeSlug === null) return <Landing theme={theme} onToggleTheme={toggleTheme} onOpen={openProblem} />;
@@ -501,7 +547,14 @@ function App() {
             Submit
           </button>
         </div>
-        <div className="topbar-right">
+<div className="topbar-right">
+          {sessionUser && (
+            <span className="session-user" title={sessionUser.is_admin ? "Admin account" : "Signed-in account"}>
+              <span className={sessionUser.is_admin ? "user-dot admin" : "user-dot"} />
+              {sessionUser.username}
+              <button className="gate-link logout-link" onClick={logoutAccount}>Log out</button>
+            </span>
+          )}
           <a
             className="icon-button github-link"
             href="https://github.com/zydo/openoj"
@@ -1439,15 +1492,39 @@ function FullPageMessage({ icon, title, detail }: { icon: React.ReactNode; title
   return <main className="full-page-message"><span>{icon}</span><h1>{title}</h1><p>{detail}</p></main>;
 }
 
-// The only entrance until accounts exist: every visitor works as a guest
-// session that idles out after about an hour.
-function GuestGate({ expired, error, onEnter, theme, onToggleTheme }: {
+// The entrance: accounts persist their work under the user id; guests get an
+// ephemeral session that idles out after about an hour. A fresh install
+// (no accounts yet) offers the one-time admin setup.
+function GuestGate({ expired, error, needsSetup, onEnter, onRegister, onLogin, theme, onToggleTheme }: {
   expired: boolean;
   error: string;
+  needsSetup: boolean;
   onEnter: () => void;
+  onRegister: (username: string, password: string) => void;
+  onLogin: (username: string, password: string) => void;
   theme: Theme;
   onToggleTheme: () => void;
 }) {
+  const [mode, setMode] = useState<"welcome" | "signup" | "login">("welcome");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [formError, setFormError] = useState("");
+
+  const submitAccount = () => {
+    if (!username.trim()) { setFormError("Choose a username."); return; }
+    if (password.length < 8) { setFormError("Password must be at least 8 characters."); return; }
+    if (mode === "signup" && password !== confirm) { setFormError("Passwords do not match."); return; }
+    setFormError("");
+    if (mode === "login") onLogin(username.trim(), password);
+    else onRegister(username.trim(), password);
+  };
+
+  const switchMode = (next: "welcome" | "signup" | "login") => {
+    setMode(next);
+    setFormError("");
+  };
+
   return (
     <main className="guest-gate">
       <button
@@ -1461,13 +1538,86 @@ function GuestGate({ expired, error, onEnter, theme, onToggleTheme }: {
       <div className="guest-card">
         <span className="brand-mark gate-mark"><Code2 size={22} strokeWidth={2.4} /></span>
         <h1>OpenOJ</h1>
-        {expired && <p className="gate-notice">Your session idled out — drafts and submissions from it are gone.</p>}
+        {expired && <p className="gate-notice">Your session idled out — guest drafts and submissions from it are gone.</p>}
         {error && <p className="gate-notice">{error}</p>}
-        <p className="gate-copy">
-          Sessions are guest-only and ephemeral: pick problems, write solutions, get verdicts.
-          Editor drafts persist for the session and clear after about an hour of inactivity.
-        </p>
-        <button className="gate-enter" onClick={onEnter}>Continue as guest</button>
+
+        {mode === "welcome" && (
+          <>
+            {needsSetup ? (
+              <>
+                <p className="gate-copy">Fresh install — set the admin password to create the admin account. The admin holds the highest privilege; the username is fixed as <strong>admin</strong>.</p>
+                <button className="gate-enter" onClick={() => { setUsername("admin"); switchMode("signup"); }}>Set up admin</button>
+              </>
+            ) : (
+              <>
+                <p className="gate-copy">
+                  Pick problems, write solutions, get verdicts. Guest sessions are ephemeral —
+                  editor drafts persist for the session and clear after about an hour of inactivity.
+                  Accounts keep their drafts and submission history under the user id.
+                </p>
+                <button className="gate-enter" onClick={onEnter}>Continue as guest</button>
+                <div className="gate-links">
+                  <button className="gate-link" onClick={() => switchMode("login")}>Log in</button>
+                  <span aria-hidden="true">·</span>
+                  <button className="gate-link" onClick={() => switchMode("signup")}>Create account</button>
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {mode !== "welcome" && (
+          <div className="gate-form">
+            {mode === "login" ? (
+              <p className="gate-copy">Sign in with your account.</p>
+            ) : (
+              <p className="gate-copy">{needsSetup ? "Set the admin password (typed twice)." : "Create a regular account — work is stored under your user id."}</p>
+            )}
+            {!(needsSetup && mode === "signup") && (
+              <label className="gate-field">
+                <span>Username</span>
+                <input
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  autoComplete="username"
+                  autoFocus
+                />
+              </label>
+            )}
+            <label className="gate-field">
+              <span>Password</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") submitAccount(); }}
+                autoComplete={mode === "login" ? "current-password" : "new-password"}
+                autoFocus={needsSetup && mode === "signup"}
+              />
+            </label>
+            {mode === "signup" && (
+              <label className="gate-field">
+                <span>Confirm password</span>
+                <input
+                  type="password"
+                  value={confirm}
+                  onChange={(event) => setConfirm(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === "Enter") submitAccount(); }}
+                  autoComplete="new-password"
+                />
+              </label>
+            )}
+            {formError && <p className="gate-notice">{formError}</p>}
+            <button className="gate-enter" onClick={submitAccount}>
+              {mode === "login" ? "Log in" : needsSetup ? "Create admin" : "Create account"}
+            </button>
+            {!needsSetup && (
+              <div className="gate-links">
+                <button className="gate-link" onClick={() => switchMode("welcome")}>Back</button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </main>
   );
