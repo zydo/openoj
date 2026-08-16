@@ -68,8 +68,18 @@ def _parse_protocol(output: str) -> dict[str, Any]:
 PROTOCOL_FD = 63
 
 
+# True while the prewarm thread is running a toolchain build. The kill sweep
+# below targets the shared submission UID, which the prewarm builds also run
+# under — sweeping mid-prewarm would kill the warm build (and risk a torn
+# shared Go build cache). No submission can be lingering during prewarm
+# anyway; the next sweep after prewarm ends catches anything that does.
+_prewarming = False
+
+
 def _kill_lingering_children() -> None:
     """Remove processes a submission attempted to leave behind."""
+    if _prewarming:
+        return
     for status_path in Path("/proc").glob("[0-9]*/status"):
         try:
             status = status_path.read_text(encoding="utf-8", errors="ignore")
@@ -254,7 +264,9 @@ def _prewarm_toolchains_once() -> None:
     """Compile throwaway programs so a user's first submission never pays
     the cold toolchain cost (page-cache faults dominate rustc/g++/javac/tsc
     cold starts; the shared compile budget measures wall clock)."""
+    global _prewarming
     warm_dir = Path(os.environ.get("OPENOJ_PREWARM_DIR", "/tmp/openoj-prewarm"))
+    _prewarming = True
     try:
         warm_dir.mkdir(parents=True, exist_ok=True)
         # The Go job runs as the compiler uid so it can share its build cache;
@@ -334,6 +346,8 @@ def _prewarm_toolchains_once() -> None:
                 print(f"OpenOJ pre-warm skipped {' '.join(command[:2])}: {error}", file=sys.stderr, flush=True)
     except OSError as error:
         print(f"OpenOJ pre-warm disabled: {error}", file=sys.stderr, flush=True)
+    finally:
+        _prewarming = False
 
 
 def _prewarm_loop() -> None:
