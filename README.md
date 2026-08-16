@@ -279,6 +279,12 @@ dedicated disposable VM or node and add a stronger runtime such as gVisor,
 Kata Containers, or Firecracker, plus ingress rate limits. That keeps a future
 container-runtime or kernel escape away from the API and stored submissions.
 
+## Data conventions
+
+The JSON wire shapes for linked lists, trees, and design/interactive cases,
+the typed binary stream the compiled-language wrappers read, and the
+comparison modes are documented in [docs/CODECS.md](docs/CODECS.md).
+
 ## REST API
 
 The judge's HTTP API (problems, run, submit, submissions, guest sessions,
