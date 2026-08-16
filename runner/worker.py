@@ -294,13 +294,18 @@ def _prewarm_toolchains_once() -> None:
         go_dir.mkdir(exist_ok=True)
         (go_dir / "go.mod").write_text("module warm\n\ngo 1.24\n", encoding="utf-8")
         # Every submission imports the wrapper stdlib packages (see
-        # GoExecutor), so the warm build must import them too — blank imports
-        # pull their archives into the shared GOCACHE without needing symbols.
-        # An empty main only warms the runtime chain, leaving fmt, json, math,
-        # os, io, and binary cold for the first submission.
+        # GoExecutor) and most solutions add a handful more (sort, heap,
+        # strconv, ...), so the warm build imports the whole observed set —
+        # blank imports pull their archives into the shared GOCACHE without
+        # needing symbols. An empty main only warms the runtime chain.
+        go_warm_imports = WRAPPER_IMPORTS + (
+            "sort", "container/heap", "container/list", "strconv", "strings",
+            "math/bits", "math/big", "bufio", "bytes", "errors",
+            "unicode", "unicode/utf8", "time", "cmp",
+        )
         (go_dir / "main.go").write_text(
             "package main\n\n"
-            + "".join(f'import _ "{package}"\n' for package in WRAPPER_IMPORTS)
+            + "".join(f'import _ "{package}"\n' for package in sorted(set(go_warm_imports)))
             + "\nfunc main() {}\n",
             encoding="utf-8",
         )
@@ -340,7 +345,7 @@ def _prewarm_toolchains_once() -> None:
                     command, env=job_environment, cwd=warm_dir,
                     preexec_fn=preexec,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    timeout=90, check=False,
+                    timeout=240, check=False,
                 )
             except (OSError, subprocess.SubprocessError) as error:
                 print(f"OpenOJ pre-warm skipped {' '.join(command[:2])}: {error}", file=sys.stderr, flush=True)

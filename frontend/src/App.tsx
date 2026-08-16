@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   Copy,
+  ArrowRight,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
@@ -575,7 +576,18 @@ function App() {
               </section>
             </article>
           ) : leftTab === "solutions" ? (
-            <Solutions key={problem.slug} slug={problem.slug} fallbackLanguage={language} languages={problem.languages} theme={theme} />
+            <Solutions
+            key={problem.slug}
+            slug={problem.slug}
+            fallbackLanguage={language}
+            languages={problem.languages}
+            theme={theme}
+            onLoadInEditor={(loadedLanguage, loadedCode) => {
+              setLanguage(loadedLanguage);
+              setCode(loadedCode);
+              saveDraft(problem.slug, loadedLanguage, loadedCode);
+            }}
+          />
           ) : (
             <Submissions submissions={submissions} problem={problem} />
           )}
@@ -599,7 +611,7 @@ function App() {
                   }))}
                   onChange={changeLanguage}
                 />
-                <button className="icon-button" title="Restore starter code" onClick={() => setConfirmRestore(true)}>
+                <button className="icon-button" title="Restore" onClick={() => setConfirmRestore(true)}>
                   <RotateCcw size={15} />
                 </button>
               </div>
@@ -683,9 +695,9 @@ function App() {
 
       {confirmRestore && (
         <ConfirmDialog
-          title="Restore starter code?"
+          title="Restore code?"
           body="Your current draft will be replaced. Saved drafts for other languages are kept."
-          confirmLabel="Restore starter"
+          confirmLabel="Restore"
           onConfirm={() => {
             setConfirmRestore(false);
             setCode(languageConfig.starter);
@@ -1189,11 +1201,12 @@ function ResultValue({ label, value, raw = false }: { label: string; value: unkn
   return <div className="result-value"><span>{label}</span><pre>{raw ? String(value) : formatJson(value)}</pre></div>;
 }
 
-function Solutions({ slug, fallbackLanguage, languages, theme }: {
+function Solutions({ slug, fallbackLanguage, languages, theme, onLoadInEditor }: {
   slug: string;
   fallbackLanguage: string;
   languages: Problem["languages"];
   theme: Theme;
+  onLoadInEditor: (language: string, code: string) => void;
 }) {
   const [content, setContent] = useState<SolutionsContent | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "empty">("loading");
@@ -1260,6 +1273,7 @@ function Solutions({ slug, fallbackLanguage, languages, theme }: {
           languages={languages}
           slug={slug}
           theme={theme}
+          onLoadInEditor={onLoadInEditor}
           selected={langByVariant[entry.name || "canonical"]}
           onSelect={(language) => setLangByVariant((current) => ({ ...current, [entry.name || "canonical"]: language }))}
         />
@@ -1268,13 +1282,14 @@ function Solutions({ slug, fallbackLanguage, languages, theme }: {
   );
 }
 
-function SolutionBlock({ title, body, code, languages, slug, theme, selected, onSelect }: {
+function SolutionBlock({ title, body, code, languages, slug, theme, onLoadInEditor, selected, onSelect }: {
   title: string;
   body: string;
   code: Record<string, string>;
   languages: Problem["languages"];
   slug: string;
   theme: Theme;
+  onLoadInEditor: (language: string, code: string) => void;
   selected: string | undefined;
   onSelect: (language: string) => void;
 }) {
@@ -1302,10 +1317,15 @@ function SolutionBlock({ title, body, code, languages, slug, theme, selected, on
           }))}
           onChange={onSelect}
         />
-        <button className="solution-copy" onClick={copy} title="Copy solution code" aria-label="Copy solution code">
-          {copied ? <Check size={14} /> : <Copy size={14} />}
-          {copied ? "Copied" : "Copy"}
-        </button>
+        <div className="solution-actions">
+          <button className="solution-copy" onClick={() => onLoadInEditor(shown, code[shown])} title="Load this code into the editor and switch the editor to its language">
+            <ArrowRight size={14} /> To editor
+          </button>
+          <button className={copied ? "solution-copy copied" : "solution-copy"} onClick={copy} title="Copy solution code" aria-label="Copy solution code">
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
       </div>
       <div className="solution-code-scroll">
         <Editor

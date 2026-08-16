@@ -58,6 +58,11 @@ class GoExecutor(CompiledExecutor):
     address_space_overhead_mb = 2048
     max_processes = 32
     compiler_memory_mb = 2048
+    # A cold GOCACHE (fresh container, or stdlib packages the warm build does
+    # not cover) makes `go build` compile standard-library packages on the
+    # spot — 10s is not enough on a small VM. Compile time is wall clock
+    # outside the judged runtime, so the generous budget costs nothing.
+    compiler_timeout_seconds = 60
     compiler_path = "/usr/bin/go"
     benchmark_command = ("/runner/benchmarks/go",)
     reference_benchmark_ms = 18.0
