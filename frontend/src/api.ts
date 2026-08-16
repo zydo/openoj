@@ -49,6 +49,8 @@ export const api = {
     request<{ status: string }>(`/drafts/${encodeURIComponent(slug)}/${encodeURIComponent(language)}`, {
       method: "PUT",
       body: JSON.stringify({ code }),
+      // Survive the tab being torn down right after a flush.
+      keepalive: true,
     }),
   run: (slug: string, language: string, code: string, cases: Record<string, unknown>[]) =>
     request<JudgeResult>("/run", {

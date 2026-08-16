@@ -139,6 +139,11 @@ function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
+function formatTolerance(tolerance: number | undefined) {
+  const value = tolerance ?? 1e-9;
+  return value >= 0.001 ? String(value) : `1e${Math.round(Math.log10(value))}`;
+}
+
 function App() {
   const [themeOverride, setThemeOverride] = useState<Theme | null>(storedTheme);
   const [systemTheme, setSystemTheme] = useState<Theme>(preferredTheme);
@@ -148,6 +153,7 @@ function App() {
   // returns to the gate with a notice.
   const [sessionPhase, setSessionPhase] = useState<"checking" | "gate" | "active">("checking");
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [gateError, setGateError] = useState("");
   // Full problem list, fetched lazily only when the editor opens (prev/next
   // navigation and the drawer need the whole ordering). The landing page
   // fetches its own paginated slice instead.
@@ -208,6 +214,9 @@ function App() {
         // does not read as "your session expired". Any later 401 (idle
         // expiry mid-use) routes back to the gate with the notice.
         onUnauthorized(() => {
+          flushDrafts();
+          draftCache.current.clear();
+          pendingDrafts.current.clear();
           setSessionPhase("gate");
           setSessionExpired(true);
         });
@@ -226,9 +235,10 @@ function App() {
     api.startSession()
       .then(() => {
         setSessionExpired(false);
+        setGateError("");
         setSessionPhase("active");
       })
-      .catch(() => undefined);
+      .catch(() => setGateError("Could not start a session — check the connection and try again."));
   }, []);
 
   useEffect(() => {
@@ -257,12 +267,17 @@ function App() {
     setThemeOverride(next);
   };
 
+  const problemsRequested = useRef(false);
   const ensureProblems = useCallback(() => {
-    if (allProblems !== null) return;
+    if (problemsRequested.current) return;
+    problemsRequested.current = true;
     api.getProblems().then((page) => {
       setAllProblems(page.items);
-    }).catch((error: Error) => setProblemsError(error.message));
-  }, [allProblems]);
+    }).catch((error: Error) => {
+      problemsRequested.current = false; // allow a retry on the next open
+      setProblemsError(error.message);
+    });
+  }, []);
 
   // Keep activeSlug in sync with the URL when the user navigates back/forward.
   useEffect(() => {
@@ -312,7 +327,11 @@ function App() {
       if (cancelled) return;
       setProblem(loaded);
       for (const row of draftRows) {
-        draftCache.current.set(`${loaded.slug}:${row.language}`, row.code);
+        const key = `${loaded.slug}:${row.language}`;
+        // A locally pending save is newer than whatever the server returned.
+        if (!pendingDrafts.current.has(key)) {
+          draftCache.current.set(key, row.code);
+        }
       }
       const enabled = (key: string) => loaded.languages[key]?.enabled;
       const recent = draftRows.find((row) => enabled(row.language))?.language;
@@ -428,7 +447,7 @@ function App() {
     if (sessionPhase === "checking") {
       return <FullPageMessage icon={<LoaderCircle className="spin" />} title="Preparing the judge bench" detail="Checking your session…" />;
     }
-    return <GuestGate expired={sessionExpired} onEnter={enterAsGuest} theme={theme} onToggleTheme={toggleTheme} />;
+    return <GuestGate expired={sessionExpired} error={gateError} onEnter={enterAsGuest} theme={theme} onToggleTheme={toggleTheme} />;
   }
   if (loadError) return <FullPageMessage icon={<CircleAlert />} title="OpenOJ could not load" detail={loadError} />;
   if (activeSlug === null) return <Landing theme={theme} onToggleTheme={toggleTheme} onOpen={openProblem} />;
@@ -1079,7 +1098,7 @@ function Testcases({ problem, drafts, setDrafts, activeCase, setActiveCase }: {
   );
 }
 
-function Results({ result, busy, error, comparison }: { result: JudgeResult | null; busy: string | null; error: string; comparison?: unknown }) {
+function Results({ result, busy, error, comparison }: { result: JudgeResult | null; busy: string | null; error: string; comparison?: Problem["invocation"]["comparison"] }) {
   const [openCase, setOpenCase] = useState(0);
   useEffect(() => setOpenCase(0), [result]);
   if (busy) return <ConsoleEmpty icon={<LoaderCircle className="spin" />} title={busy === "submit" ? "Judging every case" : "Running testcases"} detail="Executing code and judging" />;
@@ -1129,7 +1148,9 @@ function Results({ result, busy, error, comparison }: { result: JudgeResult | nu
                 <ResultValue label="Input" value={active.input} />
                 {active.actual !== undefined && <ResultValue label="Output" value={active.actual} />}
                 {active.expected !== undefined && <ResultValue
-                    label={comparison === "close" || (typeof comparison === "object" && comparison !== null && (comparison as { mode?: string }).mode === "close") ? "Expected ±1e-9" : "Expected"}
+                    label={comparison === "close" || (typeof comparison === "object" && comparison !== null && comparison.mode === "close")
+                      ? `Expected ±${formatTolerance(typeof comparison === "object" && comparison !== null ? comparison.tolerance : undefined)}`
+                      : "Expected"}
                     value={active.expected}
                   />}
                 {active.stdout && <ResultValue label="Stdout" value={active.stdout} raw />}
@@ -1237,8 +1258,9 @@ function FullPageMessage({ icon, title, detail }: { icon: React.ReactNode; title
 
 // The only entrance until accounts exist: every visitor works as a guest
 // session that idles out after about an hour.
-function GuestGate({ expired, onEnter, theme, onToggleTheme }: {
+function GuestGate({ expired, error, onEnter, theme, onToggleTheme }: {
   expired: boolean;
+  error: string;
   onEnter: () => void;
   theme: Theme;
   onToggleTheme: () => void;
@@ -1257,6 +1279,7 @@ function GuestGate({ expired, onEnter, theme, onToggleTheme }: {
         <span className="brand-mark gate-mark"><Code2 size={22} strokeWidth={2.4} /></span>
         <h1>OpenOJ</h1>
         {expired && <p className="gate-notice">Your session idled out — drafts and submissions from it are gone.</p>}
+        {error && <p className="gate-notice">{error}</p>}
         <p className="gate-copy">
           Sessions are guest-only and ephemeral: pick problems, write solutions, get verdicts.
           Editor drafts persist for the session and clear after about an hour of inactivity.

@@ -357,7 +357,6 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .drawer { width: min(440px, 92vw); height: 100%; padding: 18px; background: #111518; border-right: 1px solid var(--line-bright); box-shadow: 20px 0 60px #0008; animation: slide-in .2s ease-out; display: flex; flex-direction: column; gap: 13px; }
 .drawer-heading { display: flex; align-items: center; justify-content: space-between; padding: 4px 2px 15px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
 .drawer-heading > div { display: grid; gap: 4px; }
-.drawer-heading span { color: var(--amber); font: 11px "JetBrains Mono", monospace; text-transform: uppercase; letter-spacing: .12em; }
 .drawer-heading strong { font-size: 19px; letter-spacing: -.02em; }
 .drawer-tools { display: grid; gap: 7px; flex: 0 0 auto; }
 .drawer-filter { width: 100%; height: 38px; padding: 0 12px; color: #d8dee2; background: #101416; border: 1px solid #2c353b; border-radius: 5px; font-size: 13px; }
