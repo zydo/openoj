@@ -166,6 +166,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .problem-heading h1 { margin: 0 0 14px; font-size: 23px; line-height: 1.2; letter-spacing: -.035em; }
 .problem-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .difficulty, .tag { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 999px; font-size: 12px; }
+.difficulty { min-width: 88px; justify-content: center; }
 .difficulty { color: #67d69d; background: #193127; }
 .difficulty.medium { color: #f2c063; background: #33291a; }
 .difficulty.hard { color: #f0938f; background: #341d1f; }
@@ -355,16 +356,17 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .submission-row time { color: var(--quiet); }
 .submission-status { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
 
-.solutions { display: flex; flex-direction: column; gap: 14px; }
-.solutions-variants, .solutions-languages { display: flex; flex-wrap: wrap; gap: 6px; }
-.variant-chip { height: 26px; padding: 0 11px; display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font: 500 11px "Roboto Mono", monospace; letter-spacing: .04em; cursor: pointer; }
-.variant-chip:hover { border-color: var(--line-bright); color: var(--ink); }
-.variant-chip.active { border-color: #7c5a22; background: #221d14; color: #f2bd61; }
+.solutions { display: flex; flex-direction: column; gap: 22px; }
+.solution-block { display: flex; flex-direction: column; gap: 9px; }
+.solution-block-title { margin: 0; color: var(--amber); font: 600 12px "Roboto Mono", monospace; text-transform: uppercase; letter-spacing: .14em; }
+.solution-block-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.solution-copy { height: 26px; padding: 0 11px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--muted); font: 500 11px "Roboto Mono", monospace; cursor: pointer; }
+.solution-copy:hover { border-color: var(--line-bright); color: var(--ink); }
+.solution-copy.copied, .solution-copy[data-copied="true"] { border-color: #24583b; color: #70e5a5; }
+.solution-code-scroll { border: 1px solid #293137; border-left: 2px solid var(--amber); border-radius: 5px; overflow: hidden; }
 .solutions-guide { padding: 0; }
-.solutions-code pre { margin: 8px 0 0; padding: 12px 14px; overflow-x: auto; background: #0f1315; border: 1px solid #293136; border-left: 2px solid var(--amber); border-radius: 5px; }
-.solutions-code code { font: 12.5px/1.55 "Roboto Mono", monospace; color: #d5dbdf; }
-[data-theme="light"] .variant-chip.active { background: #f6ecd4; border-color: #dcc08a; }
-[data-theme="light"] .solutions-code pre { background: #f7f9fa; border-color: #e1e7ea; }
+[data-theme="light"] .solution-code-scroll { border-color: #e1e7ea; }
+[data-theme="light"] .solution-copy[data-copied="true"] { border-color: #a7d9bf; color: #147a49; }
 
 .drawer-backdrop { position: fixed; inset: 0; z-index: 100; background: #050607a8; backdrop-filter: blur(2px); animation: fade-in .16s ease-out; }
 .drawer { width: min(440px, 92vw); height: 100%; padding: 18px; background: #111518; border-right: 1px solid var(--line-bright); box-shadow: 20px 0 60px #0008; animation: slide-in .2s ease-out; display: flex; flex-direction: column; gap: 13px; }

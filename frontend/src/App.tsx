@@ -6,6 +6,7 @@ import {
   Braces,
   Check,
   ChevronDown,
+  Copy,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
@@ -113,11 +114,11 @@ function difficultyTone(difficulty: string) {
 // The curated problem set grades difficulty on a five-level scale (H1–H5);
 // display the levels as words rather than raw labels.
 const DIFFICULTY_LABELS: Record<string, string> = {
-  H1: "Very easy",
+  H1: "Very Easy",
   H2: "Easy",
   H3: "Medium",
   H4: "Hard",
-  H5: "Very hard",
+  H5: "Very Hard",
 };
 
 function difficultyLabel(difficulty: string) {
@@ -574,7 +575,7 @@ function App() {
               </section>
             </article>
           ) : leftTab === "solutions" ? (
-            <Solutions key={problem.slug} slug={problem.slug} fallbackLanguage={language} languages={problem.languages} />
+            <Solutions key={problem.slug} slug={problem.slug} fallbackLanguage={language} languages={problem.languages} theme={theme} />
           ) : (
             <Submissions submissions={submissions} problem={problem} />
           )}
@@ -1122,7 +1123,7 @@ function Testcases({ problem, drafts, setDrafts, activeCase, setActiveCase }: {
 function Results({ result, busy, error, comparison }: { result: JudgeResult | null; busy: string | null; error: string; comparison?: Problem["invocation"]["comparison"] }) {
   const [openCase, setOpenCase] = useState(0);
   useEffect(() => setOpenCase(0), [result]);
-  if (busy) return <ConsoleEmpty icon={<LoaderCircle className="spin" />} title={busy === "submit" ? "Judging every case" : "Running testcases"} detail="Executing code and judging" />;
+  if (busy) return <ConsoleEmpty icon={<LoaderCircle className="spin" />} title="Executing code and judging" />;
   if (error) return <ConsoleEmpty icon={<CircleAlert />} title="Execution stopped" detail={error} tone="danger" />;
   if (!result) return <ConsoleEmpty icon={<TerminalSquare />} title="No results yet" detail="Run to check your code against the visible cases, or Submit to face the full judge." />;
   const active = result.results[openCase];
@@ -1188,18 +1189,22 @@ function ResultValue({ label, value, raw = false }: { label: string; value: unkn
   return <div className="result-value"><span>{label}</span><pre>{raw ? String(value) : formatJson(value)}</pre></div>;
 }
 
-function Solutions({ slug, fallbackLanguage, languages }: {
+function Solutions({ slug, fallbackLanguage, languages, theme }: {
   slug: string;
   fallbackLanguage: string;
   languages: Problem["languages"];
+  theme: Theme;
 }) {
   const [content, setContent] = useState<SolutionsContent | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "empty">("loading");
-  const [variantIndex, setVariantIndex] = useState(0);
-  const [viewLanguage, setViewLanguage] = useState(fallbackLanguage);
+  const [langByVariant, setLangByVariant] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    setViewLanguage(fallbackLanguage);
+    setLangByVariant((current) => {
+      const next: Record<string, string> = {};
+      for (const key of Object.keys(current)) next[key] = fallbackLanguage;
+      return next;
+    });
   }, [fallbackLanguage]);
 
   useEffect(() => {
@@ -1208,7 +1213,6 @@ function Solutions({ slug, fallbackLanguage, languages }: {
     api.getSolutions(slug).then((loaded) => {
       if (cancelled) return;
       setContent(loaded);
-      setVariantIndex(0);
       setState("ready");
     }).catch(() => {
       if (!cancelled) setState("empty");
@@ -1224,38 +1228,109 @@ function Solutions({ slug, fallbackLanguage, languages }: {
   }
 
   // Variants are the named approaches (bfs, dfs, …); a canonical-only
-  // problem still shows its solution as one untitled approach.
+  // problem shows its single solution untitled.
   const variants = Object.keys(content.implementations).sort();
   const entries = variants.length > 0
     ? variants.map((variant) => ({
         name: variant,
+        title: variant.toUpperCase(),
         body: content.guide[variant] ?? "",
         code: content.implementations[variant],
       }))
     : Object.keys(content.canonical).length > 0
-      ? [{ name: "", body: Object.values(content.guide)[0] ?? "", code: content.canonical }]
+      ? [{
+          name: "",
+          title: "",
+          body: Object.values(content.guide)[0] ?? "",
+          code: content.canonical,
+        }]
       : [];
   if (entries.length === 0) {
     return <FullPageMessage icon={<Braces />} title="No solutions published" detail="This problem has no solution guide yet." />;
   }
-  const active = entries[Math.min(variantIndex, entries.length - 1)];
-  const languageKeys = Object.keys(active.code);
-  const shown = languageKeys.includes(viewLanguage) ? viewLanguage : languageKeys[0];
 
   return (
     <article className="problem-scroll solutions">
-      <div className="solutions-variants">
-        {entries.map((entry, index) => (
-          <button
-            key={entry.name}
-            className={index === Math.min(variantIndex, entries.length - 1) ? "variant-chip active" : "variant-chip"}
-            onClick={() => setVariantIndex(index)}
-          >
-            {entry.name ? entry.name.toUpperCase() : "Solution"}
-          </button>
-        ))}
+      {entries.map((entry) => (
+        <SolutionBlock
+          key={entry.name || "canonical"}
+          title={entry.title}
+          body={entry.body}
+          code={entry.code}
+          languages={languages}
+          slug={slug}
+          theme={theme}
+          selected={langByVariant[entry.name || "canonical"]}
+          onSelect={(language) => setLangByVariant((current) => ({ ...current, [entry.name || "canonical"]: language }))}
+        />
+      ))}
+    </article>
+  );
+}
+
+function SolutionBlock({ title, body, code, languages, slug, theme, selected, onSelect }: {
+  title: string;
+  body: string;
+  code: Record<string, string>;
+  languages: Problem["languages"];
+  slug: string;
+  theme: Theme;
+  selected: string | undefined;
+  onSelect: (language: string) => void;
+}) {
+  const languageKeys = Object.keys(code);
+  const shown = selected && languageKeys.includes(selected) ? selected : languageKeys[0];
+  const [copied, setCopied] = useState(false);
+
+  const copy = () => {
+    navigator.clipboard.writeText(code[shown]).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    }).catch(() => undefined);
+  };
+
+  return (
+    <section className="solution-block">
+      {title && <h3 className="solution-block-title">{title}</h3>}
+      <div className="solution-block-bar">
+        <LanguageMenu
+          value={shown}
+          options={languageKeys.map((key) => ({
+            key,
+            label: languages[key]?.display_name ?? key,
+            enabled: true,
+          }))}
+          onChange={onSelect}
+        />
+        <button className="solution-copy" onClick={copy} title="Copy solution code" aria-label="Copy solution code">
+          {copied ? <Check size={14} /> : <Copy size={14} />}
+          {copied ? "Copied" : "Copy"}
+        </button>
       </div>
-      {active.body && (
+      <div className="solution-code-scroll">
+        <Editor
+          height={360}
+          language={languages[shown]?.monaco_language ?? "plaintext"}
+          value={code[shown]}
+          theme={theme === "dark" ? "openoj-dark" : "openoj-light"}
+          loading={<div className="editor-loading"><LoaderCircle className="spin" size={18} /> Loading syntax engine…</div>}
+          options={{
+            readOnly: true,
+            domReadOnly: true,
+            automaticLayout: true,
+            minimap: { enabled: false },
+            fontFamily: "Roboto Mono, ui-monospace, monospace",
+            fontSize: 12.5,
+            lineHeight: 19,
+            scrollBeyondLastLine: false,
+            renderLineHighlight: "none",
+            overviewRulerLanes: 0,
+            scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+            padding: { top: 10, bottom: 10 },
+          }}
+        />
+      </div>
+      {body && (
         <div className="markdown-body solutions-guide">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
@@ -1269,28 +1344,10 @@ function Solutions({ slug, fallbackLanguage, languages }: {
                 />
               ),
             }}
-          >{active.body}</ReactMarkdown>
+          >{body}</ReactMarkdown>
         </div>
       )}
-      <div className="solutions-code">
-        <div className="detail-heading">
-          <span>{active.name ? `${active.name.toUpperCase()} · ` : ""}{shown}</span>
-          <span>{languageKeys.length} language{languageKeys.length === 1 ? "" : "s"}</span>
-        </div>
-        <pre><code>{active.code[shown]}</code></pre>
-        <div className="solutions-languages">
-          <LanguageMenu
-            value={shown}
-            options={languageKeys.map((key) => ({
-              key,
-              label: languages[key]?.display_name ?? key,
-              enabled: true,
-            }))}
-            onChange={setViewLanguage}
-          />
-        </div>
-      </div>
-    </article>
+    </section>
   );
 }
 
@@ -1375,8 +1432,8 @@ function ProblemDrawer({ problems, activeSlug, onSelect, onClose }: {
   );
 }
 
-function ConsoleEmpty({ icon, title, detail, tone = "" }: { icon: React.ReactNode; title: string; detail: string; tone?: string }) {
-  return <div className={`console-empty ${tone}`}><span>{icon}</span><strong>{title}</strong><p>{detail}</p></div>;
+function ConsoleEmpty({ icon, title, detail, tone = "" }: { icon: React.ReactNode; title: string; detail?: string; tone?: string }) {
+  return <div className={`console-empty ${tone}`}><span>{icon}</span><strong>{title}</strong>{detail ? <p>{detail}</p> : null}</div>;
 }
 
 function FullPageMessage({ icon, title, detail }: { icon: React.ReactNode; title: string; detail: string }) {
