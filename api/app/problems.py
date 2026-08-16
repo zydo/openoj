@@ -551,16 +551,30 @@ def load_reference_solution(slug: str, language: str) -> Optional[str]:
 
     Only bundle-format problems carry solutions; flat markdown packages have
     none, and a bundle may legitimately lack a given language."""
+    solutions = load_reference_solutions(slug, language)
+    if not solutions:
+        return None
+    return solutions[0][1]
+
+
+def load_reference_solutions(slug: str, language: str) -> list[tuple[str, str]]:
+    """Every reference solution for a language as (variant, code) pairs —
+    the canonical `solution.<ext>` plus any named `solution_<variant>.<ext>`
+    siblings. The canonical solution sorts first."""
     path = _safe_problem_path(slug)
     if not path.is_dir():
-        return None
+        return []
     extension = LANGUAGE_EXTENSION.get(language)
     if extension is None:
-        return None
-    solution = path / f"solution.{extension}"
-    if not solution.is_file():
-        return None
-    return solution.read_text(encoding="utf-8")
+        return []
+    found: list[tuple[str, str]] = []
+    for solution_path in sorted(path.glob(f"solution*.{extension}")):
+        name = solution_path.name[: -len(extension) - 1]
+        if not re.fullmatch(r"solution(?:_[a-z0-9]+)?", name):
+            continue
+        variant = name[len("solution") :]
+        found.append((variant, solution_path.read_text(encoding="utf-8")))
+    return found
 
 
 def list_problems() -> list[dict[str, Any]]:

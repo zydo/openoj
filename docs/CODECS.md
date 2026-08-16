@@ -89,6 +89,20 @@ the solution method. The first oracle is `GridMaster` (hidden-grid problems):
 Offered in Python 3 and Java only. New oracles are added as harness classes
 on both sides.
 
+## Solution files (`solution*.<ext>`)
+
+A bundle carries either a single canonical `solution.<ext>` per language, or
+named variants `solution_<variant>.<ext>` (e.g. `solution_dfs.py`,
+`solution_bfs.py`) for problems with multiple equivalent approaches. Rules
+(enforced by openoj-problems' check.py):
+
+- every language the problem offers has at least one solution file;
+- the variant set is identical across languages — `dfs` in Python means
+  `dfs` in Java too, with equivalent behavior;
+- the judge's reference-runtime baseline for a multi-solution problem is the
+  **fastest** variant's run, so users are never compared against a slow
+  reference port.
+
 ## Comparison modes (`invocation.comparison`)
 
 - `exact` (default) — structural equality

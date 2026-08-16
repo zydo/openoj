@@ -31,7 +31,7 @@ from .problems import (
     list_problems,
     load_all_cases,
     load_problem,
-    load_reference_solution,
+    load_reference_solutions,
     public_problem,
 )
 
@@ -312,18 +312,26 @@ def _reference_runtime_ms(
     if not accepted:
         return None
     try:
-        reference = load_reference_solution(request.slug, request.language)
+        references = load_reference_solutions(request.slug, request.language)
     except (ProblemError, OSError):
         return None
-    if reference is None:
+    if not references:
         return None
-    try:
-        results = _run_judge(problem_data, request.language, reference, cases, public_count)
-    except HTTPException:
-        return None
-    if any(result["status"] not in {"accepted", "completed"} for result in results):
-        return None
-    return sum(result.get("runtime_ms", result.get("_runtime_ms", 0)) for result in results)
+    # Multi-solution bundles carry equivalent approaches; the baseline is the
+    # fastest reference run, so a user solution is never penalized by a slow
+    # (but correct) reference port.
+    best: int | None = None
+    for _, reference in references:
+        try:
+            results = _run_judge(problem_data, request.language, reference, cases, public_count)
+        except HTTPException:
+            return None
+        if any(result["status"] not in {"accepted", "completed"} for result in results):
+            return None
+        total = sum(result.get("runtime_ms", result.get("_runtime_ms", 0)) for result in results)
+        if best is None or total < best:
+            best = total
+    return best
 
 
 @app.post("/submit")
