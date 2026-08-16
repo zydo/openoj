@@ -1,3 +1,4 @@
+import re
 import time
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
@@ -25,6 +26,7 @@ from .database import (
 from .judge import RunnerUnavailable, execute
 from .models import RunRequest, SubmitRequest
 from .problems import (
+    LANGUAGE_REGISTRY,
     ProblemError,
     list_problems,
     load_all_cases,
@@ -158,8 +160,20 @@ def auth_logout(session_id: Annotated[str, Depends(current_session)]) -> dict[st
     return {"status": "logged_out"}
 
 
+SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def _validate_draft_keys(slug: str, language: str) -> None:
+    if not SLUG_PATTERN.fullmatch(slug):
+        raise HTTPException(status_code=400, detail="Unknown problem")
+    if language not in LANGUAGE_REGISTRY:
+        raise HTTPException(status_code=400, detail="Unknown language")
+
+
 @app.get("/drafts/{slug}")
 def drafts(slug: str, session_id: Annotated[str, Depends(current_session)]) -> list[dict[str, Any]]:
+    if not SLUG_PATTERN.fullmatch(slug):
+        raise HTTPException(status_code=400, detail="Unknown problem")
     return list_drafts(scope_key(session_id), slug)
 
 
@@ -170,6 +184,7 @@ def put_draft(
     body: dict[str, str],
     session_id: Annotated[str, Depends(current_session)],
 ) -> dict[str, str]:
+    _validate_draft_keys(slug, language)
     code = body.get("code", "")
     if len(code) > 256_000:
         raise HTTPException(status_code=400, detail="Draft too large")
@@ -179,8 +194,8 @@ def put_draft(
 
 @app.get("/problems")
 def problems(
-    page: int = 1,
-    page_size: int = 0,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=0, le=500)] = 0,
     session_id: Annotated[str, Depends(current_session)] = None,
 ) -> dict[str, Any]:
     """List problems, optionally paginated.
@@ -216,8 +231,12 @@ def problems(
 def problem(slug: str, session_id: Annotated[str, Depends(current_session)] = None) -> dict[str, Any]:
     try:
         return public_problem(load_problem(slug))
-    except (ProblemError, OSError, ValueError) as error:
+    except ProblemError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except (OSError, ValueError):
+        # ProblemError carries the user-facing reason; raw OSError text can
+        # leak server paths, so keep it generic.
+        raise HTTPException(status_code=404, detail="Problem could not be loaded") from error
 
 
 def _validate_language(problem_data: dict[str, Any], language: str) -> None:
@@ -315,6 +334,9 @@ def submit(request: SubmitRequest, session_id: Annotated[str, Depends(current_se
     except ProblemError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 
+    # Capture the storage scope before judging: a session that idle-expires
+    # mid-judge still keeps its submission under the scope it ran under.
+    scope = scope_key(session_id)
     results = _run_judge(problem_data, request.language, request.code, cases, public_count)
     summary = _summarize(results)
     summary["reference_runtime_ms"] = _reference_runtime_ms(
@@ -329,7 +351,7 @@ def submit(request: SubmitRequest, session_id: Annotated[str, Depends(current_se
         summary["total"],
         summary["runtime_ms"],
         results,
-        scope_key(session_id),
+        scope,
     )
     summary["submission_id"] = submission_id
     return summary

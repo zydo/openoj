@@ -1,6 +1,6 @@
 # OpenOJ
 
-OpenOJ is a single-user, containerized coding judge with a LeetCode-style
+OpenOJ is a containerized coding judge with a LeetCode-style
 class-and-method workflow. It runs untrusted Python 3.14.7, Java 21.0.12,
 C++20 with G++ 14.2.0, TypeScript 7.0.2 on Node 22.23.2, JavaScript on
 Node 22.23.2, Go 1.24.4, and Rust 1.85.0 submissions, keeps problem packages
@@ -22,8 +22,10 @@ OPENOJ_PORT=9090 docker compose up --build
 The editor uses Monaco's language services and local worker bundles, so grammar
 highlighting, bracket matching, and indentation guides do not depend on a CDN.
 The first visit follows the operating system's light/dark preference; the
-header toggle saves an explicit browser-local override. Draft code is also
-saved in browser storage. Submitted code and verdict history are stored in the
+header toggle saves an explicit browser-local override. Visitors work in
+ephemeral guest sessions: editor drafts are stored server-side per session
+and survive refreshes, and both drafts and submission history are scoped to
+the session (idle-expiring after an hour). Submission records persist in the
 `openoj_data` volume.
 
 ## Problem packages
@@ -84,8 +86,8 @@ Accepted forms:
   tag (`release/v2`-style refs work).
 - `https://host/owner/name.git[#ref]` (or `http://`) — a full git URL, pinned
   via a `#ref` fragment.
-- `git@host:owner/name.git` — an SSH git URL (read access to the API
-  container's deploy key required).
+- `git@host:owner/name.git` — an SSH git URL (read access to the
+  fetcher container's deploy key required).
 - `/abs/path`, `./rel`, `../rel`, `~/rel`, `file:///abs/path` — a local
   directory. Relative and home paths resolve inside the `api` container, so
   pair them with a bind mount.

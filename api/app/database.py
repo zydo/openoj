@@ -84,6 +84,8 @@ def initialize_database() -> None:
 def connect() -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(DATABASE_PATH, timeout=5)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA synchronous=NORMAL")
     try:
         yield connection
         connection.commit()
@@ -179,7 +181,8 @@ def create_session() -> str:
 
 def validate_session(session_id: str) -> str | None:
     """Return the session id if it exists and is not idle-expired (touching
-    its last-seen clock); otherwise None. Expired sessions are purged."""
+    its last-seen clock at most once a minute, so reads do not write on every
+    request); otherwise None. Expired sessions are purged."""
     now = time.time()
     cutoff = now - SESSION_IDLE_SECONDS
     with connect() as connection:
@@ -191,7 +194,8 @@ def validate_session(session_id: str) -> str | None:
         if row["last_seen_at"] < cutoff:
             _purge_session(connection, session_id)
             return None
-        connection.execute("UPDATE sessions SET last_seen_at = ? WHERE id = ?", (now, session_id))
+        if now - row["last_seen_at"] > 60:
+            connection.execute("UPDATE sessions SET last_seen_at = ? WHERE id = ?", (now, session_id))
     return session_id
 
 

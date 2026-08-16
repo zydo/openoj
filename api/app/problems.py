@@ -240,7 +240,7 @@ def parse_problem_markdown(
     limits = _json_object(sections["Limits"], "Limits")
     _require_exact_keys(limits, {"time_ms", "memory_mb", "output_kb"}, "Limits")
     if not all(isinstance(value, int) and value > 0 for value in limits.values()):
-        raise ProblemError("## Limits values must be positive integers")
+        raise ProblemError("Limits values must be positive integers")
 
     languages = _json_object(sections["Languages"], "Languages")
     if not languages:
@@ -304,11 +304,9 @@ def _level3_sections(text: str) -> list[tuple[str, str]]:
     lines = text.splitlines(keepends=True)
     headings = [(level, title, line) for level, title, line in _headings(text) if level == 3]
     sections = []
-    start_of_first = headings[0][2] if headings else 0
     for index, (_, title, line_number) in enumerate(headings):
         end = headings[index + 1][2] if index + 1 < len(headings) else len(lines)
         sections.append((title, "".join(lines[line_number + 1 : end]).strip("\n")))
-    del start_of_first
     return sections
 
 
@@ -369,7 +367,7 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
     limits = problem_data["limits"]
     _require_exact_keys(limits, {"time_ms", "memory_mb", "output_kb"}, "Limits")
     if not all(isinstance(value, int) and value > 0 for value in limits.values()):
-        raise ProblemError("## Limits values must be positive integers")
+        raise ProblemError("Limits values must be positive integers")
 
     # statement.md: '# Title', '## Description' (with ### Example N and
     # ### Constraints), optional '## Hints' with ### Hint N.
@@ -597,10 +595,8 @@ def public_problem(problem: dict[str, Any]) -> dict[str, Any]:
         "invocation", "limits", "languages", "public_cases",
     }
     result = {key: value for key, value in problem.items() if key in allowed}
-    result["languages"] = {
-        key: copy.deepcopy(config)
-        for key, config in result["languages"].items()
-    }
+    # The loader already returns a private copy per call, so the languages
+    # map can pass through without another deepcopy.
     invocation = result["invocation"]
     public_cases = []
     for index, case in enumerate(result["public_cases"]):

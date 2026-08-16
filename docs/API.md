@@ -2,8 +2,11 @@
 
 The judge's full surface — the same API the web UI uses — available to
 scripted callers. Every endpoint except health requires a **guest session**;
-there is no other auth until accounts exist, so treat any deployment's API as
-public and rate-limit at the edge if you expose it.
+hidden account endpoints exist for the future UI (`POST /auth/register`
+bootstraps the fixed-name `admin` on a fresh install and then closes,
+`POST /auth/login` binds the session to a user whose drafts and submissions
+then live under the user id, `POST /auth/logout` unbinds). Treat any
+deployment's API as public and rate-limit at the edge if you expose it.
 
 ## Base URL
 
@@ -61,7 +64,7 @@ curl -b jar.txt https://openoj.dongziyu.com/api/problems/two-sum
 `invocation` describes the judge contract: parameter names/types (`integer`
 with `bits`, `number`, `string`, `boolean`, `array`, `linked_list`,
 `binary_tree`), the return type, and `comparison` — `exact`, `sorted`,
-`multiset`, or `close` (floats compared per-scalar within 1e-9 relative
+`multiset`, `set`, or `close` (floats compared per-scalar within 1e-9 relative
 tolerance; `{"mode":"close","tolerance":…}` customizes it in the problem
 source). For `type: "design"` problems, cases carry LeetCode-style
 `actions`/`params` sequences instead of a positional argument list.
