@@ -27,6 +27,7 @@ from .judge import RunnerUnavailable, execute
 from .models import RunRequest, SubmitRequest
 from .problems import (
     LANGUAGE_REGISTRY,
+    safe_problem_path,
     ProblemError,
     list_problems,
     load_all_cases,
@@ -168,6 +169,23 @@ def _validate_draft_keys(slug: str, language: str) -> None:
         raise HTTPException(status_code=400, detail="Unknown problem")
     if language not in LANGUAGE_REGISTRY:
         raise HTTPException(status_code=400, detail="Unknown language")
+
+
+FIGURE_NAME = re.compile(r"^[a-z0-9-]+\.svg$")
+
+
+@app.get("/problems/{slug}/figures/{figure}")
+def problem_figure(slug: str, figure: str, session_id: Annotated[str, Depends(current_session)] = None) -> Response:
+    """Serve a bundle's redrawn statement figures (figures/<name>.svg)."""
+    if FIGURE_NAME.fullmatch(figure) is None:
+        raise HTTPException(status_code=404, detail="Figure not found")
+    try:
+        path = safe_problem_path(slug) / "figures" / figure
+    except ProblemError:
+        raise HTTPException(status_code=404, detail="Problem not found") from None
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Figure not found")
+    return Response(content=path.read_bytes(), media_type="image/svg+xml")
 
 
 @app.get("/drafts/{slug}")

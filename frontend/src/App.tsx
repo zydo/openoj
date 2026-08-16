@@ -542,7 +542,23 @@ function App() {
                 </div>
               </div>
               <div className="markdown-body">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{problem.description}</ReactMarkdown>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    // Statement figures live beside the bundle (figures/*.svg)
+                    // and are served by the API; rewrite the relative refs.
+                    img: ({ src, alt }) => (
+                      <img
+                        className="statement-figure"
+                        src={typeof src === "string" && src.startsWith("figures/")
+                          ? `/api/problems/${problem.slug}/${src}`
+                          : src}
+                        alt={alt ?? ""}
+                        loading="lazy"
+                      />
+                    ),
+                  }}
+                >{problem.description}</ReactMarkdown>
               </div>
               <section className="hints">
                 <h2>Hints</h2>

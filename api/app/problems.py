@@ -495,7 +495,7 @@ def _load_path(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
     return copy.deepcopy(_cached_problem(str(path), stat.st_mtime_ns, stat.st_size))
 
 
-def _safe_problem_path(slug: str) -> Path:
+def safe_problem_path(slug: str) -> Path:
     if SLUG.fullmatch(slug) is None:
         raise ProblemError("Invalid problem slug")
     matches = []
@@ -521,7 +521,7 @@ def _safe_problem_path(slug: str) -> Path:
 
 
 def load_problem(slug: str) -> dict[str, Any]:
-    problem, cases, public_count = _load_path(_safe_problem_path(slug))
+    problem, cases, public_count = _load_path(safe_problem_path(slug))
     problem["public_cases"] = [
         {**case, "name": case.get("name", f"Example {index + 1}")}
         for index, case in enumerate(cases[:public_count])
@@ -530,7 +530,7 @@ def load_problem(slug: str) -> dict[str, Any]:
 
 
 def load_all_cases(slug: str) -> tuple[list[dict[str, Any]], int]:
-    _, cases, public_count = _load_path(_safe_problem_path(slug))
+    _, cases, public_count = _load_path(safe_problem_path(slug))
     named_cases = [
         {
             **case,
@@ -561,7 +561,7 @@ def load_reference_solutions(slug: str, language: str) -> list[tuple[str, str]]:
     """Every reference solution for a language as (variant, code) pairs —
     the canonical `solution.<ext>` plus any named `solution_<variant>.<ext>`
     siblings. The canonical solution sorts first."""
-    path = _safe_problem_path(slug)
+    path = safe_problem_path(slug)
     if not path.is_dir():
         return []
     extension = LANGUAGE_EXTENSION.get(language)
