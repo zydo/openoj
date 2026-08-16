@@ -506,7 +506,7 @@ function App() {
     return <GuestGate expired={sessionExpired} error={gateError} needsSetup={needsSetup} onEnter={enterAsGuest} onRegister={registerAccount} onLogin={loginAccount} theme={theme} onToggleTheme={toggleTheme} />;
   }
   if (loadError) return <FullPageMessage icon={<CircleAlert />} title="OpenOJ could not load" detail={loadError} />;
-  if (activeSlug === null) return <Landing theme={theme} onToggleTheme={toggleTheme} onOpen={openProblem} />;
+  if (activeSlug === null) return <Landing theme={theme} onToggleTheme={toggleTheme} onOpen={openProblem} onLogout={logoutAccount} />;
   if (problemsError && allProblems === null) {
     return <FullPageMessage icon={<CircleAlert />} title="The problem set could not load" detail={problemsError} />;
   }
@@ -557,13 +557,7 @@ function App() {
           </button>
         </div>
 <div className="topbar-right">
-          <span className="session-user" title={sessionUser ? (sessionUser.is_admin ? "Admin account" : "Signed-in account") : "Guest session"}>
-            <span className={sessionUser?.is_admin ? "user-dot admin" : "user-dot"} />
-            {sessionUser ? sessionUser.username : "guest"}
-            <button className="gate-link logout-link" onClick={logoutAccount}>
-              {sessionUser ? "Log out" : "Exit"}
-            </button>
-          </span>
+          <button className="topbar-logout" onClick={logoutAccount} title={sessionUser ? "Log out of this account" : "Exit this guest session"}>Logout</button>
           <a
             className="icon-button github-link"
             href="https://github.com/zydo/openoj"
@@ -968,10 +962,11 @@ function pageNumbers(current: number, pages: number): Array<number | "ellipsis-s
   return numbers;
 }
 
-function Landing({ theme, onToggleTheme, onOpen }: {
+function Landing({ theme, onToggleTheme, onOpen, onLogout }: {
   theme: Theme;
   onToggleTheme: () => void;
   onOpen: (slug: string) => void;
+  onLogout: () => void;
 }) {
   const [items, setItems] = useState<ProblemSummary[]>([]);
   const [total, setTotal] = useState(0);
@@ -1044,6 +1039,7 @@ function Landing({ theme, onToggleTheme, onOpen }: {
           </button>
         </div>
         <div className="topbar-right">
+          <button className="topbar-logout" onClick={onLogout} title="Exit this session">Logout</button>
           <a
             className="icon-button github-link"
             href="https://github.com/zydo/openoj"
