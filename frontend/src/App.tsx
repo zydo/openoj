@@ -616,7 +616,7 @@ function App() {
                 loading={<div className="editor-loading"><LoaderCircle className="spin" size={18} /> Loading syntax engine…</div>}
                 options={{
                   automaticLayout: true,
-                  fontFamily: "JetBrains Mono, ui-monospace, monospace",
+                  fontFamily: "Roboto Mono, ui-monospace, monospace",
                   fontSize: 14,
                   fontLigatures: true,
                   lineHeight: 23,
