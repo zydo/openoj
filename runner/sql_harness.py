@@ -19,7 +19,7 @@ def _json_safe_rows(rows) -> list:
             if isinstance(value, bytes):
                 raise ValueError("BLOB columns are not supported")
             if isinstance(value, float) and value != value:
-                raise ValueError("NULL is not a valid SQL result value")
+                raise ValueError("NaN is not a valid SQL result value")
             values.append(value)
         safe.append(values)
     return safe
@@ -27,14 +27,12 @@ def _json_safe_rows(rows) -> list:
 
 def main() -> None:
     response: dict
-    captured: list[str] = []
     try:
         payload = json.load(sys.stdin)
         invocation = payload["invocation"]
         case_setup = payload["input"][0] if payload.get("input") else ""
         schema = invocation.get("sql", {}).get("schema", "")
         connection = sqlite3.connect(":memory:")
-        connection.execute("PRAGMA query_only = 0")
         if schema.strip():
             connection.executescript(schema)
         if case_setup.strip():
@@ -48,7 +46,7 @@ def main() -> None:
         response = {
             "status": "runtime_error",
             "error": f"SQL error: {error}"[:1000],
-            "stdout": "\n".join(captured),
+            "stdout": "",
         }
     except BaseException as error:
         if isinstance(error, (KeyboardInterrupt, SystemExit)):
@@ -56,7 +54,7 @@ def main() -> None:
         response = {
             "status": "runtime_error",
             "error": f"{type(error).__name__}: {error}"[:1000],
-            "stdout": "\n".join(captured),
+            "stdout": "",
         }
     emit_protocol(PROTOCOL_PREFIX + json.dumps(response, allow_nan=False, separators=(",", ":")))
 

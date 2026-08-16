@@ -9,7 +9,6 @@ from .python3 import Python3Executor
 class SqlExecutor(Python3Executor):
     """SQLite SELECT-query executor sharing the Python runtime plugin."""
 
-    encode_case_with_limits = True
     language = "sql"
     harness_path = Path("/runner/sql_harness.py")
 

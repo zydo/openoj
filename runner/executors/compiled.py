@@ -106,7 +106,7 @@ class CompiledExecutor:
             os.chown(job_root, supervisor_uid, supervisor_gid)
             job_root.chmod(0o700)
 
-        if process is None or process.returncode != 0:
+        if process.returncode != 0:
             raise ExecutorError(
                 f"Compilation failed\n{diagnostic}" if diagnostic else "Compilation failed"
             )

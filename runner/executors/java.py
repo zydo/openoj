@@ -135,7 +135,7 @@ class JavaExecutor:
         finally:
             os.chown(job_root, supervisor_uid, supervisor_gid)
             job_root.chmod(0o700)
-        if process is None or process.returncode != 0:
+        if process.returncode != 0:
             diagnostic = (
                 compiler_output.decode("utf-8", errors="replace")[-16_384:].strip()
                 if "compiler_output" in locals()
