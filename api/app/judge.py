@@ -86,7 +86,7 @@ def _compare(actual: Any, expected: Any, comparison: Any) -> bool:
     # element is a distribution spec compared against the harness frequency
     # table while every other element stays exact.
     if isinstance(expected, list) and any(
-        isinstance(element, dict) and element.get("mode") in {"distribution", "any_of"}
+        isinstance(element, dict) and element.get("mode") in {"distribution", "any_of", "opaque"}
         for element in expected
     ):
         return (
@@ -100,6 +100,11 @@ def _compare(actual: Any, expected: Any, comparison: Any) -> bool:
     # LeetCode accepts either key when two share the extreme count.
     if isinstance(expected, dict) and expected.get("mode") == "any_of":
         return any(_compare(actual, candidate, comparison) for candidate in expected.get("values", []))
+    # {"mode": "opaque"} accepts any value: the slot is an intermediate whose
+    # format the problem deliberately leaves free (a serialize call whose
+    # output only has to round-trip back through deserialize).
+    if isinstance(expected, dict) and expected.get("mode") == "opaque":
+        return True
     if comparison == "exact":
         return actual == expected
     if comparison == "close" or (

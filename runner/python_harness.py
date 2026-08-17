@@ -84,13 +84,47 @@ def _canonical_key(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def _method_codecs(invocation: dict[str, Any]) -> dict[str, tuple[list[str], str]]:
+    """Per-method (parameter codecs, return codec) from the manifest, so a
+    design method can take or return a ListNode/TreeNode just like a
+    function-invocation problem does."""
+    table: dict[str, tuple[list[str], str]] = {}
+    for method in invocation.get("methods", []):
+        parameter_codecs = [
+            parameter.get("codec", "json") for parameter in method.get("parameters", [])
+        ]
+        table[method["name"]] = (parameter_codecs, method.get("return_codec", "json"))
+    return table
+
+
+def _resolve_pipe(value: Any, output: list[Any]) -> Any:
+    """{"$prev": i} feeds action i's own return value straight back in, so a
+    round-trip pair (serialize then deserialize) can be judged without
+    pinning the intermediate format."""
+    if isinstance(value, dict) and set(value) == {"$prev"}:
+        return output[int(value["$prev"])]
+    return value
+
+
 def _invoke_design(module, invocation: dict[str, Any], raw_input: Any) -> Any:
     actions = raw_input["actions"]
     params = raw_input["params"]
     if not actions or len(actions) != len(params):
         raise ValueError("Design input requires equally sized actions and params")
-    instance = getattr(module, invocation["class_name"])(*params[0])
+    codecs = _method_codecs(invocation)
+    constructor_codecs = [
+        parameter.get("codec", "json")
+        for parameter in invocation.get("constructor", {}).get("parameters", [])
+    ]
+    constructor_arguments = [
+        decode(value, constructor_codecs[index] if index < len(constructor_codecs) else "json")
+        for index, value in enumerate(params[0])
+    ]
+    instance = getattr(module, invocation["class_name"])(*constructor_arguments)
     output = [None]
+    # Raw (undecoded, unencoded) returns feed piped arguments, so a piped
+    # value crosses methods as the live object rather than its wire form.
+    raw_output: list[Any] = [None]
     for action, arguments in zip(actions[1:], params[1:]):
         # A repeated action ({"call": name, "repeat": K}) is a randomized
         # method under statistical judging: the harness invokes it K times
@@ -101,13 +135,25 @@ def _invoke_design(module, invocation: dict[str, Any], raw_input: Any) -> Any:
         if isinstance(action, dict):
             repeat = int(action.get("repeat", 1))
             action = action["call"]
+        parameter_codecs, return_codec = codecs.get(action, ([], "json"))
+        decoded = [
+            _resolve_pipe(argument, raw_output)
+            if isinstance(argument, dict) and set(argument) == {"$prev"}
+            else decode(argument, parameter_codecs[index] if index < len(parameter_codecs) else "json")
+            for index, argument in enumerate(arguments)
+        ]
         if repeat <= 1:
-            output.append(getattr(instance, action)(*arguments))
+            value = getattr(instance, action)(*decoded)
+            raw_output.append(value)
+            output.append(encode(value, return_codec))
             continue
         counts: dict[str, int] = {}
+        last = None
         for _ in range(repeat):
-            key = _canonical_key(getattr(instance, action)(*arguments))
+            last = getattr(instance, action)(*decoded)
+            key = _canonical_key(encode(last, return_codec))
             counts[key] = counts.get(key, 0) + 1
+        raw_output.append(last)
         output.append(counts)
     return output
 

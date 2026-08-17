@@ -95,7 +95,7 @@ public final class OpenOJJavaHarness {
         Class<?> targetClass = Class.forName(className);
         String type = invocation.getOrDefault("type", "function").toString();
         if ("design".equals(type)) {
-            return invokeDesign(targetClass, rawInput);
+            return invokeDesign(targetClass, invocation, rawInput);
         }
         if ("interactive".equals(type)) {
             return invokeInteractive(targetClass, invocation, rawInput);
@@ -302,7 +302,41 @@ public final class OpenOJJavaHarness {
         throw new IllegalArgumentException("Expected a JSON number but found: " + value);
     }
 
-    private static Object invokeDesign(Class<?> targetClass, Object rawInput) throws Exception {
+    /** Per-method (parameter codecs, return codec) from the manifest. */
+    private static Map<String, Object[]> methodCodecs(Map<String, Object> invocation) {
+        Map<String, Object[]> table = new LinkedHashMap<>();
+        Object declared = invocation.get("methods");
+        if (!(declared instanceof List<?> methods)) {
+            return table;
+        }
+        for (Object entry : methods) {
+            if (!(entry instanceof Map<?, ?> method)) {
+                continue;
+            }
+            List<String> parameterCodecs = new ArrayList<>();
+            if (method.get("parameters") instanceof List<?> parameters) {
+                for (Object parameter : parameters) {
+                    String codec = "json";
+                    if (parameter instanceof Map<?, ?> spec && spec.get("codec") != null) {
+                        codec = spec.get("codec").toString();
+                    }
+                    parameterCodecs.add(codec);
+                }
+            }
+            Object returnCodec = method.get("return_codec");
+            table.put(
+                asString(method.get("name"), "Method name must be a string"),
+                new Object[] { parameterCodecs, returnCodec == null ? "json" : returnCodec.toString() }
+            );
+        }
+        return table;
+    }
+
+    private static Object invokeDesign(
+        Class<?> targetClass,
+        Map<String, Object> invocation,
+        Object rawInput
+    ) throws Exception {
         Map<String, Object> designInput = asMap(rawInput, "Design input must be an object");
         List<Object> actions = asList(designInput.get("actions"), "Design actions must be a list");
         List<Object> params = asList(designInput.get("params"), "Design params must be a list");
@@ -310,6 +344,16 @@ public final class OpenOJJavaHarness {
             throw new IllegalArgumentException("Design actions and params must have the same non-zero length");
         }
         List<Object> constructorArguments = asList(params.get(0), "Constructor params must be a list");
+        if (invocation.get("constructor") instanceof Map<?, ?> constructorSpec
+            && constructorSpec.get("parameters") instanceof List<?> constructorParameters) {
+            for (int slot = 0; slot < constructorArguments.size() && slot < constructorParameters.size(); slot++) {
+                String codec = "json";
+                if (constructorParameters.get(slot) instanceof Map<?, ?> spec && spec.get("codec") != null) {
+                    codec = spec.get("codec").toString();
+                }
+                constructorArguments.set(slot, decodeCodec(constructorArguments.get(slot), codec));
+            }
+        }
         InvocationPlan<Constructor<?>> constructorPlan = findConstructor(targetClass, constructorArguments);
         Object instance;
         try {
@@ -318,8 +362,13 @@ public final class OpenOJJavaHarness {
             throw propagate(error.getTargetException());
         }
 
+        Map<String, Object[]> codecs = methodCodecs(invocation);
         List<Object> output = new ArrayList<>();
         output.add(null);
+        // Raw (undecoded, unencoded) returns feed piped arguments, so a piped
+        // value crosses methods as the live object rather than its wire form.
+        List<Object> rawOutput = new ArrayList<>();
+        rawOutput.add(null);
         for (int index = 1; index < actions.size(); index++) {
             String methodName;
             int repeat = 1;
@@ -335,27 +384,46 @@ public final class OpenOJJavaHarness {
             } else {
                 methodName = asString(actions.get(index), "Design action must be a string");
             }
+            Object[] methodCodec = codecs.getOrDefault(methodName, new Object[] { List.of(), "json" });
+            @SuppressWarnings("unchecked")
+            List<String> parameterCodecs = (List<String>) methodCodec[0];
+            String returnCodec = methodCodec[1].toString();
             List<Object> methodArguments = asList(params.get(index), "Method params must be a list");
+            for (int slot = 0; slot < methodArguments.size(); slot++) {
+                Object argument = methodArguments.get(slot);
+                // {"$prev": i} feeds action i's own return value straight back
+                // in, so a round-trip pair is judged without pinning the
+                // intermediate format.
+                if (argument instanceof Map<?, ?> pipe && pipe.size() == 1 && pipe.get("$prev") != null) {
+                    methodArguments.set(slot, rawOutput.get(numberValue(pipe.get("$prev")).intValue()));
+                } else if (slot < parameterCodecs.size()) {
+                    methodArguments.set(slot, decodeCodec(argument, parameterCodecs.get(slot)));
+                }
+            }
             InvocationPlan<Method> methodPlan = findMethod(targetClass, methodName, methodArguments);
             if (repeat <= 1) {
-                try {
-                    output.add(methodPlan.executable().invoke(instance, methodPlan.arguments()));
-                } catch (InvocationTargetException error) {
-                    throw propagate(error.getTargetException());
-                }
-                continue;
-            }
-            Map<String, Integer> counts = new LinkedHashMap<>();
-            for (int draw = 0; draw < repeat; draw++) {
                 Object value;
                 try {
                     value = methodPlan.executable().invoke(instance, methodPlan.arguments());
                 } catch (InvocationTargetException error) {
                     throw propagate(error.getTargetException());
                 }
-                String key = Json.stringify(value);
+                rawOutput.add(value);
+                output.add(encodeCodec(value, returnCodec));
+                continue;
+            }
+            Map<String, Integer> counts = new LinkedHashMap<>();
+            Object last = null;
+            for (int draw = 0; draw < repeat; draw++) {
+                try {
+                    last = methodPlan.executable().invoke(instance, methodPlan.arguments());
+                } catch (InvocationTargetException error) {
+                    throw propagate(error.getTargetException());
+                }
+                String key = Json.stringify(encodeCodec(last, returnCodec));
                 counts.merge(key, 1, Integer::sum);
             }
+            rawOutput.add(last);
             output.add(counts);
         }
         return output;
