@@ -16,7 +16,9 @@ from .typed import (
 class CppExecutor(CompiledExecutor):
     language = "cpp"
     address_space_overhead_mb = 0
-    max_processes = 16
+    # Room for clang/lld worker threads under parallel linking; the compiler
+    # is trusted toolchain code, unlike the 16-process runtime sandbox.
+    max_processes = 32
     compiler_path = "/usr/bin/g++"
     benchmark_command = ("/runner/benchmarks/cpp",)
     reference_benchmark_ms = 18.0

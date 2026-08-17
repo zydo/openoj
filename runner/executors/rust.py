@@ -34,7 +34,12 @@ def _read_expression(spec: dict[str, Any], reader: str = "openoj_reader") -> str
 class RustExecutor(CompiledExecutor):
     language = "rust"
     address_space_overhead_mb = 0
-    max_processes = 16
+    # rustc's parallel codegen spawns one worker thread per CPU; each thread
+    # counts against RLIMIT_NPROC, so larger submissions ICE with "failed to
+    # spawn work thread" unless the cap sits well above the thread count.
+    # This bounds the trusted compiler only — user code still runs under the
+    # 16-process runtime sandbox.
+    max_processes = 48
     compiler_memory_mb = 2048
     # rustc's first link on a cold page cache easily exceeds the shared
     # 10-second budget; the worker pre-warms the toolchain at startup so this
