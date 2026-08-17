@@ -5,6 +5,18 @@ import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 // grammar shape is all this file needs from it.
 // @ts-expect-error -- untyped ESM module
 import { language as pythonLanguage } from "monaco-editor/esm/vs/basic-languages/python/python.js";
+// @ts-expect-error -- untyped ESM module
+import { language as javaLanguage } from "monaco-editor/esm/vs/basic-languages/java/java.js";
+// @ts-expect-error -- untyped ESM module
+import { language as cppLanguage } from "monaco-editor/esm/vs/basic-languages/cpp/cpp.js";
+// @ts-expect-error -- untyped ESM module
+import { language as goLanguage } from "monaco-editor/esm/vs/basic-languages/go/go.js";
+// @ts-expect-error -- untyped ESM module
+import { language as rustLanguage } from "monaco-editor/esm/vs/basic-languages/rust/rust.js";
+// @ts-expect-error -- untyped ESM module
+import { language as typescriptLanguage } from "monaco-editor/esm/vs/basic-languages/typescript/typescript.js";
+// @ts-expect-error -- untyped ESM module
+import { language as javascriptLanguage } from "monaco-editor/esm/vs/basic-languages/javascript/javascript.js";
 import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 
 self.MonacoEnvironment = {
@@ -127,52 +139,154 @@ monaco.editor.defineTheme("openoj-light", {
   },
 });
 
-// Monaco's Python tokenizer labels every name `identifier`, so a class name,
-// a function name, and a parameter would all land on one color. Extend the
-// grammar with rules for `class X`, `def f`, call sites, and the built-in
-// type names, so Python reads with the same distinctions the other languages
-// get from their richer tokenizers.
-const PYTHON_TYPES = [
-  "int", "float", "str", "bool", "bytes", "complex", "list", "tuple", "dict",
-  "set", "frozenset", "object", "type", "List", "Dict", "Set", "Tuple",
-  "Optional", "Iterable", "Iterator", "Sequence", "Mapping", "Any", "Union",
-  "Callable", "Deque", "Counter", "DefaultDict", "TreeNode", "ListNode",
-  "Node", "NestedInteger", "GridMaster",
-];
+// Monaco's Monarch tokenizers label every name `identifier` and file the
+// built-in type names under `keywords`, so a class name, a function name, a
+// parameter, and `int` would all land on two colors. Each language's grammar
+// gets four rules prepended — a type declaration, a function declaration, a
+// call site, and the type-name list — which is what gives the editor the
+// same distinctions LeetCode shows.
+type Grammar = monaco.languages.IMonarchLanguage & {
+  tokenizer: Record<string, unknown[]>;
+};
 
-const pythonGrammar = {
-  ...pythonLanguage,
-  types: PYTHON_TYPES,
-  selfNames: ["self", "cls"],
-  tokenizer: {
-    ...pythonLanguage.tokenizer,
-    root: [
-      [/(class)(\s+)([A-Za-z_]\w*)/, ["keyword", "white", "type.identifier"]],
-      [/(def)(\s+)([A-Za-z_]\w*)/, ["keyword", "white", "entity.name.function"]],
-      [
-        /[a-zA-Z_]\w*(?=\s*\()/,
-        {
-          cases: {
-            "@types": "keyword.type",
-            "@keywords": "keyword",
-            "@default": "support.function",
-          },
-        },
-      ],
-      [
-        /[a-zA-Z_]\w*/,
-        {
-          cases: {
-            "@types": "keyword.type",
-            "@selfNames": "variable.language",
-            "@keywords": "keyword",
-            "@default": "identifier",
-          },
-        },
-      ],
-      ...pythonLanguage.tokenizer.root,
-    ],
+function enhance(
+  languageId: string,
+  base: Grammar,
+  options: {
+    types: string[];
+    typeDeclarations: string;
+    functionDeclarations: string;
+    selfNames?: string[];
   },
-} as monaco.languages.IMonarchLanguage;
+) {
+  const declaration = new RegExp(
+    `(${options.typeDeclarations})(\\s+)([A-Za-z_]\\w*)`,
+  );
+  const functionDeclaration = new RegExp(
+    `(${options.functionDeclarations})(\\s+)([A-Za-z_]\\w*)`,
+  );
+  const grammar = {
+    ...base,
+    openojTypes: options.types,
+    openojSelf: options.selfNames ?? [],
+    tokenizer: {
+      ...base.tokenizer,
+      root: [
+        [declaration, ["keyword", "white", "type.identifier"]],
+        [functionDeclaration, ["keyword", "white", "entity.name.function"]],
+        [
+          /[a-zA-Z_]\w*(?=\s*\()/,
+          {
+            cases: {
+              "@openojTypes": "keyword.type",
+              "@keywords": "keyword",
+              "@default": "support.function",
+            },
+          },
+        ],
+        [
+          /[a-zA-Z_]\w*/,
+          {
+            cases: {
+              "@openojTypes": "keyword.type",
+              "@openojSelf": "variable.language",
+              "@keywords": "keyword",
+              "@default": "identifier",
+            },
+          },
+        ],
+        ...base.tokenizer.root,
+      ],
+    },
+  } as monaco.languages.IMonarchLanguage;
+  monaco.languages.setMonarchTokensProvider(languageId, grammar);
+}
 
-monaco.languages.setMonarchTokensProvider("python", pythonGrammar);
+const JUDGE_TYPES = ["TreeNode", "ListNode", "Node", "NestedInteger", "GridMaster", "Solution"];
+
+enhance("python", pythonLanguage as Grammar, {
+  types: [
+    "int", "float", "str", "bool", "bytes", "complex", "list", "tuple", "dict",
+    "set", "frozenset", "object", "type", "List", "Dict", "Set", "Tuple",
+    "Optional", "Iterable", "Iterator", "Sequence", "Mapping", "Any", "Union",
+    "Callable", "Deque", "Counter", "DefaultDict", ...JUDGE_TYPES,
+  ],
+  typeDeclarations: "class",
+  functionDeclarations: "def",
+  selfNames: ["self", "cls"],
+});
+
+enhance("java", javaLanguage as Grammar, {
+  types: [
+    "int", "long", "short", "byte", "char", "boolean", "float", "double",
+    "void", "String", "Integer", "Long", "Double", "Boolean", "Character",
+    "Object", "List", "ArrayList", "LinkedList", "Map", "HashMap", "TreeMap",
+    "LinkedHashMap", "Set", "HashSet", "TreeSet", "LinkedHashSet", "Deque",
+    "ArrayDeque", "Queue", "PriorityQueue", "Stack", "Arrays", "Collections",
+    "Math", "StringBuilder", "Comparator", "Optional", "Iterator", "Number",
+    ...JUDGE_TYPES,
+  ],
+  typeDeclarations: "class|interface|enum|record",
+  functionDeclarations: "(?!)",
+  selfNames: ["this", "super"],
+});
+
+enhance("cpp", cppLanguage as Grammar, {
+  types: [
+    "int", "long", "short", "char", "bool", "float", "double", "void",
+    "size_t", "int64_t", "int32_t", "uint64_t", "uint32_t", "string",
+    "vector", "map", "unordered_map", "set", "unordered_set", "multiset",
+    "pair", "tuple", "deque", "queue", "priority_queue", "stack", "array",
+    "list", "unique_ptr", "shared_ptr", "function", "optional",
+    ...JUDGE_TYPES,
+  ],
+  typeDeclarations: "class|struct|union|enum",
+  functionDeclarations: "(?!)",
+  selfNames: ["this"],
+});
+
+enhance("go", goLanguage as Grammar, {
+  types: [
+    "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16",
+    "uint32", "uint64", "uintptr", "float32", "float64", "complex64",
+    "complex128", "byte", "rune", "string", "bool", "error", "any",
+    ...JUDGE_TYPES,
+  ],
+  typeDeclarations: "type",
+  functionDeclarations: "func",
+});
+
+enhance("typescript", typescriptLanguage as Grammar, {
+  types: [
+    "number", "string", "boolean", "void", "any", "unknown", "never",
+    "object", "bigint", "symbol", "Array", "Map", "Set", "Promise", "Record",
+    "Readonly", "Partial", "Date", "RegExp", "Math", "JSON", "BigInt",
+    ...JUDGE_TYPES,
+  ],
+  typeDeclarations: "class|interface|enum|type",
+  functionDeclarations: "function",
+  selfNames: ["this"],
+});
+
+enhance("javascript", javascriptLanguage as Grammar, {
+  types: [
+    "Array", "Map", "Set", "Promise", "Date", "RegExp", "Math", "JSON",
+    "Number", "String", "Boolean", "Object", "BigInt", ...JUDGE_TYPES,
+  ],
+  typeDeclarations: "class",
+  functionDeclarations: "function",
+  selfNames: ["this"],
+});
+
+enhance("rust", rustLanguage as Grammar, {
+  types: [
+    "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64",
+    "u128", "usize", "f32", "f64", "bool", "char", "str", "String", "Vec",
+    "VecDeque", "HashMap", "HashSet", "BTreeMap", "BTreeSet", "BinaryHeap",
+    "Option", "Result", "Box", "Rc", "RefCell", "Ordering", "Reverse",
+    ...JUDGE_TYPES,
+  ],
+  typeDeclarations: "struct|enum|trait|impl|type",
+  functionDeclarations: "fn",
+  selfNames: ["self", "Self"],
+});
