@@ -18,6 +18,7 @@ import {
   History,
   List,
   LoaderCircle,
+  LogOut,
   Play,
   Plus,
   RotateCcw,
@@ -358,10 +359,12 @@ function App() {
     setProblemListOpen(false);
   }, [activeSlug]);
 
-  // Load the active problem. Keyed on the URL-derived activeSlug, so opening a
-  // problem, deep-linking to one, and back/forward navigation all go through
-  // the same path.
+  // Load the active problem. Keyed on the URL-derived activeSlug and on the
+  // session phase: after an idle expiry the fetch that failed with 401 left a
+  // stale load error, and re-entering (guest or login) must reload the
+  // problem under the fresh session rather than showing it.
   useEffect(() => {
+    if (sessionPhase !== "active") return;
     if (!activeSlug) {
       setProblem(null);
       setProblemListOpen(false);
@@ -406,7 +409,7 @@ function App() {
       if (!cancelled) setLoadError(error.message);
     });
     return () => { cancelled = true; };
-  }, [activeSlug, ensureProblems]);
+  }, [activeSlug, ensureProblems, sessionPhase]);
 
   const refreshSubmissions = useCallback(() => {
     if (!problem) return;
@@ -557,7 +560,6 @@ function App() {
           </button>
         </div>
 <div className="topbar-right">
-          <button className="topbar-logout" onClick={logoutAccount} title={sessionUser ? "Log out of this account" : "Exit this guest session"}>Logout</button>
           <a
             className="icon-button github-link"
             href="https://github.com/zydo/openoj"
@@ -568,6 +570,14 @@ function App() {
           >
             <Github size={16} />
           </a>
+          <button
+            className="icon-button"
+            onClick={logoutAccount}
+            title={sessionUser ? "Log out" : "Exit session"}
+            aria-label={sessionUser ? "Log out" : "Exit session"}
+          >
+            <LogOut size={16} />
+          </button>
           <button
             className="icon-button theme-toggle"
             onClick={toggleTheme}
@@ -1039,7 +1049,6 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout }: {
           </button>
         </div>
         <div className="topbar-right">
-          <button className="topbar-logout" onClick={onLogout} title="Exit this session">Logout</button>
           <a
             className="icon-button github-link"
             href="https://github.com/zydo/openoj"
@@ -1050,6 +1059,14 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout }: {
           >
             <Github size={16} />
           </a>
+          <button
+            className="icon-button"
+            onClick={onLogout}
+            title="Exit session"
+            aria-label="Exit session"
+          >
+            <LogOut size={16} />
+          </button>
           <button
             className="icon-button theme-toggle"
             onClick={onToggleTheme}

@@ -13,13 +13,37 @@ self.MonacoEnvironment = {
 loader.config({ monaco });
 
 // Blend Monaco into the app's surfaces instead of letting its default gray
-// slab float inside the editor panel. Token colors are inherited from the
-// built-in themes; only the chrome (background, line highlight, selection,
-// gutter, line numbers, scrollbar) is recolored to match styles.css tokens.
+// slab float inside the editor panel. Token rules apply the classic VS Dark+
+// palette (the scheme LeetCode, GitHub, and VS Code all made familiar) so
+// every language reads with full color variety: keywords, types, functions,
+// parameters, numbers, strings, and comments each get their own hue.
 monaco.editor.defineTheme("openoj-dark", {
   base: "vs-dark",
   inherit: true,
-  rules: [],
+  rules: [
+    { token: "keyword", foreground: "c586c0" },
+    { token: "keyword.flow", foreground: "c586c0" },
+    { token: "keyword.control", foreground: "c586c0" },
+    { token: "keyword.operator", foreground: "d4d4d4" },
+    { token: "keyword.operator.logical", foreground: "569cd6" },
+    { token: "type.identifier", foreground: "4ec9b0" },
+    { token: "entity.name.type", foreground: "4ec9b0" },
+    { token: "support.class", foreground: "4ec9b0" },
+    { token: "support.type", foreground: "4ec9b0" },
+    { token: "keyword.type", foreground: "4ec9b0" },
+    { token: "entity.name.function", foreground: "dcdcaa" },
+    { token: "support.function", foreground: "dcdcaa" },
+    { token: "variable.parameter", foreground: "9cdcfe" },
+    { token: "variable", foreground: "9cdcfe" },
+    { token: "variable.other", foreground: "9cdcfe" },
+    { token: "identifier", foreground: "9cdcfe" },
+    { token: "number", foreground: "b5cea8" },
+    { token: "string", foreground: "ce9178" },
+    { token: "string.escape", foreground: "d7ba7d" },
+    { token: "comment", foreground: "6a9955" },
+    { token: "constant", foreground: "4fc1ff" },
+    { token: "delimiter", foreground: "d4d4d4" },
+  ],
   colors: {
     "editor.background": "#15191c",
     "editorGutter.background": "#15191c",
@@ -47,7 +71,28 @@ monaco.editor.defineTheme("openoj-dark", {
 monaco.editor.defineTheme("openoj-light", {
   base: "vs",
   inherit: true,
-  rules: [],
+  rules: [
+    { token: "keyword", foreground: "af00db" },
+    { token: "keyword.flow", foreground: "af00db" },
+    { token: "keyword.control", foreground: "af00db" },
+    { token: "keyword.operator", foreground: "000000" },
+    { token: "type.identifier", foreground: "267f99" },
+    { token: "entity.name.type", foreground: "267f99" },
+    { token: "support.class", foreground: "267f99" },
+    { token: "support.type", foreground: "267f99" },
+    { token: "keyword.type", foreground: "267f99" },
+    { token: "entity.name.function", foreground: "795e26" },
+    { token: "support.function", foreground: "795e26" },
+    { token: "variable.parameter", foreground: "001080" },
+    { token: "variable", foreground: "001080" },
+    { token: "variable.other", foreground: "001080" },
+    { token: "identifier", foreground: "001080" },
+    { token: "number", foreground: "098658" },
+    { token: "string", foreground: "a31515" },
+    { token: "comment", foreground: "008000" },
+    { token: "constant", foreground: "0070c1" },
+    { token: "delimiter", foreground: "000000" },
+  ],
   colors: {
     "editor.background": "#ffffff",
     "editorGutter.background": "#ffffff",
