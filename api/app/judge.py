@@ -86,7 +86,7 @@ def _compare(actual: Any, expected: Any, comparison: Any) -> bool:
     # element is a distribution spec compared against the harness frequency
     # table while every other element stays exact.
     if isinstance(expected, list) and any(
-        isinstance(element, dict) and element.get("mode") == "distribution"
+        isinstance(element, dict) and element.get("mode") in {"distribution", "any_of"}
         for element in expected
     ):
         return (
@@ -96,6 +96,10 @@ def _compare(actual: Any, expected: Any, comparison: Any) -> bool:
         )
     if isinstance(expected, dict) and expected.get("mode") == "distribution":
         return _distribution_ok(actual, expected)
+    # {"mode": "any_of", "values": [...]} accepts any listed answer, the way
+    # LeetCode accepts either key when two share the extreme count.
+    if isinstance(expected, dict) and expected.get("mode") == "any_of":
+        return any(_compare(actual, candidate, comparison) for candidate in expected.get("values", []))
     if comparison == "exact":
         return actual == expected
     if comparison == "close" or (

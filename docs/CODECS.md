@@ -75,6 +75,31 @@ method invoked with `params[i]`. The recorded output starts with `null` (the
 constructor returns nothing); methods without a declared `return_type`
 contribute `null` slots. Offered in Python 3 and Java only.
 
+### Statistical judging of randomized methods
+
+A method whose LeetCode contract is "pick uniformly at random" cannot be
+compared against a single expected value, so an action may instead be
+`{"call": "getRandom", "repeat": 2000}`. The harness invokes the method
+that many times and reports a frequency table keyed by the canonical JSON
+of each returned value (`json.dumps(value, sort_keys=True,
+separators=(",", ":"))` in Python; `Json.stringify` in Java). The matching
+expected slot carries the distribution:
+
+```json
+{"mode": "distribution", "repeat": 2000, "tolerance": 0.12,
+ "probabilities": {"1": 0.5, "2": 0.5}}
+```
+
+The judge requires the observed total to equal `repeat`, every observed
+value to be a declared key, and each bucket to land inside the wider of
+`tolerance × expected` and 3.5 binomial standard deviations — a band that
+a correct sampler effectively never leaves while a biased one still
+fails. Buckets whose expected count falls below 10 merge into a single
+tail bucket. Exact and statistical slots mix freely in one case, so
+`insert`/`remove` stay exactly judged alongside a sampled `getRandom`.
+Case authors should size `repeat` so each bucket expects a few hundred
+draws or more.
+
 ## Interactive problems (`type: "interactive"`)
 
 The judge constructs an oracle from the case's hidden state and passes it to
@@ -113,3 +138,12 @@ named variants `solution_<variant>.<ext>` (e.g. `solution_dfs.py`,
   recursively through nested arrays/objects; structure must still match.
   `{"mode": "close", "tolerance": …}` customizes the tolerance in the
   problem source.
+
+Two modes live in the expected value rather than the invocation, so a
+single case can mix them with exactly-judged slots:
+
+- `{"mode": "any_of", "values": [...]}` — any listed answer passes. Used
+  where LeetCode itself accepts several results, e.g. `getMaxKey` when two
+  keys share the extreme count.
+- `{"mode": "distribution", ...}` — statistical judging of a randomized
+  method (see "Statistical judging of randomized methods" above).
