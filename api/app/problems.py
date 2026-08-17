@@ -429,6 +429,13 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
             "enabled": True,
             "starter": starter.rstrip("\n") + "\n",
         }
+    # One canonical language order everywhere (dropdowns, Solutions blocks):
+    # Python 3, Java, C++, Go, TypeScript, JavaScript, Rust, then anything
+    # else in first-seen order.
+    priority = ["python3", "java", "cpp", "go", "typescript", "javascript", "rust"]
+    ordered = [key for key in priority if key in languages]
+    ordered += [key for key in languages if key not in priority]
+    languages = {key: languages[key] for key in ordered}
     if not languages:
         raise ProblemError("Problem bundle needs at least one starter.* file")
 
