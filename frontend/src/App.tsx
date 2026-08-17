@@ -571,20 +571,20 @@ function App() {
             <Github size={16} />
           </a>
           <button
-            className="icon-button"
-            onClick={logoutAccount}
-            title={sessionUser ? "Log out" : "Exit session"}
-            aria-label={sessionUser ? "Log out" : "Exit session"}
-          >
-            <LogOut size={16} />
-          </button>
-          <button
             className="icon-button theme-toggle"
             onClick={toggleTheme}
             title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
             aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <button
+            className="icon-button"
+            onClick={logoutAccount}
+            title={sessionUser ? "Log out" : "Exit session"}
+            aria-label={sessionUser ? "Log out" : "Exit session"}
+          >
+            <LogOut size={16} />
           </button>
         </div>
       </header>
@@ -1060,20 +1060,20 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout }: {
             <Github size={16} />
           </a>
           <button
-            className="icon-button"
-            onClick={onLogout}
-            title="Exit session"
-            aria-label="Exit session"
-          >
-            <LogOut size={16} />
-          </button>
-          <button
             className="icon-button theme-toggle"
             onClick={onToggleTheme}
             title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
             aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <button
+            className="icon-button"
+            onClick={onLogout}
+            title="Exit session"
+            aria-label="Exit session"
+          >
+            <LogOut size={16} />
           </button>
         </div>
       </header>
