@@ -80,6 +80,10 @@ def _invoke_function(module, invocation: dict[str, Any], raw_input: Any) -> Any:
     return encode(actual, invocation.get("return_codec", "json"))
 
 
+def _canonical_key(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
 def _invoke_design(module, invocation: dict[str, Any], raw_input: Any) -> Any:
     actions = raw_input["actions"]
     params = raw_input["params"]
@@ -88,7 +92,23 @@ def _invoke_design(module, invocation: dict[str, Any], raw_input: Any) -> Any:
     instance = getattr(module, invocation["class_name"])(*params[0])
     output = [None]
     for action, arguments in zip(actions[1:], params[1:]):
-        output.append(getattr(instance, action)(*arguments))
+        # A repeated action ({"call": name, "repeat": K}) is a randomized
+        # method under statistical judging: the harness invokes it K times
+        # and reports a frequency table keyed by the canonical JSON of each
+        # returned value, which the judge compares against the expected
+        # distribution.
+        repeat = 1
+        if isinstance(action, dict):
+            repeat = int(action.get("repeat", 1))
+            action = action["call"]
+        if repeat <= 1:
+            output.append(getattr(instance, action)(*arguments))
+            continue
+        counts: dict[str, int] = {}
+        for _ in range(repeat):
+            key = _canonical_key(getattr(instance, action)(*arguments))
+            counts[key] = counts.get(key, 0) + 1
+        output.append(counts)
     return output
 
 

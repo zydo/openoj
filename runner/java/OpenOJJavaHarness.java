@@ -321,14 +321,42 @@ public final class OpenOJJavaHarness {
         List<Object> output = new ArrayList<>();
         output.add(null);
         for (int index = 1; index < actions.size(); index++) {
-            String methodName = asString(actions.get(index), "Design action must be a string");
+            String methodName;
+            int repeat = 1;
+            // A repeated action ({"call": name, "repeat": K}) is a randomized
+            // method under statistical judging: invoke K times, report the
+            // frequency table keyed by the canonical JSON of each value.
+            if (actions.get(index) instanceof Map<?, ?> actionMap) {
+                methodName = asString(actionMap.get("call"), "Repeated action needs a call name");
+                Object repeatSpec = actionMap.get("repeat");
+                if (repeatSpec != null) {
+                    repeat = numberValue(repeatSpec).intValue();
+                }
+            } else {
+                methodName = asString(actions.get(index), "Design action must be a string");
+            }
             List<Object> methodArguments = asList(params.get(index), "Method params must be a list");
             InvocationPlan<Method> methodPlan = findMethod(targetClass, methodName, methodArguments);
-            try {
-                output.add(methodPlan.executable().invoke(instance, methodPlan.arguments()));
-            } catch (InvocationTargetException error) {
-                throw propagate(error.getTargetException());
+            if (repeat <= 1) {
+                try {
+                    output.add(methodPlan.executable().invoke(instance, methodPlan.arguments()));
+                } catch (InvocationTargetException error) {
+                    throw propagate(error.getTargetException());
+                }
+                continue;
             }
+            Map<String, Integer> counts = new LinkedHashMap<>();
+            for (int draw = 0; draw < repeat; draw++) {
+                Object value;
+                try {
+                    value = methodPlan.executable().invoke(instance, methodPlan.arguments());
+                } catch (InvocationTargetException error) {
+                    throw propagate(error.getTargetException());
+                }
+                String key = Json.stringify(value);
+                counts.merge(key, 1, Integer::sum);
+            }
+            output.add(counts);
         }
         return output;
     }
