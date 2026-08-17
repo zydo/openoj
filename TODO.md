@@ -4,28 +4,30 @@ Items here are design decisions we have agreed to discuss or build later.
 Nothing on this page is in progress; when work starts, move it to the task
 list and delete it here.
 
-## Import the remaining Prime problems (17 of the original 55)
+## Import the remaining Prime problems (8 of the original 55; 828 live)
 
 BETTERCODE's 838 good problems = 790 Prime + 48 alternates. The original
-import took 735 Prime; 38 of the 55 skipped landed in batch 1 (821
-problems total now). Remaining 17:
+import took 735 Prime; 38 landed in batch 1 and the 7 random-output
+problems landed with statistical judging (828 total now). Remaining 8:
 
-**Random-output (7) — need the deterministic-modeling precedent of 381:**
-382 linked-list-random-node, 384 shuffle-an-array, 398 random-pick-index,
-497 random-point-in-non-overlapping-rectangles, 528 random-pick-with-weight,
-710 random-pick-with-blacklist (1157 online-majority-element-in-subarray too).
-(380 insert-delete-getrandom-o1 landed with the design batch.)
-
-**Interactive / hidden-API (7) — each needs a new oracle:**
+**Interactive / hidden-API (6) — each needs a new oracle:**
 489 robot-room-cleaner (Robot oracle), 843 guess-the-word (Master oracle),
 1095 find-in-mountain-array (MountainArray oracle),
 1428 leftmost-column-with-at-least-a-one (BinaryMatrix oracle),
 702 search-in-a-sorted-array-of-unknown-size (ArrayReader oracle),
 3023 find-pattern-in-infinite-stream-i (stream oracle).
-(1778 shortest-path-in-a-hidden-grid landed on the GridMaster oracle.)
 
 **Concurrency (2) — need multi-threading semantics in the judge:**
 1117 building-h2o, 1188 design-bounded-blocking-queue.
+
+## Multi-solution bundles
+
+The `solution_dfs`/`solution_bfs` convention is fully wired (judge,
+check.py, Solutions tab, fastest-variant baseline) with 0200 as the
+exemplar. Remaining: identify the problems with genuinely distinct
+equal-performance approaches (two-pointer vs hash, DP vs greedy,
+Union-Find vs BFS/DFS, patience vs DP for LIS, ...) and author the
+variant sets across all seven languages.
 
 ## User accounts (multi-user phase 2)
 
