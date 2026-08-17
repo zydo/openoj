@@ -1,6 +1,10 @@
 import { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
+// The basic-languages bundles ship without type declarations; the Monarch
+// grammar shape is all this file needs from it.
+// @ts-expect-error -- untyped ESM module
+import { language as pythonLanguage } from "monaco-editor/esm/vs/basic-languages/python/python.js";
 import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 
 self.MonacoEnvironment = {
@@ -34,10 +38,11 @@ monaco.editor.defineTheme("openoj-dark", {
     { token: "keyword.type", foreground: "79b8ff" },
     { token: "entity.name.function", foreground: "dcdcaa" },
     { token: "support.function", foreground: "dcdcaa" },
-    { token: "variable.parameter", foreground: "c9d1d9" },
-    { token: "variable", foreground: "c9d1d9" },
-    { token: "variable.other", foreground: "c9d1d9" },
-    { token: "identifier", foreground: "c9d1d9" },
+    { token: "variable.language", foreground: "569cd6" },
+    { token: "variable.parameter", foreground: "9cdcfe" },
+    { token: "variable", foreground: "9cdcfe" },
+    { token: "variable.other", foreground: "9cdcfe" },
+    { token: "identifier", foreground: "9cdcfe" },
     { token: "number", foreground: "79b8ff" },
     { token: "string", foreground: "a5d6ff" },
     { token: "string.escape", foreground: "d2b8ff" },
@@ -86,10 +91,11 @@ monaco.editor.defineTheme("openoj-light", {
     { token: "keyword.type", foreground: "2b6cb0" },
     { token: "entity.name.function", foreground: "b07d62" },
     { token: "support.function", foreground: "b07d62" },
-    { token: "variable.parameter", foreground: "24292e" },
-    { token: "variable", foreground: "24292e" },
-    { token: "variable.other", foreground: "24292e" },
-    { token: "identifier", foreground: "24292e" },
+    { token: "variable.language", foreground: "0000ff" },
+    { token: "variable.parameter", foreground: "001080" },
+    { token: "variable", foreground: "001080" },
+    { token: "variable.other", foreground: "001080" },
+    { token: "identifier", foreground: "001080" },
     { token: "number", foreground: "005cc5" },
     { token: "string", foreground: "0a3069" },
     { token: "string.escape", foreground: "032f62" },
@@ -120,3 +126,53 @@ monaco.editor.defineTheme("openoj-light", {
     "input.border": "#c3ced4",
   },
 });
+
+// Monaco's Python tokenizer labels every name `identifier`, so a class name,
+// a function name, and a parameter would all land on one color. Extend the
+// grammar with rules for `class X`, `def f`, call sites, and the built-in
+// type names, so Python reads with the same distinctions the other languages
+// get from their richer tokenizers.
+const PYTHON_TYPES = [
+  "int", "float", "str", "bool", "bytes", "complex", "list", "tuple", "dict",
+  "set", "frozenset", "object", "type", "List", "Dict", "Set", "Tuple",
+  "Optional", "Iterable", "Iterator", "Sequence", "Mapping", "Any", "Union",
+  "Callable", "Deque", "Counter", "DefaultDict", "TreeNode", "ListNode",
+  "Node", "NestedInteger", "GridMaster",
+];
+
+const pythonGrammar = {
+  ...pythonLanguage,
+  types: PYTHON_TYPES,
+  selfNames: ["self", "cls"],
+  tokenizer: {
+    ...pythonLanguage.tokenizer,
+    root: [
+      [/(class)(\s+)([A-Za-z_]\w*)/, ["keyword", "white", "type.identifier"]],
+      [/(def)(\s+)([A-Za-z_]\w*)/, ["keyword", "white", "entity.name.function"]],
+      [
+        /[a-zA-Z_]\w*(?=\s*\()/,
+        {
+          cases: {
+            "@types": "keyword.type",
+            "@keywords": "keyword",
+            "@default": "support.function",
+          },
+        },
+      ],
+      [
+        /[a-zA-Z_]\w*/,
+        {
+          cases: {
+            "@types": "keyword.type",
+            "@selfNames": "variable.language",
+            "@keywords": "keyword",
+            "@default": "identifier",
+          },
+        },
+      ],
+      ...pythonLanguage.tokenizer.root,
+    ],
+  },
+} as monaco.languages.IMonarchLanguage;
+
+monaco.languages.setMonarchTokensProvider("python", pythonGrammar);
