@@ -1352,7 +1352,13 @@ function SolutionBlock({ title, body, code, languages, slug, theme, selected, on
   selected: string | undefined;
   onSelect: (language: string) => void;
 }) {
-  const languageKeys = Object.keys(code);
+  // Same canonical order as the editor dropdown (problems.py orders the
+  // languages map the same way).
+  const priority = ["python3", "java", "cpp", "go", "typescript", "javascript", "rust"];
+  const languageKeys = Object.keys(code).sort((a, b) => {
+    const pa = priority.indexOf(a), pb = priority.indexOf(b);
+    return (pa === -1 ? priority.length : pa) - (pb === -1 ? priority.length : pb);
+  });
   const shown = selected && languageKeys.includes(selected) ? selected : languageKeys[0];
   const [copied, setCopied] = useState(false);
 
