@@ -153,8 +153,14 @@ public final class OpenOJJavaHarness {
                     budget
                 );
             case "ArrayReader":
+                // Kept for the pre-adaptation problem tree; see ADAPT.md.
                 return new InteractiveOracles.ArrayReader(
                     asList(state.get("arr"), "ArrayReader values must be a list"),
+                    budget
+                );
+            case "SequenceReader":
+                return new InteractiveOracles.SequenceReader(
+                    asList(state.get("arr"), "SequenceReader values must be a list"),
                     budget
                 );
             case "InfiniteStream":
@@ -190,6 +196,7 @@ public final class OpenOJJavaHarness {
                 };
             case "MountainArray":
             case "ArrayReader":
+            case "SequenceReader":
                 return new Object[] { numberValue(state.get("target")).intValue() };
             case "InfiniteStream":
                 return new Object[] {

@@ -71,21 +71,21 @@ The same reasoning fixes the test data:
 
 ## What we hold, and what each artifact needs
 
-| Artifact | Provenance | Action |
-| --- | --- | --- |
-| `statement.md` description, examples | Derived from LeetCode prose | **Rewrite from the spec.** New title, new statement, newly constructed examples |
-| `statement.md` constraints | Functional facts | Same numbers, new presentation (decision 5) |
-| `statement.md` hints | Ours, written against their framing | Rewrite from the algorithmic insight |
-| `problem.json` `title`, `slug`, `invocation.method`, `class_name`, `entrypoints`, parameter names | LeetCode's public API | **Rename**, consistently in every language |
-| `problem.json` `id` | LeetCode's number | Our own sequential id; source id lives in the mapping |
-| `problem.json` `difficulty`, `tags`, `limits`, `comparison`, codecs | Ours | Keep |
-| `cases.json` **hidden** | Ours | **Unchanged** |
-| `cases.json` **public** | Mirror the examples | Regenerate with the new examples |
-| `solution.*` | Ours | Keep the algorithm; rename the API; update comments naming old terminology |
-| `starter.*` | Generated from `problem.json` | Regenerate via `gen_starters.py`; never hand-edit |
-| `solutions.md` | Ours | Keep the exposition; update names and any worked example using the old data |
-| `figures/example-*.svg` | Ours, but they draw the old examples | Update the labels, or drop (see below) |
-| `figures/solution-*.svg` | Ours, illustrate the algorithm | Keep unless the drawing walks through an old example |
+| Artifact                                                                                          | Provenance                           | Action                                                                          |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------- |
+| `statement.md` description, examples                                                              | Derived from LeetCode prose          | **Rewrite from the spec.** New title, new statement, newly constructed examples |
+| `statement.md` constraints                                                                        | Functional facts                     | Same numbers, new presentation (decision 5)                                     |
+| `statement.md` hints                                                                              | Ours, written against their framing  | Rewrite from the algorithmic insight                                            |
+| `problem.json` `title`, `slug`, `invocation.method`, `class_name`, `entrypoints`, parameter names | LeetCode's public API                | **Rename**, consistently in every language                                      |
+| `problem.json` `id`                                                                               | LeetCode's number                    | Our own sequential id; source id lives in the mapping                           |
+| `problem.json` `difficulty`, `tags`, `limits`, `comparison`, codecs                               | Ours                                 | Keep                                                                            |
+| `cases.json` **hidden**                                                                           | Ours                                 | **Unchanged**                                                                   |
+| `cases.json` **public**                                                                           | Mirror the examples                  | Regenerate with the new examples                                                |
+| `solution.*`                                                                                      | Ours                                 | Keep the algorithm; rename the API; update comments naming old terminology      |
+| `starter.*`                                                                                       | Generated from `problem.json`        | Regenerate via `gen_starters.py`; never hand-edit                               |
+| `solutions.md`                                                                                    | Ours                                 | Keep the exposition; update names and any worked example using the old data     |
+| `figures/example-*.svg`                                                                           | Ours, but they draw the old examples | Update the labels, or drop (see below)                                          |
+| `figures/solution-*.svg`                                                                          | Ours, illustrate the algorithm       | Keep unless the drawing walks through an old example                            |
 
 ### Figures: pick examples that fit the picture
 

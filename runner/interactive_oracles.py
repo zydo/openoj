@@ -119,9 +119,9 @@ class BinaryMatrix:
         return [len(self.matrix), len(self.matrix[0]) if self.matrix else 0]
 
 
-class ArrayReader:
-    """Oracle for 702 search-in-a-sorted-array-of-unknown-size: get(k)
-    returns 2^31 - 1 past the end (LeetCode's out-of-range sentinel)."""
+class SequenceReader:
+    """Oracle for the hidden sorted sequence of unknown length: get(k)
+    returns 2^31 - 1 past the end, an unambiguous out-of-range sentinel."""
 
     SENTINEL = 2**31 - 1
 
@@ -131,11 +131,17 @@ class ArrayReader:
 
     def get(self, index: int) -> int:  # noqa: N802 — LeetCode API
         if self.budget <= 0:
-            raise RuntimeError("ArrayReader query budget exhausted")
+            raise RuntimeError("SequenceReader query budget exhausted")
         self.budget -= 1
         if 0 <= index < len(self.arr):
             return self.arr[index]
         return self.SENTINEL
+
+
+# The adaptation programme renames each oracle, which is part of a
+# problem's public API. The original names stay bound to the same classes
+# for as long as both problem trees are served; see ADAPT.md.
+ArrayReader = SequenceReader
 
 
 class Sea:

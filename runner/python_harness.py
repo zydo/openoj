@@ -15,6 +15,7 @@ sys.path.insert(0, "/runner")
 
 from interactive_oracles import (
     ArrayReader,
+    SequenceReader,
     BinaryMatrix,
     InfiniteStream,
     Master,
@@ -73,6 +74,7 @@ def _load_solution(solution_path: Path):
             "MountainArray": MountainArray,
             "BinaryMatrix": BinaryMatrix,
             "ArrayReader": ArrayReader,
+            "SequenceReader": SequenceReader,
             "InfiniteStream": InfiniteStream,
             "Sea": Sea,
         }
@@ -227,8 +229,8 @@ def _build_oracle(name: str, raw_input: dict[str, Any], budget: int) -> Any:
         return MountainArray(raw_input["mountain"], budget)
     if name == "BinaryMatrix":
         return BinaryMatrix(raw_input["matrix"], budget)
-    if name == "ArrayReader":
-        return ArrayReader(raw_input["arr"], budget)
+    if name in ("ArrayReader", "SequenceReader"):
+        return SequenceReader(raw_input["arr"], budget)
     if name == "InfiniteStream":
         return InfiniteStream(raw_input["bits"], budget)
     if name == "Sea":
@@ -244,6 +246,7 @@ ORACLE_AUXILIARY = {
     "Master": ["wordlist"],
     "MountainArray": ["target"],
     "ArrayReader": ["target"],
+    "SequenceReader": ["target"],
     "InfiniteStream": ["pattern"],
     "Sea": ["topRight", "bottomLeft"],
 }

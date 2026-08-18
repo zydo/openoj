@@ -180,13 +180,13 @@ public final class InteractiveOracles {
         }
     }
 
-    /** 702 search-in-a-sorted-array-of-unknown-size: sentinel past the end. */
-    public static final class ArrayReader {
+    /** Hidden sorted sequence of unknown length: sentinel past the end. */
+    public static class SequenceReader {
         public static final int SENTINEL = Integer.MAX_VALUE;
         private final int[] arr;
         private long budget;
 
-        public ArrayReader(List<Object> values, long budget) {
+        public SequenceReader(List<Object> values, long budget) {
             this.arr = new int[values.size()];
             for (int i = 0; i < values.size(); i++) {
                 this.arr[i] = ((Number) values.get(i)).intValue();
@@ -196,10 +196,23 @@ public final class InteractiveOracles {
 
         public int get(int index) {
             if (budget <= 0) {
-                throw new IllegalStateException("ArrayReader query budget exhausted");
+                throw new IllegalStateException("SequenceReader query budget exhausted");
             }
             budget -= 1;
             return index >= 0 && index < arr.length ? arr[index] : SENTINEL;
+        }
+    }
+
+    /**
+     * The adaptation programme renames each oracle, which is part of a
+     * problem's public API. Java cannot alias a class name, so the original
+     * survives as a subclass for as long as both problem trees are served —
+     * submissions written against either name bind to the same behaviour.
+     * See ADAPT.md.
+     */
+    public static final class ArrayReader extends SequenceReader {
+        public ArrayReader(List<Object> values, long budget) {
+            super(values, budget);
         }
     }
 
