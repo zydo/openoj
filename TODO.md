@@ -171,6 +171,38 @@ logout) and user-scoped drafts/submissions are done and live. Remaining:
 - Admin management surface (listing/deleting accounts, resetting
   passwords) once the accounts UI grows beyond the gate.
 
+## The authoring machine cannot format what it generates
+
+`scripts/format.py` is tolerant by design: when a language's tool is
+missing it warns once and returns the content unchanged. That is right
+for generation, but it means a machine with an incomplete toolchain
+writes unformatted files and says so only in a warning nobody reads.
+
+The Mac doing the adaptation work has no `clang-format` at all, so every
+C++ starter it generates is left unformatted, and its `rustfmt` is three
+minor versions off the pinned one, so its Rust output can disagree with
+CI's. Nothing catches this locally either: `check.py` compares starters
+against `format_content`'s output, which on that machine is the same
+unformatted text, so the comparison passes. Only a sweep run inside the
+runner image — which carries the pinned toolchain — reveals it, and the
+files silently drift until someone runs one.
+
+Options, roughly in order of appeal:
+
+- **Install the missing tools** on the authoring machine
+  (`brew install clang-format`, match the pinned rustfmt). Cheapest, but
+  it fixes one machine rather than the class of problem.
+- **Make the toolchain a preflight check.** A `format.py --verify-tools`
+  that exits non-zero on any missing formatter, run once at the start of
+  an authoring session, turns a silent warning into a refusal.
+- **Format through the runner image**, the way the 120-column sweep did.
+  Correct by construction and identical to CI and to the editor's Format
+  button, at the cost of requiring Docker to author a bundle.
+
+Related: the runner grew a `POST /format` path for the editor's Format
+button, so the image already knows how to format every language — the
+generator just does not use it.
+
 ## Multi-solution bundles, beyond the first 42
 
 The convention is fully wired (judge, check.py, Solutions tab,
