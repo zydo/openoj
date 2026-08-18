@@ -106,28 +106,101 @@ public final class OpenOJJavaHarness {
         return invokeFunction(targetClass, invocation, rawInput);
     }
 
+    /** Builds the oracle named by the invocation from the case state. */
+    private static Object buildOracle(String oracle, Map<String, Object> state, long budget) {
+        switch (oracle) {
+            case "GridMaster": {
+                List<Object> grid = asList(state.get("grid"), "Interactive grid must be a list");
+                List<Object> start = asList(state.get("start"), "Interactive start must be [row, col]");
+                List<Object> target = asList(state.get("target"), "Interactive target must be [row, col]");
+                return new GridMaster(
+                    grid,
+                    numberValue(start.get(0)).intValue(),
+                    numberValue(start.get(1)).intValue(),
+                    numberValue(target.get(0)).intValue(),
+                    numberValue(target.get(1)).intValue(),
+                    budget
+                );
+            }
+            case "Robot": {
+                List<Object> room = asList(state.get("room"), "Robot room must be a list");
+                List<Object> start = asList(state.get("start"), "Robot start must be [row, col]");
+                return new InteractiveOracles.Robot(
+                    room,
+                    numberValue(start.get(0)).intValue(),
+                    numberValue(start.get(1)).intValue(),
+                    budget
+                );
+            }
+            case "Master":
+                return new InteractiveOracles.Master(
+                    asList(state.get("wordlist"), "Master wordlist must be a list"),
+                    asString(state.get("secret"), "Master secret must be a string"),
+                    budget
+                );
+            case "MountainArray":
+                return new InteractiveOracles.MountainArray(
+                    asList(state.get("mountain"), "MountainArray values must be a list"),
+                    budget
+                );
+            case "BinaryMatrix":
+                return new InteractiveOracles.BinaryMatrix(
+                    asList(state.get("matrix"), "BinaryMatrix rows must be a list"),
+                    budget
+                );
+            case "ArrayReader":
+                return new InteractiveOracles.ArrayReader(
+                    asList(state.get("arr"), "ArrayReader values must be a list"),
+                    budget
+                );
+            case "InfiniteStream":
+                return new InteractiveOracles.InfiniteStream(
+                    asList(state.get("bits"), "InfiniteStream bits must be a list"),
+                    budget
+                );
+            default:
+                throw new IllegalArgumentException("Unsupported interactive oracle: " + oracle);
+        }
+    }
+
+    /**
+     * Some oracles pair with auxiliary case data the solution method also
+     * needs — LeetCode's two-argument signatures (guess-the-word's wordlist,
+     * mountain-array's target, ...). The case key listed here is converted
+     * and passed to the method as a second argument, after the oracle.
+     */
+    private static Object auxiliaryArgument(String oracle, Map<String, Object> state) {
+        switch (oracle) {
+            case "Master":
+                return convert(
+                    asList(state.get("wordlist"), "Master wordlist must be a list"),
+                    String[].class,
+                    String[].class
+                );
+            case "MountainArray":
+            case "ArrayReader":
+                return numberValue(state.get("target")).intValue();
+            case "InfiniteStream":
+                return convert(
+                    asList(state.get("pattern"), "InfiniteStream pattern must be a list"),
+                    int[].class,
+                    int[].class
+                );
+            default:
+                return null;
+        }
+    }
+
     private static Object invokeInteractive(
         Class<?> targetClass,
         Map<String, Object> invocation,
         Object rawInput
     ) throws Exception {
         String oracle = invocation.getOrDefault("oracle", "GridMaster").toString();
-        if (!"GridMaster".equals(oracle)) {
-            throw new IllegalArgumentException("Unsupported interactive oracle: " + oracle);
-        }
         Map<String, Object> state = asMap(rawInput, "Interactive input must be an object");
-        List<Object> grid = asList(state.get("grid"), "Interactive grid must be a list");
-        List<Object> start = asList(state.get("start"), "Interactive start must be [row, col]");
-        List<Object> target = asList(state.get("target"), "Interactive target must be [row, col]");
         long budget = numberValue(invocation.getOrDefault("query_limit", 1_000_000)).longValue();
-        GridMaster master = new GridMaster(
-            grid,
-            numberValue(start.get(0)).intValue(),
-            numberValue(start.get(1)).intValue(),
-            numberValue(target.get(0)).intValue(),
-            numberValue(target.get(1)).intValue(),
-            budget
-        );
+        Object oracleInstance = buildOracle(oracle, state, budget);
+        Object auxiliary = auxiliaryArgument(oracle, state);
 
         Constructor<?> constructor = targetClass.getDeclaredConstructor();
         constructor.setAccessible(true);
@@ -138,7 +211,22 @@ public final class OpenOJJavaHarness {
                 continue;
             }
             candidate.setAccessible(true);
-            return candidate.invoke(instance, master);
+            Object result = auxiliary == null
+                ? candidate.invoke(instance, oracleInstance)
+                : candidate.invoke(instance, oracleInstance, auxiliary);
+            // Void-method oracles are judged by their own final state —
+            // e.g. the robot's exact set of cleaned cells.
+            if (result == null) {
+                try {
+                    return oracleInstance
+                        .getClass()
+                        .getMethod("verdict")
+                        .invoke(oracleInstance);
+                } catch (NoSuchMethodException noVerdict) {
+                    return null;
+                }
+            }
+            return result;
         }
         throw new IllegalArgumentException("Method not found on solution class: " + method);
     }

@@ -550,7 +550,8 @@ def load_solutions(slug: str) -> Optional[dict[str, Any]]:
     canonical: dict[str, str] = {}
     for solution_path in sorted(path.glob("solution*.*")):
         name = solution_path.name
-        matched = re.fullmatch(r"solution(?:_[a-z0-9]+)?\.([a-z0-9]+)", name)
+        # variant names may themselves contain underscores (solution_union_find.py)
+        matched = re.fullmatch(r"solution(?:_[a-z0-9]+)*\.([a-z0-9]+)", name)
         if matched is None or solution_path.is_dir():
             continue
         # EXTENSION_LANGUAGE maps extension -> language registry key.
@@ -620,7 +621,8 @@ def load_reference_solutions(slug: str, language: str) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for solution_path in sorted(path.glob(f"solution*.{extension}")):
         name = solution_path.name[: -len(extension) - 1]
-        if not re.fullmatch(r"solution(?:_[a-z0-9]+)?", name):
+        # variant names may themselves contain underscores (solution_union_find.py)
+        if not re.fullmatch(r"solution(?:_[a-z0-9]+)*", name):
             continue
         variant = name[len("solution") :]
         found.append((variant, solution_path.read_text(encoding="utf-8")))

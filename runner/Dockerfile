@@ -39,7 +39,7 @@ COPY --from=typescript-toolchain \
     /usr/local/lib/node_modules/typescript \
     /usr/local/lib/node_modules/typescript
 RUN ln -s /usr/local/lib/node_modules/typescript/bin/tsc /usr/local/bin/tsc
-COPY worker.py python_harness.py sql_harness.py leetcode_types.py privileges.py ./
+COPY worker.py python_harness.py sql_harness.py leetcode_types.py privileges.py interactive_oracles.py ./
 COPY compiler_sandbox.py runtime_sandbox.py ./
 COPY executors ./executors
 COPY java ./java
@@ -53,7 +53,8 @@ RUN mkdir -p /runner/java-classes /runner/benchmarks \
         /runner/java/OpenOJJavaHarness.java \
         /runner/java/ListNode.java \
         /runner/java/TreeNode.java \
-        /runner/java/GridMaster.java
+        /runner/java/GridMaster.java \
+        /runner/java/InteractiveOracles.java
 RUN g++ -std=c++20 -O2 \
         -o /runner/benchmarks/cpp /runner/benchmark-sources/benchmark.cpp \
     && go build -trimpath \

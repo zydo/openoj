@@ -12,6 +12,14 @@ from typing import Any
 # placed on the import path.
 sys.path.insert(0, "/runner")
 
+from interactive_oracles import (
+    ArrayReader,
+    BinaryMatrix,
+    InfiniteStream,
+    Master,
+    MountainArray,
+    Robot,
+)
 from leetcode_types import (
     HtmlParser,
     ListNode,
@@ -57,6 +65,12 @@ def _load_solution(solution_path: Path):
             "NestedInteger": NestedInteger,
             "HtmlParser": HtmlParser,
             "GridMaster": GridMaster,
+            "Robot": Robot,
+            "Master": Master,
+            "MountainArray": MountainArray,
+            "BinaryMatrix": BinaryMatrix,
+            "ArrayReader": ArrayReader,
+            "InfiniteStream": InfiniteStream,
         }
     )
     spec.loader.exec_module(module)
@@ -198,16 +212,55 @@ class GridMaster:
         return (self.row, self.col) == (self.target_row, self.target_col)
 
 
+def _build_oracle(name: str, raw_input: dict[str, Any], budget: int) -> Any:
+    if name == "GridMaster":
+        return GridMaster(raw_input["grid"], raw_input["start"], raw_input["target"], budget)
+    if name == "Robot":
+        return Robot(raw_input["room"], raw_input["start"], budget)
+    if name == "Master":
+        return Master(raw_input["wordlist"], raw_input["secret"], budget)
+    if name == "MountainArray":
+        return MountainArray(raw_input["mountain"], budget)
+    if name == "BinaryMatrix":
+        return BinaryMatrix(raw_input["matrix"], budget)
+    if name == "ArrayReader":
+        return ArrayReader(raw_input["arr"], budget)
+    if name == "InfiniteStream":
+        return InfiniteStream(raw_input["bits"], budget)
+    raise ValueError(f"Unsupported interactive oracle: {name}")
+
+
+# Some oracles pair with auxiliary case data the solution method also
+# needs — LeetCode's two-argument signatures (guess-the-word's wordlist,
+# mountain-array's target, ...). The case key listed here is passed to the
+# method as a second argument, after the oracle.
+ORACLE_AUXILIARY = {
+    "Master": "wordlist",
+    "MountainArray": "target",
+    "ArrayReader": "target",
+    "InfiniteStream": "pattern",
+}
+
+
 def _invoke_interactive(module, invocation: dict[str, Any], raw_input: Any) -> Any:
     oracle_name = invocation.get("oracle", "GridMaster")
-    if oracle_name != "GridMaster":
-        raise ValueError(f"Unsupported interactive oracle: {oracle_name}")
     if not isinstance(raw_input, dict):
         raise ValueError("Interactive input must be an object")
     budget = int(invocation.get("query_limit", 1_000_000))
-    master = GridMaster(raw_input["grid"], raw_input["start"], raw_input["target"], budget)
+    oracle = _build_oracle(oracle_name, raw_input, budget)
     instance = getattr(module, invocation["class_name"])()
-    return getattr(instance, invocation["method"])(master)
+    arguments = [oracle]
+    if oracle_name in ORACLE_AUXILIARY:
+        key = ORACLE_AUXILIARY[oracle_name]
+        if key not in raw_input:
+            raise ValueError(f"Interactive input for {oracle_name} needs {key!r}")
+        arguments.append(raw_input[key])
+    result = getattr(instance, invocation["method"])(*arguments)
+    # Void-method oracles are judged by their own final state — e.g. the
+    # robot's exact set of cleaned cells.
+    if result is None and hasattr(oracle, "verdict"):
+        return oracle.verdict()
+    return result
 
 
 def _invoke(module, invocation: dict[str, Any], raw_input: Any) -> Any:
