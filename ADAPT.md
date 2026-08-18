@@ -149,25 +149,29 @@ Clarity beats superficial difference. A renamed parameter changes in the
 statement, skeleton, annotations, examples, judge invocation, fixtures,
 and reference implementation — no stale identifier anywhere.
 
-### Oracles — open question
+### Oracles
 
 The nine interactive problems name their oracle after LeetCode's hidden
 API (`GridMaster`, `Master`, `MountainArray`, `BinaryMatrix`,
-`ArrayReader`, `Robot`, `Sea`, `InfiniteStream`). These names live in
-the **harness**, not the bundle, so renaming them means:
+`ArrayReader`, `Robot`, `Sea`, `InfiniteStream`). They are as much
+LeetCode's API surface as the method names, so **they get renamed too**.
 
-- new names in `runner/interactive_oracles.py`,
-  `runner/java/InteractiveOracles.java`, both dispatch tables, and
-  `gen_starters.py`;
-- old names kept as **aliases** while both trees coexist, dropped at
-  cutover — the order matters, or the coexistence period breaks one
-  tree;
-- decision 5 stretched slightly for these nine: a pasted original
-  solution needs its oracle *type* renamed as well as its method.
+These names live in the **harness**, not the bundle, so the rename
+touches `runner/interactive_oracles.py`,
+`runner/java/InteractiveOracles.java`, both dispatch tables, and
+`gen_starters.py`'s oracle table in the problems repo.
 
-Nine problems, real harness work. **Recommendation: rename them** — they
-are as much LeetCode's API surface as the method names — but this is
-worth an explicit yes/no before the interactive batch starts.
+The old names stay as **aliases** for as long as both trees are served —
+the original tree is the default until cutover, and it needs them. The
+aliases are removed only in phase 3, after the swap. Getting that order
+wrong breaks whichever tree loses its names first.
+
+Decision 5 stretches for exactly these nine: a pasted original solution
+needs its oracle *type* renamed as well as its method.
+
+That the framework must change at all to rename a problem's own API is
+a coupling worth removing later; see the self-contained-bundle item in
+TODO.md.
 
 ### SQL
 
