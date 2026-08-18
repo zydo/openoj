@@ -12,6 +12,7 @@ directly rather than through the sandboxes the judge uses.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 
@@ -52,6 +53,29 @@ class FormatError(RuntimeError):
     """A formatter refused the source, or is not installed."""
 
 
+_GO_PACKAGE = re.compile(r"^\s*package\s+\w", re.MULTILINE)
+_GO_PREAMBLE = "package openoj\n"
+
+
+def _wrap_go(code: str) -> tuple[str, bool]:
+    """Give Go source a package clause if it has none.
+
+    Solutions and starters are fragments -- a bare `import` and `func`, with
+    the package supplied by the executor's wrapper -- and gofmt parses whole
+    files only, so without this every Go source fails to format.
+    """
+    if _GO_PACKAGE.match(code):
+        return code, False
+    return _GO_PREAMBLE + code, True
+
+
+def _unwrap_go(formatted: str) -> str:
+    body = formatted[len(_GO_PREAMBLE):] if formatted.startswith(_GO_PREAMBLE) else formatted
+    # gofmt puts a blank line after the package clause that the fragment,
+    # having never had a package clause, should not inherit.
+    return body[1:] if body.startswith("\n") else body
+
+
 def formattable_languages() -> tuple[str, ...]:
     return tuple(sorted(_COMMANDS))
 
@@ -69,10 +93,11 @@ def format_source(language: str, code: str) -> str:
         raise FormatError(f"No formatter is installed for {language!r}")
     if shutil.which(command[0]) is None:
         raise FormatError(f"The {command[0]} formatter is unavailable")
+    source, wrapped = _wrap_go(code) if language == "go" else (code, False)
     try:
         completed = subprocess.run(
             command,
-            input=code,
+            input=source,
             capture_output=True,
             text=True,
             timeout=FORMAT_TIMEOUT_SECONDS,
@@ -87,4 +112,4 @@ def format_source(language: str, code: str) -> str:
         raise FormatError(detail[0] if detail else "The source could not be formatted")
     if not completed.stdout:
         raise FormatError("The formatter returned nothing")
-    return completed.stdout
+    return _unwrap_go(completed.stdout) if wrapped else completed.stdout
