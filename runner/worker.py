@@ -112,12 +112,27 @@ def _run_case(
         "time_ms": calibrated_time_ms,
         # Managed runtimes reserve address space for the VM in addition to the
         # problem's user-memory allowance. The executor declares that overhead.
-        "memory_mb": int(limits.get("memory_mb", 256)) + executor.address_space_overhead_mb,
+        # Thread stacks and per-thread allocator arenas come out of the
+        # address-space allowance, the same way a managed runtime's VM does,
+        # so a declared schedule brings its own headroom.
+        "memory_mb": (
+            int(limits.get("memory_mb", 256))
+            + executor.address_space_overhead_mb
+            + int(limits.get("threads", 0)) * 2
+        ),
         # A concurrency problem's schedule needs one OS thread per scheduled
-        # call, and threads count against the runtime process cap. The problem
-        # declares how many the schedule spawns; the sandbox ceiling still
-        # applies, and problems that declare nothing keep the old cap.
-        "processes": min(200, executor.max_processes + int(limits.get("threads", 0))),
+        # call, and threads count against the process cap. RLIMIT_NPROC is a
+        # budget shared by every process of the submission uid — including
+        # ones outside this container — so it cannot be sized tightly around a
+        # schedule; a problem that declares threads gets generous headroom,
+        # and containment rests on the memory, CPU and wall-clock limits plus
+        # the process-group kill. Problems that declare nothing keep the old
+        # cap.
+        "processes": (
+            min(256, executor.max_processes + int(limits["threads"]) * 2 + 32)
+            if limits.get("threads")
+            else executor.max_processes
+        ),
     }
     timeout_seconds = calibrated_time_ms / 1000
     if getattr(executor, "encode_case_with_limits", False):

@@ -21,6 +21,7 @@ import java.util.Set;
 public final class OpenOJJavaHarness {
     private static final String PROTOCOL_PREFIX = "__OPENOJ_RESULT__";
     private static final int MAX_CAPTURED_OUTPUT = 16_384;
+    private static final long SCHEDULE_STACK_BYTES = 512L * 1024L;
 
     private OpenOJJavaHarness() {}
 
@@ -235,7 +236,7 @@ public final class OpenOJJavaHarness {
                 : asList(spec.get("args"), "Schedule args must be a list");
             Object emits = spec.get("emits");
             boolean records = Boolean.TRUE.equals(spec.get("records"));
-            threads.add(new Thread(() -> {
+            threads.add(new Thread(null, () -> {
                 try {
                     if (emits != null) {
                         List<Object> callArguments = new ArrayList<>(arguments);
@@ -254,7 +255,11 @@ public final class OpenOJJavaHarness {
                 } catch (Throwable error) {
                     failures.add(error);
                 }
-            }));
+                // Each thread reserves its stack from the sandbox's
+                // address-space allowance; the default times a schedule's
+                // worth of threads exceeds it, and a schedule thread runs one
+                // short method, so a small stack is ample.
+            }, "openoj-schedule", SCHEDULE_STACK_BYTES));
         }
         for (Thread thread : threads) {
             thread.setDaemon(true);

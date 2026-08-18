@@ -32,7 +32,7 @@ def main() -> int:
     if not 1024 <= output_bytes <= 16 * 1024 * 1024:
         print("Runtime output limit is out of range", file=sys.stderr)
         return 126
-    if not 1 <= max_processes <= 256:
+    if not 1 <= max_processes <= 1024:
         print("Runtime process limit is out of range", file=sys.stderr)
         return 126
 

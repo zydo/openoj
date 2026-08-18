@@ -35,6 +35,7 @@ from leetcode_types import (
 
 PROTOCOL_PREFIX = "__OPENOJ_RESULT__"
 MAX_CAPTURED_OUTPUT = 16_384
+SCHEDULE_STACK_BYTES = 512 * 1024
 
 
 class BoundedText(io.StringIO):
@@ -264,6 +265,24 @@ def _invoke_interactive(module, invocation: dict[str, Any], raw_input: Any) -> A
     return result
 
 
+# glibc's malloc gives each thread its own arena, reserving 64 MiB of
+# address space apiece — a schedule's worth of threads blows past the
+# sandbox's allowance and pthread_create fails with "can't start new
+# thread". MALLOC_ARENA_MAX cannot carry this: glibc scrubs MALLOC_* from
+# the environment after the sandbox drops privileges, so the cap is set
+# in-process instead. M_ARENA_MAX is mallopt parameter -8.
+M_ARENA_MAX = -8
+
+
+def _cap_allocator_arenas() -> None:
+    try:
+        import ctypes
+
+        ctypes.CDLL("libc.so.6").mallopt(M_ARENA_MAX, 1)
+    except Exception:  # noqa: BLE001 — musl and friends have no mallopt
+        pass
+
+
 def _invoke_concurrent(module, invocation: dict[str, Any], raw_input: Any) -> Any:
     """Run a schedule of calls on real threads and report what happened.
 
@@ -305,20 +324,33 @@ def _invoke_concurrent(module, invocation: dict[str, Any], raw_input: Any) -> An
                     failures.append(f"{type(error).__name__}: {error}")
         return run
 
-    threads = [
-        threading.Thread(
-            target=runner(
-                spec["call"],
-                list(spec.get("args", [])),
-                spec.get("emits"),
-                bool(spec.get("records")),
-            ),
-            daemon=True,
-        )
-        for spec in schedule
-    ]
-    for thread in threads:
-        thread.start()
+    _cap_allocator_arenas()
+    # Each thread reserves its stack from the sandbox's address-space
+    # allowance, and the default 8 MiB times a schedule's worth of threads
+    # exceeds it outright — pthread_create then fails with "can't start new
+    # thread". A schedule thread runs one short method, so a small stack is
+    # ample.
+    # The stack size has to still be in effect when a thread *starts* — that
+    # is when the stack is reserved — not merely when it is constructed.
+    previous_stack = threading.stack_size()
+    threading.stack_size(SCHEDULE_STACK_BYTES)
+    try:
+        threads = [
+            threading.Thread(
+                target=runner(
+                    spec["call"],
+                    list(spec.get("args", [])),
+                    spec.get("emits"),
+                    bool(spec.get("records")),
+                ),
+                daemon=True,
+            )
+            for spec in schedule
+        ]
+        for thread in threads:
+            thread.start()
+    finally:
+        threading.stack_size(previous_stack)
     # The outer judge timeout is the deadlock detector: a schedule that
     # never completes simply never returns, and the case times out.
     for thread in threads:

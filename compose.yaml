@@ -140,7 +140,11 @@ services:
       - "10001"
     mem_limit: 768m
     cpus: 1.5
-    pids_limit: 64
+    # Concurrency problems run a schedule of real threads, and the cgroup
+    # counts every thread as a pid; the ceiling has to clear the largest
+    # schedule plus the runner's own processes. Each submission is still
+    # bounded individually by RLIMIT_NPROC, sized from the problem.
+    pids_limit: 512
     restart: unless-stopped
 
 volumes:
