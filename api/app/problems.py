@@ -609,8 +609,8 @@ def _match_sections(
     """
     if not variants:
         return {title.lower(): (title, body) for title, body in sections}
-    scored: dict[str, tuple[int, int, str, str]] = {}
-    for position, (title, body) in enumerate(sections):
+    candidates: list[tuple[int, str, int]] = []
+    for position, (title, _) in enumerate(sections):
         heading_tokens = _tokens(title)
         for variant in variants:
             variant_tokens = _tokens(variant)
@@ -622,17 +622,26 @@ def _match_sections(
                 score = 1
             else:
                 continue
-            best = scored.get(variant)
-            if best is None or score > best[0]:
-                scored[variant] = (score, position, title, body)
-    resolved = {
-        variant: (title, body) for variant, (_, _, title, body) in scored.items()
-    }
-    if len(resolved) < len(variants) and len(sections) == len(variants):
-        # Nothing matched by tokens for some variant, but the guide has
-        # exactly one section per variant: pair them in file order.
-        for variant, (title, body) in zip(variants, sections):
-            resolved.setdefault(variant, (title, body))
+            candidates.append((score, variant, position))
+    # Strongest pairings first, and each section explains one variant, so
+    # claiming is exclusive on both sides.
+    resolved: dict[str, tuple[str, str]] = {}
+    claimed: set[int] = set()
+    for _, variant, position in sorted(candidates, key=lambda item: (-item[0], item[2])):
+        if variant in resolved or position in claimed:
+            continue
+        resolved[variant] = sections[position]
+        claimed.add(position)
+    if len(resolved) < len(variants):
+        # Some variant matched nothing: hand out the unclaimed sections in
+        # file order, which is how guides are written.
+        spare = [index for index in range(len(sections)) if index not in claimed]
+        for variant in variants:
+            if variant in resolved:
+                continue
+            if not spare:
+                break
+            resolved[variant] = sections[spare.pop(0)]
     return resolved
 
 
