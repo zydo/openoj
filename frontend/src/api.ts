@@ -77,6 +77,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ slug, language, code, cases }),
     }),
+  // Formatting depends on the language alone, so no slug is sent.
+  format: (language: string, code: string) =>
+    request<{ code: string }>("/format", {
+      method: "POST",
+      body: JSON.stringify({ language, code }),
+    }),
   submit: (slug: string, language: string, code: string) =>
     request<JudgeResult>("/submit", {
       method: "POST",

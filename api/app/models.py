@@ -15,3 +15,9 @@ class SubmitRequest(BaseModel):
     language: str = "python3"
     code: str = Field(min_length=1, max_length=100_000)
 
+
+class FormatRequest(BaseModel):
+    # No slug: formatting depends on the language alone, never on the problem.
+    language: str = "python3"
+    code: str = Field(min_length=1, max_length=100_000)
+

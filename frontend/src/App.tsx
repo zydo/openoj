@@ -22,6 +22,7 @@ import {
   Play,
   Plus,
   RotateCcw,
+  Wand2,
   Send,
   Moon,
   Sun,
@@ -178,6 +179,8 @@ function App() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [problemListOpen, setProblemListOpen] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState(false);
+  const [formatting, setFormatting] = useState(false);
+  const [formatError, setFormatError] = useState("");
   const [splitX, setSplitX] = useState(46);
   const [splitY, setSplitY] = useState(61);
   const workspaceRef = useRef<HTMLDivElement>(null);
@@ -454,6 +457,28 @@ function App() {
     }
   }, [busy, code, language, parsedCases, problem, refreshSubmissions]);
 
+  const formatCode = useCallback(async () => {
+    if (formatting || !code.trim() || !problem) return;
+    setFormatting(true);
+    setFormatError("");
+    try {
+      const { code: formatted } = await api.format(language, code);
+      // An already-formatted draft must not clear the undo stack or mark the
+      // draft dirty, so an unchanged result is a no-op.
+      if (formatted !== code) {
+        setCode(formatted);
+        saveDraft(problem.slug, language, formatted);
+      }
+    } catch (error) {
+      setFormatError(error instanceof Error ? error.message : "The formatter could not complete this request.");
+    } finally {
+      setFormatting(false);
+    }
+  }, [code, formatting, language, problem]);
+
+  // The message is transient: any edit, or a language switch, retires it.
+  useEffect(() => setFormatError(""), [code, language]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -663,6 +688,16 @@ function App() {
             <div className="panel-heading">
               <span className="panel-title"><Code2 size={16} /> Code</span>
               <div className="editor-tools">
+                <button
+                  className="format-button"
+                  onClick={formatCode}
+                  disabled={formatting || !code.trim()}
+                  title={formatError || "Format code"}
+                  aria-label="Format code"
+                >
+                  {formatting ? <LoaderCircle className="spin" size={14} /> : <Wand2 size={14} />}
+                  Format
+                </button>
                 <LanguageMenu
                   value={language}
                   options={Object.entries(problem.languages).map(([key, config]) => ({
@@ -691,9 +726,9 @@ function App() {
                 options={{
                   automaticLayout: true,
                   fontFamily: "Roboto Mono, ui-monospace, monospace",
-                  fontSize: 14,
+                  fontSize: 13,
                   fontLigatures: true,
-                  lineHeight: 23,
+                  lineHeight: 22,
                   minimap: { enabled: false },
                   padding: { top: 14 },
                   scrollBeyondLastLine: false,
@@ -706,7 +741,9 @@ function App() {
               />
             </div>
             <div className="editor-status">
-              <span><span className="saved-dot" /> Saved</span>
+              {formatError
+                ? <span className="editor-status-error"><CircleAlert size={12} /> {formatError}</span>
+                : <span><span className="saved-dot" /> Saved</span>}
               <span className="editor-shortcut" aria-hidden="true">⏎ run · ⇧⏎ submit</span>
               <span>{problem.limits.time_ms / 1000}s · {problem.limits.memory_mb} MB</span>
             </div>

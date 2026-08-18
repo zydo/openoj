@@ -20,6 +20,7 @@ sys.path.insert(0, "/runner")
 from executors import get_executor, supported_languages
 from executors.base import ExecutorError, LanguageExecutor, PreparedProgram
 from executors.go import WRAPPER_IMPORTS
+from formatters import FormatError, format_source
 
 
 QUEUE_DIR = Path(os.environ.get("OPENOJ_QUEUE_DIR", "/queue"))
@@ -189,9 +190,41 @@ def _run_case(
         return parsed
 
 
+def _write_response(job_dir: Path, response: dict[str, Any]) -> None:
+    temporary = job_dir / "result.tmp"
+    temporary.write_text(json.dumps(response, separators=(",", ":")), encoding="utf-8")
+    os.replace(temporary, job_dir / "result.json")
+    (job_dir / "ready").unlink(missing_ok=True)
+
+
+def _process_format_job(job_dir: Path, request: dict[str, Any]) -> None:
+    """Answer a format job.
+
+    Formatting shares the queue with judging because the toolchains live here
+    and nowhere else, but it shares nothing else: the source is never run, so
+    there is no sandbox, no case loop, and no verdict — just the formatted
+    text or the reason it could not be produced.
+    """
+    job_id = request.get("job_id", job_dir.name)
+    try:
+        code = request.get("code")
+        if not isinstance(code, str) or not code or len(code) > 100_000:
+            raise FormatError("Invalid source code")
+        response = {
+            "version": 2,
+            "job_id": job_id,
+            "code": format_source(request.get("language", ""), code),
+        }
+    except FormatError as error:
+        response = {"version": 2, "job_id": job_id, "error": str(error)}
+    except Exception as error:  # noqa: BLE001
+        print(f"Runner format job {job_dir.name} failed:\n{traceback.format_exc()}", file=sys.stderr, flush=True)
+        response = {"version": 2, "job_id": job_id, "error": f"Runner rejected job: {error}"}
+    _write_response(job_dir, response)
+
+
 def _process_job(job_dir: Path) -> None:
     request_path = job_dir / "request.json"
-    result_path = job_dir / "result.json"
     request: dict[str, Any] = {}
     try:
         loaded_request = json.loads(request_path.read_text(encoding="utf-8"))
@@ -200,6 +233,9 @@ def _process_job(job_dir: Path) -> None:
         request = loaded_request
         if request.get("version") != 2:
             raise ValueError("Unsupported runner request")
+        if request.get("kind") == "format":
+            _process_format_job(job_dir, request)
+            return
         executor = get_executor(request.get("language", ""))
         code = request.get("code")
         if not isinstance(code, str) or not code or len(code) > 100_000:
@@ -273,10 +309,7 @@ def _process_job(job_dir: Path) -> None:
             ],
         }
 
-    temporary = job_dir / "result.tmp"
-    temporary.write_text(json.dumps(response, separators=(",", ":")), encoding="utf-8")
-    os.replace(temporary, result_path)
-    (job_dir / "ready").unlink(missing_ok=True)
+    _write_response(job_dir, response)
 
 
 def _prewarm_toolchains_once() -> None:

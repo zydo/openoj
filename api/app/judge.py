@@ -16,6 +16,10 @@ class RunnerUnavailable(RuntimeError):
     pass
 
 
+class FormatRejected(ValueError):
+    """The runner could format nothing — a parse error, or no such formatter."""
+
+
 DEFAULT_CLOSE_TOLERANCE = 1e-9
 
 
@@ -160,14 +164,14 @@ def _display_input(invocation: dict[str, Any], raw_input: Any) -> Any:
     return raw_input
 
 
-def execute(
-    code: str,
-    language: str,
-    invocation: dict[str, Any],
-    limits: dict[str, Any],
-    cases: list[dict[str, Any]],
-    public_count: int,
-) -> list[dict[str, Any]]:
+def _submit(request_body: dict[str, Any]) -> dict[str, Any]:
+    """Hand one job to the isolated runner and wait for its answer.
+
+    The queue is a directory the runner watches; `job_id` is filled in here so
+    every caller's request carries the same identity the response is matched
+    on. The job directory is always torn down, whether the runner answered,
+    failed, or never showed up.
+    """
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     if not os.access(QUEUE_DIR, os.R_OK | os.W_OK | os.X_OK):
         raise RunnerUnavailable("The isolated judge queue is not accessible")
@@ -178,28 +182,16 @@ def execute(
     request_path = job_dir / "request.json"
     ready_path = job_dir / "ready"
     result_path = job_dir / "result.json"
-    request = {
-        "version": 2,
-        "job_id": job_id,
-        "language": language,
-        "code": code,
-        "invocation": invocation,
-        "limits": limits,
-        # Expected values deliberately remain in the API trust boundary.
-        "cases": [{"input": case["input"]} for case in cases],
-    }
-    request_path.write_text(json.dumps(request), encoding="utf-8")
+    request_path.write_text(json.dumps({**request_body, "job_id": job_id}), encoding="utf-8")
     ready_path.touch(mode=0o600)
 
     deadline = time.monotonic() + RUNNER_TIMEOUT
     try:
         while time.monotonic() < deadline:
             if result_path.exists():
-                raw_results = json.loads(result_path.read_text(encoding="utf-8"))["results"]
-                break
+                return json.loads(result_path.read_text(encoding="utf-8"))
             time.sleep(0.025)
-        else:
-            raise RunnerUnavailable("The isolated runner did not respond in time")
+        raise RunnerUnavailable("The isolated runner did not respond in time")
     finally:
         for path in (ready_path, request_path, result_path):
             path.unlink(missing_ok=True)
@@ -207,6 +199,35 @@ def execute(
             job_dir.rmdir()
         except OSError:
             pass
+
+
+def format_code(code: str, language: str) -> str:
+    """Return `code` formatted by the runner's toolchain for `language`."""
+    response = _submit({"version": 2, "kind": "format", "language": language, "code": code})
+    if "code" not in response:
+        raise FormatRejected(response.get("error") or "The source could not be formatted")
+    return response["code"]
+
+
+def execute(
+    code: str,
+    language: str,
+    invocation: dict[str, Any],
+    limits: dict[str, Any],
+    cases: list[dict[str, Any]],
+    public_count: int,
+) -> list[dict[str, Any]]:
+    raw_results = _submit(
+        {
+            "version": 2,
+            "language": language,
+            "code": code,
+            "invocation": invocation,
+            "limits": limits,
+            # Expected values deliberately remain in the API trust boundary.
+            "cases": [{"input": case["input"]} for case in cases],
+        }
+    )["results"]
 
     comparison = invocation.get("comparison", "exact")
     results = []

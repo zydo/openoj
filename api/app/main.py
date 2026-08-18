@@ -23,8 +23,8 @@ from .database import (
     validate_session,
     verify_user,
 )
-from .judge import RunnerUnavailable, execute
-from .models import RunRequest, SubmitRequest
+from .judge import FormatRejected, RunnerUnavailable, execute, format_code
+from .models import FormatRequest, RunRequest, SubmitRequest
 from .problems import (
     LANGUAGE_REGISTRY,
     safe_problem_path,
@@ -304,6 +304,23 @@ def _run_judge(
     except RunnerUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except (ValueError, OSError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/format")
+def format_source(
+    request: FormatRequest, session_id: Annotated[str, Depends(current_session)] = None
+) -> dict[str, Any]:
+    """Format an editor draft with the same toolchain the problem bundles use.
+
+    A draft that does not parse is the author's to fix, so a formatter refusal
+    is a 400 carrying the tool's own first line rather than a judge verdict.
+    """
+    try:
+        return {"code": format_code(request.code, request.language)}
+    except RunnerUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except FormatRejected as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 

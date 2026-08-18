@@ -5,8 +5,16 @@ ARG TYPESCRIPT_VERSION="7.0.2"
 FROM node:${NODE_VERSION}-bookworm-slim AS typescript-toolchain
 
 ARG TYPESCRIPT_VERSION
+# Pinned to the same versions as openoj-problems/package.json, so a starter
+# formatted in the editor is byte-identical to the one the generator writes.
+ARG PRETTIER_VERSION="3.9.6"
+ARG PRETTIER_JAVA_VERSION="2.10.3"
+ARG SQL_FORMATTER_VERSION="15.8.2"
 RUN npm install --global --ignore-scripts --no-audit --no-fund \
-    typescript@"${TYPESCRIPT_VERSION}"
+    typescript@"${TYPESCRIPT_VERSION}" \
+    prettier@"${PRETTIER_VERSION}" \
+    prettier-plugin-java@"${PRETTIER_JAVA_VERSION}" \
+    sql-formatter@"${SQL_FORMATTER_VERSION}"
 
 FROM python:${PYTHON_VERSION}-slim
 
@@ -18,9 +26,15 @@ ARG GO_STDLIB_PACKAGE_VERSION="1.24.4-1"
 ARG JDK_PACKAGE_VERSION="21.0.12+8-1~deb13u1"
 ARG LIBCAP_PACKAGE_VERSION="1:2.75-10+deb13u1+b1"
 ARG RUST_PACKAGE_VERSION="1.85.0+dfsg3-1"
+ARG RUSTFMT_PACKAGE_VERSION="1.85.0+dfsg3-1"
+ARG CLANG_FORMAT_PACKAGE_VERSION="1:19.0-63"
+ARG RUFF_VERSION="0.16.3"
 
+# The editor's Format button runs prettier and its java plugin out of the
+# global install; node only finds them there with NODE_PATH set.
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    NODE_PATH=/usr/local/lib/node_modules
 
 WORKDIR /runner
 RUN apt-get update \
@@ -33,13 +47,26 @@ RUN apt-get update \
         libcap2-bin="${LIBCAP_PACKAGE_VERSION}" \
         openjdk-21-jdk-headless="${JDK_PACKAGE_VERSION}" \
         rustc="${RUST_PACKAGE_VERSION}" \
+        rustfmt="${RUSTFMT_PACKAGE_VERSION}" \
+        clang-format="${CLANG_FORMAT_PACKAGE_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir ruff=="${RUFF_VERSION}"
 COPY --from=typescript-toolchain /usr/local/bin/node /usr/local/bin/node
 COPY --from=typescript-toolchain \
     /usr/local/lib/node_modules/typescript \
     /usr/local/lib/node_modules/typescript
-RUN ln -s /usr/local/lib/node_modules/typescript/bin/tsc /usr/local/bin/tsc
-COPY worker.py python_harness.py sql_harness.py leetcode_types.py privileges.py interactive_oracles.py ./
+COPY --from=typescript-toolchain \
+    /usr/local/lib/node_modules/prettier \
+    /usr/local/lib/node_modules/prettier
+COPY --from=typescript-toolchain \
+    /usr/local/lib/node_modules/prettier-plugin-java \
+    /usr/local/lib/node_modules/prettier-plugin-java
+COPY --from=typescript-toolchain \
+    /usr/local/lib/node_modules/sql-formatter \
+    /usr/local/lib/node_modules/sql-formatter
+RUN ln -s /usr/local/lib/node_modules/typescript/bin/tsc /usr/local/bin/tsc \
+    && ln -s /usr/local/lib/node_modules/prettier/bin/prettier.cjs /usr/local/bin/prettier
+COPY worker.py python_harness.py sql_harness.py leetcode_types.py privileges.py interactive_oracles.py formatters.py ./
 COPY compiler_sandbox.py runtime_sandbox.py ./
 COPY executors ./executors
 COPY java ./java
