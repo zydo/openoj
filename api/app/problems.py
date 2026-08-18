@@ -566,18 +566,74 @@ def load_solutions(slug: str) -> Optional[dict[str, Any]]:
             canonical[language] = solution_path.read_text(encoding="utf-8")
     guide_path = path / "solutions.md"
     guide: dict[str, str] = {}
+    titles: dict[str, str] = {}
     if guide_path.is_file():
         text = guide_path.read_text(encoding="utf-8")
         headings = _headings(text)
         level2 = [(title, line) for level, title, line in headings if level == 2]
         if level2:
             lines = text.splitlines(keepends=True)
+            sections = []
             for index, (title, line_number) in enumerate(level2):
                 end = level2[index + 1][1] if index + 1 < len(level2) else len(lines)
-                guide[title.strip().lower()] = "".join(lines[line_number + 1:end]).strip("\n")
+                sections.append((title.strip(), "".join(lines[line_number + 1:end]).strip("\n")))
+            resolved = _match_sections(sections, sorted(implementations))
+            for key, (title, body) in resolved.items():
+                guide[key] = body
+                titles[key] = title
     if not guide and not implementations and not canonical:
         return None
-    return {"guide": guide, "implementations": implementations, "canonical": canonical}
+    return {
+        "guide": guide,
+        "titles": titles,
+        "implementations": implementations,
+        "canonical": canonical,
+    }
+
+
+def _tokens(value: str) -> set[str]:
+    return {token for token in re.split(r"[^a-z0-9]+", value.lower()) if token}
+
+
+def _match_sections(
+    sections: list[tuple[str, str]],
+    variants: list[str],
+) -> dict[str, tuple[str, str]]:
+    """Pair each `## heading` with the variant it explains.
+
+    Guides read better with prose headings ("Randomized quickselect")
+    than with bare variant tokens ("quickselect"), so headings are
+    resolved to variants by token containment rather than by exact
+    equality, falling back to file order when the counts line up. A
+    canonical-only problem keeps its headings verbatim.
+    """
+    if not variants:
+        return {title.lower(): (title, body) for title, body in sections}
+    scored: dict[str, tuple[int, int, str, str]] = {}
+    for position, (title, body) in enumerate(sections):
+        heading_tokens = _tokens(title)
+        for variant in variants:
+            variant_tokens = _tokens(variant)
+            if heading_tokens == variant_tokens:
+                score = 3
+            elif variant_tokens <= heading_tokens:
+                score = 2
+            elif heading_tokens <= variant_tokens:
+                score = 1
+            else:
+                continue
+            best = scored.get(variant)
+            if best is None or score > best[0]:
+                scored[variant] = (score, position, title, body)
+    resolved = {
+        variant: (title, body) for variant, (_, _, title, body) in scored.items()
+    }
+    if len(resolved) < len(variants) and len(sections) == len(variants):
+        # Nothing matched by tokens for some variant, but the guide has
+        # exactly one section per variant: pair them in file order.
+        for variant, (title, body) in zip(variants, sections):
+            resolved.setdefault(variant, (title, body))
+    return resolved
 
 
 def load_all_cases(slug: str) -> tuple[list[dict[str, Any]], int]:

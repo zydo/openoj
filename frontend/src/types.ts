@@ -84,6 +84,9 @@ export type Submission = {
 // GET /problems/{slug}/solutions — the Solutions tab payload.
 export type SolutionsContent = {
   guide: Record<string, string>;
+  // The guide's own heading per variant ("Randomized quickselect"),
+  // which reads better than the bare variant token.
+  titles: Record<string, string>;
   implementations: Record<string, Record<string, string>>;
   canonical: Record<string, string>;
 };

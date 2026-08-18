@@ -1307,7 +1307,7 @@ function Solutions({ slug, language, languages, theme, onLanguageChange }: {
   const entries = variants.length > 0
     ? variants.map((variant) => ({
         name: variant,
-        title: variant.toUpperCase(),
+        title: content.titles?.[variant] ?? variant.toUpperCase(),
         body: content.guide[variant] ?? "",
         code: content.implementations[variant],
       }))
