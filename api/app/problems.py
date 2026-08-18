@@ -185,6 +185,22 @@ def _require_exact_keys(value: dict[str, Any], keys: set[str], heading: str) -> 
         raise ProblemError(f"## {heading} must contain exactly: {', '.join(sorted(keys))}")
 
 
+def _validate_limits(limits: Any, heading: str) -> None:
+    """Every problem carries the three resource limits; a concurrency
+    problem additionally declares `threads`, the number of threads its
+    schedule spawns (the runner raises the process cap by that much)."""
+    if not isinstance(limits, dict):
+        raise ProblemError(f"## {heading} must be an object")
+    required = {"time_ms", "memory_mb", "output_kb"}
+    if not required <= set(limits) or not set(limits) <= required | {"threads"}:
+        raise ProblemError(
+            f"## {heading} must contain exactly: {', '.join(sorted(required))}"
+            " (plus optional threads)"
+        )
+    if not all(isinstance(value, int) and value > 0 for value in limits.values()):
+        raise ProblemError("Limits values must be positive integers")
+
+
 def _validate_cases(value: list[Any], heading: str) -> list[dict[str, Any]]:
     cases = []
     for index, case in enumerate(value, start=1):
@@ -238,9 +254,7 @@ def parse_problem_markdown(
 
     invocation = _json_object(sections["Invocation"], "Invocation")
     limits = _json_object(sections["Limits"], "Limits")
-    _require_exact_keys(limits, {"time_ms", "memory_mb", "output_kb"}, "Limits")
-    if not all(isinstance(value, int) and value > 0 for value in limits.values()):
-        raise ProblemError("Limits values must be positive integers")
+    _validate_limits(limits, "Limits")
 
     languages = _json_object(sections["Languages"], "Languages")
     if not languages:
@@ -365,9 +379,7 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
     if not isinstance(invocation, dict) or not invocation:
         raise ProblemError("problem.json invocation must be an object")
     limits = problem_data["limits"]
-    _require_exact_keys(limits, {"time_ms", "memory_mb", "output_kb"}, "Limits")
-    if not all(isinstance(value, int) and value > 0 for value in limits.values()):
-        raise ProblemError("Limits values must be positive integers")
+    _validate_limits(limits, "Limits")
 
     # statement.md: '# Title', '## Description' (with ### Example N and
     # ### Constraints), optional '## Hints' with ### Hint N.

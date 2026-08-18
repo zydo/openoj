@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import sys
+import threading
 import traceback
 from pathlib import Path
 from typing import Any
@@ -263,6 +264,70 @@ def _invoke_interactive(module, invocation: dict[str, Any], raw_input: Any) -> A
     return result
 
 
+def _invoke_concurrent(module, invocation: dict[str, Any], raw_input: Any) -> Any:
+    """Run a schedule of calls on real threads and report what happened.
+
+    Each entry in the schedule becomes one thread. A call that LeetCode
+    hands a release callback declares `emits`: the harness passes a
+    callback that appends that token to the shared log, so the log is the
+    interleaving the solution actually produced. A call that returns a
+    value declares `records`, and its return value is appended when it
+    completes. The judge compares the log — order-insensitively, or
+    against the problem's structural invariant — because a correct
+    concurrent program has many valid interleavings.
+    """
+    if not isinstance(raw_input, dict):
+        raise ValueError("Concurrent input must be an object")
+    schedule = raw_input.get("threads")
+    if not isinstance(schedule, list) or not schedule:
+        raise ValueError("Concurrent input needs a non-empty threads list")
+    instance = getattr(module, invocation["class_name"])(*raw_input.get("constructor", []))
+    events: list[Any] = []
+    lock = threading.Lock()
+    failures: list[str] = []
+
+    def record(value: Any) -> None:
+        with lock:
+            events.append(value)
+
+    def runner(call: str, arguments: list[Any], emits: Any, records: bool):
+        def run() -> None:
+            try:
+                method = getattr(instance, call)
+                if emits is not None:
+                    method(*arguments, lambda: record(emits))
+                elif records:
+                    record(method(*arguments))
+                else:
+                    method(*arguments)
+            except BaseException as error:  # noqa: BLE001 — reported as a verdict
+                with lock:
+                    failures.append(f"{type(error).__name__}: {error}")
+        return run
+
+    threads = [
+        threading.Thread(
+            target=runner(
+                spec["call"],
+                list(spec.get("args", [])),
+                spec.get("emits"),
+                bool(spec.get("records")),
+            ),
+            daemon=True,
+        )
+        for spec in schedule
+    ]
+    for thread in threads:
+        thread.start()
+    # The outer judge timeout is the deadlock detector: a schedule that
+    # never completes simply never returns, and the case times out.
+    for thread in threads:
+        thread.join()
+    if failures:
+        raise RuntimeError(failures[0])
+    return events
+
+
 def _invoke(module, invocation: dict[str, Any], raw_input: Any) -> Any:
     invocation_type = invocation.get("type", "function")
     if invocation_type == "function":
@@ -271,6 +336,8 @@ def _invoke(module, invocation: dict[str, Any], raw_input: Any) -> Any:
         return _invoke_design(module, invocation, raw_input)
     if invocation_type == "interactive":
         return _invoke_interactive(module, invocation, raw_input)
+    if invocation_type == "concurrent":
+        return _invoke_concurrent(module, invocation, raw_input)
     raise ValueError(f"Unsupported invocation type: {invocation_type}")
 
 

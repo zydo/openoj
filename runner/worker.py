@@ -113,7 +113,11 @@ def _run_case(
         # Managed runtimes reserve address space for the VM in addition to the
         # problem's user-memory allowance. The executor declares that overhead.
         "memory_mb": int(limits.get("memory_mb", 256)) + executor.address_space_overhead_mb,
-        "processes": executor.max_processes,
+        # A concurrency problem's schedule needs one OS thread per scheduled
+        # call, and threads count against the runtime process cap. The problem
+        # declares how many the schedule spawns; the sandbox ceiling still
+        # applies, and problems that declare nothing keep the old cap.
+        "processes": min(200, executor.max_processes + int(limits.get("threads", 0))),
     }
     timeout_seconds = calibrated_time_ms / 1000
     if getattr(executor, "encode_case_with_limits", False):

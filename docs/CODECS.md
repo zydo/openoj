@@ -114,6 +114,44 @@ the solution method. The first oracle is `GridMaster` (hidden-grid problems):
 Offered in Python 3 and Java only. New oracles are added as harness classes
 on both sides.
 
+## Concurrency problems (`type: "concurrent"`)
+
+LeetCode's concurrency problems hand the same object to several threads
+at once. The case carries a schedule, one entry per thread:
+
+```json
+{"constructor": [3],
+ "threads": [{"call": "hydrogen", "emits": "H"},
+              {"call": "hydrogen", "emits": "H"},
+              {"call": "oxygen", "emits": "O"}]}
+```
+
+Each entry becomes one real thread. `emits` marks the LeetCode shape
+where the method receives a release callback: the harness passes a
+callback that appends that token to a shared log, so the log is the
+interleaving the submission actually produced. `records: true` instead
+appends the call's return value when it completes. Everything else runs
+for its side effects only.
+
+The invocation declares the class the way a design problem does —
+`class_name`, `constructor.parameters`, `methods` — with one extra
+parameter kind: `{"kind": "callback"}` is the release callback the judge
+supplies, rendered as `Callable[[], None]` in the Python starter and
+`Runnable` in Java. Every Java method of a concurrent class is generated
+with `throws InterruptedException`, since any of them may block.
+
+`limits.threads` tells the sandbox how many threads the schedule
+spawns — threads count against the runtime process cap, which would
+otherwise stop the schedule short. A schedule that deadlocks never
+returns, so the case's ordinary time limit is the deadlock detector.
+
+Because a correct concurrent program has many valid interleavings, these
+cases are judged by invariant rather than by one expected order:
+`multiset` comparison where only the collection of results matters, or
+`{"mode": "grouped", "size": 3, "counts": {"H": 2, "O": 1}}`, which
+requires every consecutive group of that size to hold exactly those
+tokens. Offered in Python 3 and Java only.
+
 ## Solution files (`solution*.<ext>`)
 
 A bundle carries either a single canonical `solution.<ext>` per language, or

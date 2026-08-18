@@ -100,6 +100,9 @@ public final class OpenOJJavaHarness {
         if ("interactive".equals(type)) {
             return invokeInteractive(targetClass, invocation, rawInput);
         }
+        if ("concurrent".equals(type)) {
+            return invokeConcurrent(targetClass, invocation, rawInput);
+        }
         if (!"function".equals(type)) {
             throw new IllegalArgumentException("Unsupported invocation type: " + type);
         }
@@ -189,6 +192,83 @@ public final class OpenOJJavaHarness {
             default:
                 return null;
         }
+    }
+
+    /**
+     * Runs a schedule of calls on real threads and reports what happened.
+     * Each schedule entry becomes one thread; a call that LeetCode hands a
+     * Runnable declares `emits` and receives a callback appending that token
+     * to the shared log, while a call declaring `records` contributes its
+     * return value when it completes. The judge compares the log against the
+     * problem's invariant, because a correct concurrent program has many
+     * valid interleavings.
+     */
+    private static Object invokeConcurrent(
+        Class<?> targetClass,
+        Map<String, Object> invocation,
+        Object rawInput
+    ) throws Exception {
+        Map<String, Object> state = asMap(rawInput, "Concurrent input must be an object");
+        List<Object> schedule = asList(state.get("threads"), "Concurrent input needs a threads list");
+        if (schedule.isEmpty()) {
+            throw new IllegalArgumentException("Concurrent schedule must not be empty");
+        }
+        List<Object> constructorArguments = state.get("constructor") == null
+            ? new ArrayList<>()
+            : asList(state.get("constructor"), "Constructor params must be a list");
+        InvocationPlan<Constructor<?>> constructorPlan = findConstructor(targetClass, constructorArguments);
+        Object instance;
+        try {
+            instance = constructorPlan.executable().newInstance(constructorPlan.arguments());
+        } catch (InvocationTargetException error) {
+            throw propagate(error.getTargetException());
+        }
+
+        List<Object> events = java.util.Collections.synchronizedList(new ArrayList<>());
+        List<Throwable> failures = java.util.Collections.synchronizedList(new ArrayList<>());
+        List<Thread> threads = new ArrayList<>();
+        for (Object entry : schedule) {
+            Map<String, Object> spec = asMap(entry, "Schedule entry must be an object");
+            String call = asString(spec.get("call"), "Schedule entry needs a call name");
+            List<Object> arguments = spec.get("args") == null
+                ? new ArrayList<>()
+                : asList(spec.get("args"), "Schedule args must be a list");
+            Object emits = spec.get("emits");
+            boolean records = Boolean.TRUE.equals(spec.get("records"));
+            threads.add(new Thread(() -> {
+                try {
+                    if (emits != null) {
+                        List<Object> callArguments = new ArrayList<>(arguments);
+                        callArguments.add((Runnable) () -> events.add(emits));
+                        InvocationPlan<Method> plan = findMethod(targetClass, call, callArguments);
+                        plan.executable().invoke(instance, plan.arguments());
+                    } else {
+                        InvocationPlan<Method> plan = findMethod(targetClass, call, arguments);
+                        Object value = plan.executable().invoke(instance, plan.arguments());
+                        if (records) {
+                            events.add(value);
+                        }
+                    }
+                } catch (InvocationTargetException error) {
+                    failures.add(error.getTargetException());
+                } catch (Throwable error) {
+                    failures.add(error);
+                }
+            }));
+        }
+        for (Thread thread : threads) {
+            thread.setDaemon(true);
+            thread.start();
+        }
+        // The outer judge timeout is the deadlock detector: a schedule that
+        // never completes simply never returns, and the case times out.
+        for (Thread thread : threads) {
+            thread.join();
+        }
+        if (!failures.isEmpty()) {
+            throw propagate(failures.get(0));
+        }
+        return new ArrayList<>(events);
     }
 
     private static Object invokeInteractive(

@@ -81,6 +81,23 @@ def _distribution_ok(actual: Any, spec: dict[str, Any]) -> bool:
     return True
 
 
+def _grouped_ok(actual: Any, spec: dict[str, Any]) -> bool:
+    if not isinstance(actual, list):
+        return False
+    size = int(spec.get("size", 0))
+    counts = spec.get("counts")
+    if size <= 0 or not isinstance(counts, dict):
+        return False
+    total = int(spec.get("total", len(actual)))
+    if len(actual) != total or total % size != 0:
+        return False
+    for start in range(0, total, size):
+        group = Counter(actual[start : start + size])
+        if group != Counter({token: int(n) for token, n in counts.items()}):
+            return False
+    return True
+
+
 def _compare(actual: Any, expected: Any, comparison: Any) -> bool:
     # Design outputs are per-action lists; a statistical action's expected
     # element is a distribution spec compared against the harness frequency
@@ -105,6 +122,12 @@ def _compare(actual: Any, expected: Any, comparison: Any) -> bool:
     # output only has to round-trip back through deserialize).
     if isinstance(expected, dict) and expected.get("mode") == "opaque":
         return True
+    # {"mode": "grouped", "size": 3, "counts": {"H": 2, "O": 1}} judges a
+    # concurrent log by its structural invariant: a correct program has many
+    # valid interleavings, but every consecutive group must hold exactly
+    # these counts (two hydrogen and one oxygen per water molecule).
+    if isinstance(expected, dict) and expected.get("mode") == "grouped":
+        return _grouped_ok(actual, expected)
     if comparison == "exact":
         return actual == expected
     if comparison == "close" or (
