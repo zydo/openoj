@@ -20,6 +20,7 @@ from interactive_oracles import (
     Master,
     MountainArray,
     Robot,
+    Sea,
 )
 from leetcode_types import (
     HtmlParser,
@@ -73,6 +74,7 @@ def _load_solution(solution_path: Path):
             "BinaryMatrix": BinaryMatrix,
             "ArrayReader": ArrayReader,
             "InfiniteStream": InfiniteStream,
+            "Sea": Sea,
         }
     )
     spec.loader.exec_module(module)
@@ -229,6 +231,8 @@ def _build_oracle(name: str, raw_input: dict[str, Any], budget: int) -> Any:
         return ArrayReader(raw_input["arr"], budget)
     if name == "InfiniteStream":
         return InfiniteStream(raw_input["bits"], budget)
+    if name == "Sea":
+        return Sea(raw_input["ships"], budget)
     raise ValueError(f"Unsupported interactive oracle: {name}")
 
 
@@ -237,10 +241,11 @@ def _build_oracle(name: str, raw_input: dict[str, Any], budget: int) -> Any:
 # mountain-array's target, ...). The case key listed here is passed to the
 # method as a second argument, after the oracle.
 ORACLE_AUXILIARY = {
-    "Master": "wordlist",
-    "MountainArray": "target",
-    "ArrayReader": "target",
-    "InfiniteStream": "pattern",
+    "Master": ["wordlist"],
+    "MountainArray": ["target"],
+    "ArrayReader": ["target"],
+    "InfiniteStream": ["pattern"],
+    "Sea": ["topRight", "bottomLeft"],
 }
 
 
@@ -252,8 +257,7 @@ def _invoke_interactive(module, invocation: dict[str, Any], raw_input: Any) -> A
     oracle = _build_oracle(oracle_name, raw_input, budget)
     instance = getattr(module, invocation["class_name"])()
     arguments = [oracle]
-    if oracle_name in ORACLE_AUXILIARY:
-        key = ORACLE_AUXILIARY[oracle_name]
+    for key in ORACLE_AUXILIARY.get(oracle_name, ()):
         if key not in raw_input:
             raise ValueError(f"Interactive input for {oracle_name} needs {key!r}")
         arguments.append(raw_input[key])

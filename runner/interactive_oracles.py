@@ -138,6 +138,26 @@ class ArrayReader:
         return self.SENTINEL
 
 
+class Sea:
+    """Oracle for 1274 number-of-ships-in-a-rectangle: hasShips(topRight,
+    bottomLeft) answers whether the closed rectangle holds at least one
+    ship, under LeetCode's 400-call budget."""
+
+    def __init__(self, ships: list[list[int]], budget: int):
+        self.ships = [tuple(ship) for ship in ships]
+        self.budget = budget
+
+    def hasShips(self, topRight: list[int], bottomLeft: list[int]) -> bool:  # noqa: N802,N803 — LeetCode API
+        if self.budget <= 0:
+            raise RuntimeError("Sea query budget exhausted")
+        self.budget -= 1
+        right, top = topRight
+        left, bottom = bottomLeft
+        return any(
+            left <= x <= right and bottom <= y <= top for x, y in self.ships
+        )
+
+
 class InfiniteStream:
     """Oracle for 3023 find-pattern-in-infinite-stream-i: next() yields
     one bit at a time from a (finite but generous) recorded prefix."""

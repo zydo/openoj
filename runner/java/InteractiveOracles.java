@@ -203,6 +203,38 @@ public final class InteractiveOracles {
         }
     }
 
+    /** 1274 number-of-ships-in-a-rectangle: hasShips over a closed box. */
+    public static final class Sea {
+        private final int[][] ships;
+        private long budget;
+
+        public Sea(List<Object> shipData, long budget) {
+            this.ships = new int[shipData.size()][];
+            for (int i = 0; i < shipData.size(); i++) {
+                List<Object> point = asRow(shipData.get(i), i);
+                this.ships[i] = new int[] {
+                    ((Number) point.get(0)).intValue(),
+                    ((Number) point.get(1)).intValue(),
+                };
+            }
+            this.budget = budget;
+        }
+
+        public boolean hasShips(int[] topRight, int[] bottomLeft) {
+            if (budget <= 0) {
+                throw new IllegalStateException("Sea query budget exhausted");
+            }
+            budget -= 1;
+            for (int[] ship : ships) {
+                if (ship[0] >= bottomLeft[0] && ship[0] <= topRight[0]
+                    && ship[1] >= bottomLeft[1] && ship[1] <= topRight[1]) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     /** 3023 find-pattern-in-infinite-stream-i: next() yields bits in order. */
     public static final class InfiniteStream {
         private final int[] bits;

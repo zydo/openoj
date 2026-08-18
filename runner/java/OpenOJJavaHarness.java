@@ -162,6 +162,11 @@ public final class OpenOJJavaHarness {
                     asList(state.get("bits"), "InfiniteStream bits must be a list"),
                     budget
                 );
+            case "Sea":
+                return new InteractiveOracles.Sea(
+                    asList(state.get("ships"), "Sea ships must be a list"),
+                    budget
+                );
             default:
                 throw new IllegalArgumentException("Unsupported interactive oracle: " + oracle);
         }
@@ -173,25 +178,35 @@ public final class OpenOJJavaHarness {
      * mountain-array's target, ...). The case key listed here is converted
      * and passed to the method as a second argument, after the oracle.
      */
-    private static Object auxiliaryArgument(String oracle, Map<String, Object> state) {
+    private static Object[] auxiliaryArguments(String oracle, Map<String, Object> state) {
         switch (oracle) {
             case "Master":
-                return convert(
-                    asList(state.get("wordlist"), "Master wordlist must be a list"),
-                    String[].class,
-                    String[].class
-                );
+                return new Object[] {
+                    convert(
+                        asList(state.get("wordlist"), "Master wordlist must be a list"),
+                        String[].class,
+                        String[].class
+                    ),
+                };
             case "MountainArray":
             case "ArrayReader":
-                return numberValue(state.get("target")).intValue();
+                return new Object[] { numberValue(state.get("target")).intValue() };
             case "InfiniteStream":
-                return convert(
-                    asList(state.get("pattern"), "InfiniteStream pattern must be a list"),
-                    int[].class,
-                    int[].class
-                );
+                return new Object[] {
+                    convert(
+                        asList(state.get("pattern"), "InfiniteStream pattern must be a list"),
+                        int[].class,
+                        int[].class
+                    ),
+                };
+            case "Sea":
+                // countShips takes the search box alongside the oracle.
+                return new Object[] {
+                    convert(asList(state.get("topRight"), "Sea topRight must be a list"), int[].class, int[].class),
+                    convert(asList(state.get("bottomLeft"), "Sea bottomLeft must be a list"), int[].class, int[].class),
+                };
             default:
-                return null;
+                return new Object[0];
         }
     }
 
@@ -285,7 +300,7 @@ public final class OpenOJJavaHarness {
         Map<String, Object> state = asMap(rawInput, "Interactive input must be an object");
         long budget = numberValue(invocation.getOrDefault("query_limit", 1_000_000)).longValue();
         Object oracleInstance = buildOracle(oracle, state, budget);
-        Object auxiliary = auxiliaryArgument(oracle, state);
+        Object[] auxiliary = auxiliaryArguments(oracle, state);
 
         Constructor<?> constructor = targetClass.getDeclaredConstructor();
         constructor.setAccessible(true);
@@ -296,9 +311,10 @@ public final class OpenOJJavaHarness {
                 continue;
             }
             candidate.setAccessible(true);
-            Object result = auxiliary == null
-                ? candidate.invoke(instance, oracleInstance)
-                : candidate.invoke(instance, oracleInstance, auxiliary);
+            Object[] callArguments = new Object[1 + auxiliary.length];
+            callArguments[0] = oracleInstance;
+            System.arraycopy(auxiliary, 0, callArguments, 1, auxiliary.length);
+            Object result = candidate.invoke(instance, callArguments);
             // Void-method oracles are judged by their own final state —
             // e.g. the robot's exact set of cleaned cells.
             if (result == null) {
