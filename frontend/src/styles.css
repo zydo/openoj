@@ -118,9 +118,9 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 }
 
 .panel { background: var(--surface); border: 1px solid #22282c; border-radius: var(--radius); min-width: 0; min-height: 0; overflow: hidden; }
-.problem-panel { display: grid; grid-template-rows: 40px minmax(0, 1fr); }
+.problem-panel { display: grid; grid-template-rows: 34px minmax(0, 1fr); }
 .right-stack { --editor-pane: 61%; display: grid; grid-template-rows: minmax(0, var(--editor-pane)) 7px minmax(0, 1fr); min-width: 0; min-height: 0; }
-.editor-panel { display: grid; grid-template-rows: 40px 32px minmax(0, 1fr) 26px; }
+.editor-panel { display: grid; grid-template-rows: 34px 32px minmax(0, 1fr) 26px; }
 .editor-toolbar {
   min-width: 0;
   display: flex;
@@ -130,7 +130,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
-.console-panel { display: grid; grid-template-rows: 3px 39px minmax(0, 1fr); position: relative; }
+.console-panel { display: grid; grid-template-rows: 3px 34px minmax(0, 1fr); position: relative; }
 
 .panel-tabs, .panel-heading {
   min-width: 0;
