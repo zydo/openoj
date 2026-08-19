@@ -318,7 +318,7 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    document.title = problem ? `OpenOJ — ${problem.title}` : "OpenOJ — Practice library";
+    document.title = problem ? `OpenOJ — ${problem.title}` : "OpenOJ — Problem List";
   }, [problem]);
 
   const toggleTheme = () => {
@@ -1510,7 +1510,7 @@ function ProblemDrawer({ problems, activeSlug, onSelect, onClose }: {
     <div className="drawer-backdrop" onMouseDown={onClose}>
       <aside className="drawer" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-heading">
-          <div><strong>Practice library</strong></div>
+          <div><strong>Problem List</strong></div>
           <button className="icon-button" onClick={onClose} aria-label="Close problem list"><X size={18} /></button>
         </div>
         <div className="drawer-tools">
