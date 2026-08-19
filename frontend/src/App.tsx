@@ -479,17 +479,6 @@ function App() {
   // The message is transient: any edit, or a language switch, retires it.
   useEffect(() => setFormatError(""), [code, language]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-        event.preventDefault();
-        void execute(event.shiftKey ? "submit" : "run");
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [execute]);
-
   const changeLanguage = (key: string) => {
     if (!problem) return;
     try { sessionStorage.setItem(LANGUAGE_STORAGE_KEY, key); } catch { /* Preference is best-effort. */ }
@@ -575,11 +564,11 @@ function App() {
           ><ChevronRight size={18} /></button>
         </div>
         <div className="top-actions">
-          <button className="run-button" onClick={() => void execute("run")} disabled={busy !== null} title="Run tests (Ctrl/⌘ + Enter)">
+          <button className="run-button" onClick={() => void execute("run")} disabled={busy !== null} title="Run tests">
             {busy === "run" ? <LoaderCircle className="spin" size={16} /> : <Play size={16} fill="currentColor" />}
             Run
           </button>
-          <button className="submit-button" onClick={() => void execute("submit")} disabled={busy !== null} title="Submit (Ctrl/⌘ + Shift + Enter)">
+          <button className="submit-button" onClick={() => void execute("submit")} disabled={busy !== null} title="Submit">
             {busy === "submit" ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
             Submit
           </button>
@@ -685,29 +674,35 @@ function App() {
 
         <section className="right-stack" ref={rightRef} style={{ "--editor-pane": `${splitY}%` } as React.CSSProperties}>
           <section className="panel editor-panel">
-            <div className="panel-heading">
+            <div className="panel-heading editor-heading">
               <span className="panel-title"><Code2 size={16} /> Code</span>
+            </div>
+            <div className="editor-toolbar">
+              <LanguageMenu
+                value={language}
+                options={Object.entries(problem.languages).map(([key, config]) => ({
+                  key,
+                  label: config.display_name,
+                  enabled: config.enabled,
+                }))}
+                onChange={changeLanguage}
+              />
               <div className="editor-tools">
                 <button
-                  className="format-button"
+                  className="icon-button"
                   onClick={formatCode}
                   disabled={formatting || !code.trim()}
-                  title={formatError || "Format code"}
-                  aria-label="Format code"
+                  title={formatError || "Format Code"}
+                  aria-label="Format Code"
                 >
-                  {formatting ? <LoaderCircle className="spin" size={14} /> : <Wand2 size={14} />}
-                  Format
+                  {formatting ? <LoaderCircle className="spin" size={15} /> : <Wand2 size={15} />}
                 </button>
-                <LanguageMenu
-                  value={language}
-                  options={Object.entries(problem.languages).map(([key, config]) => ({
-                    key,
-                    label: config.display_name,
-                    enabled: config.enabled,
-                  }))}
-                  onChange={changeLanguage}
-                />
-                <button className="icon-button" title="Restore" onClick={() => setConfirmRestore(true)}>
+                <button
+                  className="icon-button"
+                  title="Reset to default code definition"
+                  aria-label="Reset to default code definition"
+                  onClick={() => setConfirmRestore(true)}
+                >
                   <RotateCcw size={15} />
                 </button>
               </div>
@@ -744,7 +739,6 @@ function App() {
               {formatError
                 ? <span className="editor-status-error"><CircleAlert size={12} /> {formatError}</span>
                 : <span><span className="saved-dot" /> Saved</span>}
-              <span className="editor-shortcut" aria-hidden="true">⏎ run · ⇧⏎ submit</span>
               <span>{problem.limits.time_ms / 1000}s · {problem.limits.memory_mb} MB</span>
             </div>
           </section>
@@ -1339,12 +1333,13 @@ function Solutions({ slug, language, languages, theme, onLanguageChange }: {
   }
 
   // Variants are the named approaches (bfs, dfs, …); a canonical-only
-  // problem shows its single solution untitled.
+  // problem shows its single solution untitled. Multi-solution problems
+  // number their sections so the order is legible at a glance.
   const variants = Object.keys(content.implementations).sort();
   const entries = variants.length > 0
-    ? variants.map((variant) => ({
+    ? variants.map((variant, index) => ({
         name: variant,
-        title: content.titles?.[variant] ?? variant.toUpperCase(),
+        title: `Solution ${index + 1}: ${content.titles?.[variant] ?? variant.toUpperCase()}`,
         body: content.guide[variant] ?? "",
         code: content.implementations[variant],
       }))

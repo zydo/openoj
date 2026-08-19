@@ -120,7 +120,16 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .panel { background: var(--surface); border: 1px solid #22282c; border-radius: var(--radius); min-width: 0; min-height: 0; overflow: hidden; }
 .problem-panel { display: grid; grid-template-rows: 40px minmax(0, 1fr); }
 .right-stack { --editor-pane: 61%; display: grid; grid-template-rows: minmax(0, var(--editor-pane)) 7px minmax(0, 1fr); min-width: 0; min-height: 0; }
-.editor-panel { display: grid; grid-template-rows: 40px minmax(0, 1fr) 26px; }
+.editor-panel { display: grid; grid-template-rows: 40px 32px minmax(0, 1fr) 26px; }
+.editor-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
 .console-panel { display: grid; grid-template-rows: 3px 39px minmax(0, 1fr); position: relative; }
 
 .panel-tabs, .panel-heading {
@@ -254,28 +263,9 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .editor-status { display: flex; justify-content: space-between; align-items: center; padding: 0 10px; background: #191d20; border-top: 1px solid #292f33; color: var(--quiet); font: 11px "Roboto Mono", monospace; }
 .editor-status > span { display: inline-flex; align-items: center; gap: 6px; }
 .saved-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--cyan); }
-.editor-shortcut { opacity: .78; }
 .editor-status-error { color: var(--red); }
 
 /* Quieter than Run/Submit — formatting is a convenience, not the payoff. */
-.format-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 30px;
-  padding: 0 9px;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid #2f363b;
-  border-radius: 4px;
-  font: 500 11.5px "IBM Plex Sans", system-ui, sans-serif;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color .15s, border-color .15s;
-}
-.format-button:hover:not(:disabled) { color: var(--ink); border-color: #3c454b; }
-.format-button:disabled { opacity: .5; cursor: default; }
-
 .verdict-rail { background: #31383d; transition: background .25s, box-shadow .25s; }
 .verdict-success .verdict-rail { background: var(--green); box-shadow: 0 0 15px #43c58250; }
 .verdict-danger .verdict-rail { background: var(--red); box-shadow: 0 0 15px #ed6a6740; }
@@ -477,7 +467,6 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   .splitter-x { display: none; }
   .problem-scroll { padding: 21px 18px 28px; }
   .landing-inner { padding: 22px 14px 34px; gap: 20px; }
-  .editor-shortcut { display: none; }
   .submission-header, .submission-row { grid-template-columns: 1fr .8fr; }
   .submission-header span:nth-child(3), .submission-header span:nth-child(4), .submission-row span:nth-child(3), .submission-row time { display: none; }
 }
@@ -522,8 +511,6 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 [data-theme="light"] .markdown-body pre { background: #f7f9fa; border-color: #d8e1e5; }
 [data-theme="light"] .markdown-body pre code { color: #2c3940; }
 [data-theme="light"] .hints summary { color: #37434b; }
-[data-theme="light"] .format-button { color: #55636c; border-color: #d4dde1; }
-[data-theme="light"] .format-button:hover:not(:disabled) { color: #23303a; border-color: #bfcbd2; background: #e9eef0; }
 [data-theme="light"] .select-trigger { color: #354149; background: #e9eef0; border-color: #d4dde1; }
 [data-theme="light"] .select-trigger:hover { background: #e2e8eb; }
 [data-theme="light"] .select-popup { background: #ffffff; border-color: #c3ced4; box-shadow: 0 14px 38px #24343d26; }
