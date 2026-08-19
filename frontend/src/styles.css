@@ -212,14 +212,14 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   justify-content: space-between;
   gap: 8px;
   padding: 0 8px;
-  color: #d7dcdf;
-  background: #242a2e;
+  color: var(--ink);
+  background: transparent;
   border: 1px solid transparent;
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
 }
-.select-trigger:hover { background: #2b3237; }
+.select-trigger:hover { background: var(--surface-raised); }
 .select-trigger:focus-visible { border-color: var(--cyan); }
 .select-chevron { color: var(--quiet); }
 .select-chevron.flipped { transform: rotate(180deg); }
@@ -511,8 +511,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 [data-theme="light"] .markdown-body pre { background: #f7f9fa; border-color: #d8e1e5; }
 [data-theme="light"] .markdown-body pre code { color: #2c3940; }
 [data-theme="light"] .hints summary { color: #37434b; }
-[data-theme="light"] .select-trigger { color: #354149; background: #e9eef0; border-color: #d4dde1; }
-[data-theme="light"] .select-trigger:hover { background: #e2e8eb; }
+[data-theme="light"] .select-trigger { color: #354149; border-color: #d4dde1; }
 [data-theme="light"] .select-popup { background: #ffffff; border-color: #c3ced4; box-shadow: 0 14px 38px #24343d26; }
 [data-theme="light"] .select-option { color: #46545d; }
 [data-theme="light"] .select-option.active { background: #edf1f3; color: #192127; }
