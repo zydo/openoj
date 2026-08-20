@@ -36,17 +36,18 @@ is one directory per problem (this is what
 
 ```text
 problems/
-└── 0001_two-sum/
-    ├── problem.json     metadata, invocation schema, limits
-    ├── cases.json       testcase corpus ({public, hidden} display grouping)
-    ├── statement.md     pure-prose statement with a fixed heading grammar
-    ├── starter.py       generated from problem.json — never handcrafted
-    └── solution.*       recommended solutions (not served by the API)
+└── 0001-0100/           id-range shards of 100 (problems repo; the
+    └── 0001_pair-sum/   bundled fallback set is a single bundle)
+        ├── problem.json     metadata, invocation schema, limits
+        ├── cases.json       testcase corpus ({public, hidden} display grouping)
+        ├── statement.md     pure-prose statement with a fixed heading grammar
+        ├── starter.py       generated from problem.json — never handcrafted
+        └── solution.*       recommended solutions (not served by the API)
 ```
 
 The flat single-file format (`0001_two-sum.md` with `## Metadata`,
-`## Description`, … `## Test Cases` sections) is still supported and the
-bundled `./problems` set uses it. Both formats can coexist in one directory;
+`## Description`, … `## Test Cases` sections) is still supported; the
+bundled `./problems` fallback set now uses the split format. Both formats can coexist in one directory;
 the split format's statement grammar is `# <Title>`, required `## Description`
 with `### Example N` and `### Constraints` (optional for SQL problems), and
 optional `## Hints` with `### Hint N` headings.

@@ -80,7 +80,7 @@ EXTENSION_LANGUAGE = {
 PROBLEM_BUNDLE_DIR = re.compile(
     r"^(?P<number>[0-9]{4,})_(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)$"
 )
-# Bundles live in id-range shards — problems/0000-0100/0001_two-sum/ —
+# Bundles live in id-range shards — problems/0001-0100/0001_two-sum/ —
 # with the flat layout (problems/0001_two-sum/) still accepted.
 SHARD_DIR = re.compile(r"^[0-9]{4,}-[0-9]{4,}$")
 LANGUAGE_EXTENSION = {extension: language for language, extension in EXTENSION_LANGUAGE.items()}

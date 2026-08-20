@@ -1,8 +1,8 @@
+import json
 import struct
 import unittest
 from pathlib import Path
 
-from api.app.problems import parse_problem_markdown
 from runner.executors.base import ExecutorError
 from runner.executors.typed import encode_case, function_signature
 
@@ -13,9 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class TypedExecutorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        path = ROOT / "problems" / "0001_two-sum.md"
-        problem, _, _ = parse_problem_markdown(path.read_text(encoding="utf-8"), path)
-        cls.invocation = problem["invocation"]
+        path = ROOT / "problems" / "0001-0100" / "0001_pair-sum" / "problem.json"
+        cls.invocation = json.loads(path.read_text(encoding="utf-8"))["invocation"]
 
     def test_two_sum_case_has_a_language_neutral_binary_encoding(self) -> None:
         expected = (
@@ -127,11 +126,11 @@ class TypedExecutorTests(unittest.TestCase):
             _, _, methods[language] = function_signature(self.invocation, language)
         self.assertEqual(
             {
-                "cpp": "twoSum",
-                "javascript": "twoSum",
-                "typescript": "twoSum",
-                "go": "twoSum",
-                "rust": "two_sum",
+                "cpp": "pairSum",
+                "javascript": "pairSum",
+                "typescript": "pairSum",
+                "go": "pairSum",
+                "rust": "pair_sum",
             },
             methods,
         )

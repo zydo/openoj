@@ -87,14 +87,21 @@ touching the judge.
 **Sketch of the bundle-carried form:**
 
 ```
-problems/0489_.../
-  harness/oracle.py
-  harness/Oracle.java
-  problem.json      # invocation.harness declares the entry points:
-                    #   class name, how to build it from the case state,
-                    #   which case keys ride as extra method arguments,
-                    #   whether the final state is the verdict
+problems/0401-0500/0489_.../
+  provided/oracle.py       # problem-owned, editor-invisible code the
+  provided/Oracle.java     # judge assembles with the submission
+  problem.json             # invocation.provided declares the entry points:
+                           #   class name, how to build it from the case state,
+                           #   which case keys ride as extra method arguments,
+                           #   whether the final state is the verdict
 ```
+
+(The shared vocabulary already went the other way: `ListNode`,
+`TreeNode` and the n-ary `Node` live in the problem set's `common/`
+library — see openoj-problems' common/README.md — and the judge
+assembles `common + provided + submission` per language today. What
+remains open here is moving the interactive oracles onto the same
+`provided/` rail.)
 
 The judge would load these into the submission's namespace exactly the
 way it already injects `TreeNode`, and the dispatch tables collapse into
