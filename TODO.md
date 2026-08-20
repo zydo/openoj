@@ -4,46 +4,6 @@ Items here are design decisions we have agreed to discuss or build later.
 Nothing on this page is in progress; when work starts, move it to the task
 list and delete it here.
 
-## Modernize the Python we hand out
-
-Every Python starter and reference solution opens with
-
-```python
-from typing import List, Optional
-```
-
-and annotates with `List[int]` and `Optional[ListNode]`. That is
-pre-3.9 style preserved from the LeetCode originals. The judge runs
-**Python 3.14**, where builtin generics (PEP 585) and `X | None` (PEP
-604) have been the idiom for years, so what we hand the contestant is
-dated the moment they open the editor:
-
-```python
-def mergeTwoLists(self, list1: ListNode | None, list2: ListNode | None) -> ListNode | None:
-def pairSum(self, nums: list[int], target: int) -> list[int]:
-```
-
-The `typing` import usually disappears entirely; `Callable` and friends
-still come from `typing` (or `collections.abc`) where genuinely needed.
-
-**Where it lives.** `gen_starters.py` emits the import line in four
-places and builds annotations in `python_type()`, so the starters are a
-generator change. The reference solutions are a mechanical rewrite of
-the annotation lines plus dropping the now-unused import — currently
-~89 solution files and ~70 starters in `problems-adapt/` alone, and the
-live tree as well if we choose to convert it.
-
-**Sequencing.** Do this on the adapted tree, as part of the adaptation
-program rather than after it: the adapted set is the one we intend to
-keep, the annotations are being rewritten there anyway, and converting
-once is cheaper than converting twice. Whether the legacy tree is worth
-converting before it is archived is a separate call.
-
-Note this touches the compatibility gate's assumption in a harmless
-way: annotations are not semantics, so a source solution renamed at its
-entry point still passes against an adapted bundle whose starter is
-modernized.
-
 ## Shared data types belong to the judge, not the editor
 
 LeetCode never puts `ListNode` in the editor. It shows the shape as a

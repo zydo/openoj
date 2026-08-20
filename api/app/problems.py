@@ -763,7 +763,7 @@ def list_problems() -> list[dict[str, Any]]:
 
 def public_problem(problem: dict[str, Any]) -> dict[str, Any]:
     allowed = {
-        "slug", "title", "difficulty", "tags", "description", "hints",
+        "id", "slug", "title", "difficulty", "tags", "description", "hints",
         "invocation", "limits", "languages", "public_cases",
     }
     result = {key: value for key, value in problem.items() if key in allowed}
