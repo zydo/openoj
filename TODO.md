@@ -203,6 +203,35 @@ Related: the runner grew a `POST /format` path for the editor's Format
 button, so the image already knows how to format every language — the
 generator just does not use it.
 
+## The final nine: 8 interactive + 1 concurrency, never adapted
+
+The adaptation program finished 829 of the 838-bundle bank on
+2026-08-19. Nine sources were never assigned to any part, deliberately:
+they are gated on harness work the program deferred (ADAPT.md, phase-1
+ordering; also the "Self-contained problem bundles" section below,
+which this list makes concrete).
+
+| Source | Oracle / kind | Gate |
+| --- | --- | --- |
+| `0489_robot-room-cleaner` | `Robot` | rename + alias in the runner (class exists) |
+| `0843_guess-the-word` | `Master` | rename + alias (class exists) |
+| `1095_find-in-mountain-array` | `MountainArray` | rename + alias (class exists) |
+| `1274_number-of-ships-in-a-rectangle` | `Sea` | rename + alias (class exists) |
+| `1428_leftmost-column-with-at-least-a-one` | `BinaryMatrix` | rename + alias (class exists) |
+| `3023_find-pattern-in-infinite-stream-i` | `InfiniteStream` | rename + alias (class exists) |
+| `1778_shortest-path-in-a-hidden-grid` | `GridMaster` | **no adapted-side class exists** |
+| `1810_minimum-path-cost-in-a-hidden-grid` | `GridMaster` | **no adapted-side class exists** |
+| `1188_design-bounded-blocking-queue` | concurrency | sandbox-judge verification |
+
+Per problem the work is: pick the new oracle name, add it (with the old
+name as an alias) to `runner/interactive_oracles.py`,
+`runner/java/InteractiveOracles.java`, both dispatch tables, and
+`gen_starters.py`'s oracle table — the pilot's `ArrayReader` rename
+(`0702_search-hidden-sorted-sequence`) is the worked example — then run
+the standard adaptation gates. The concurrency bundle additionally
+needs the sandbox-judge batch that is pending anyway for the adapted
+design/SQL/concurrent set. When these nine land, the bank is 838/838.
+
 ## Multi-solution bundles, beyond the first 42
 
 The convention is fully wired (judge, check.py, Solutions tab,
