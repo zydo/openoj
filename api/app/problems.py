@@ -80,7 +80,31 @@ EXTENSION_LANGUAGE = {
 PROBLEM_BUNDLE_DIR = re.compile(
     r"^(?P<number>[0-9]{4,})_(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)$"
 )
+# Bundles live in id-range shards — problems/0000-0100/0001_two-sum/ —
+# with the flat layout (problems/0001_two-sum/) still accepted.
+SHARD_DIR = re.compile(r"^[0-9]{4,}-[0-9]{4,}$")
 LANGUAGE_EXTENSION = {extension: language for language, extension in EXTENSION_LANGUAGE.items()}
+
+
+def _iter_problem_paths(root: Path) -> list[Path]:
+    """Every candidate bundle path under root: flat children first, then
+    children of shard subdirectories (one level down, nothing deeper)."""
+    candidates: list[Path] = []
+    for child in sorted(root.iterdir()):
+        if SHARD_DIR.fullmatch(child.name) is not None and child.is_dir():
+            candidates.extend(sorted(child.iterdir()))
+        else:
+            candidates.append(child)
+    return candidates
+
+
+def _is_direct_child(path: Path) -> bool:
+    """The resolved path sits in the tree root (flat layout) or exactly one
+    shard below it — anything deeper is not a problem package."""
+    parent = path.parent
+    return parent == PROBLEMS_DIR or (
+        parent.parent == PROBLEMS_DIR and SHARD_DIR.fullmatch(parent.name) is not None
+    )
 
 
 def _headings(markdown: str) -> list[tuple[int, str, int]]:
@@ -519,12 +543,17 @@ def safe_problem_path(slug: str) -> Path:
         raise ProblemError("Invalid problem slug")
     matches = []
     candidates = sorted(
-        [*(PROBLEMS_DIR.glob(f"*_{slug}.md")), *(PROBLEMS_DIR.glob(f"*_{slug}"))],
+        [
+            *(PROBLEMS_DIR.glob(f"*_{slug}.md")),
+            *(PROBLEMS_DIR.glob(f"*_{slug}")),
+            *(PROBLEMS_DIR.glob(f"*/*_{slug}.md")),
+            *(PROBLEMS_DIR.glob(f"*/*_{slug}")),
+        ],
         key=lambda path: (path.name, path.is_dir()),
     )
     for candidate in candidates:
         path = candidate.resolve()
-        if path.parent != PROBLEMS_DIR:
+        if not _is_direct_child(path):
             continue
         if path.is_dir():
             if PROBLEM_BUNDLE_DIR.fullmatch(path.name) is None:
@@ -710,10 +739,10 @@ def list_problems() -> list[dict[str, Any]]:
     problems = []
     if not PROBLEMS_DIR.exists():
         return problems
-    for candidate in sorted(PROBLEMS_DIR.iterdir()):
+    for candidate in _iter_problem_paths(PROBLEMS_DIR):
         try:
             path = candidate.resolve()
-            if path.parent != PROBLEMS_DIR:
+            if not _is_direct_child(path):
                 continue
             if path.is_dir():
                 if PROBLEM_BUNDLE_DIR.fullmatch(path.name) is None:

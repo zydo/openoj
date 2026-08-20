@@ -317,7 +317,7 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    document.title = problem ? `OpenOJ — ${problem.title}` : "OpenOJ — Problem List";
+    document.title = problem ? `OpenOJ — ${problem.id}. ${problem.title}` : "OpenOJ — Problem List";
   }, [problem]);
 
   const toggleTheme = () => {
@@ -618,7 +618,7 @@ function App() {
           {leftTab === "description" ? (
             <article className="problem-scroll">
               <div className="problem-heading">
-                <h1>{problem.title}</h1>
+                <h1>{problem.id}. {problem.title}</h1>
                 <div className="problem-meta">
                   <span className={`difficulty ${difficultyTone(problem.difficulty)}`}>{difficultyLabel(problem.difficulty)}</span>
                   {problem.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
@@ -1076,7 +1076,7 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout }: {
       onClick={() => onOpen(entry.slug)}
     >
       <span className="problem-row-main">
-        <strong>{entry.title}</strong>
+        <strong>{entry.id}. {entry.title}</strong>
         {entry.tags.length > 0 && <small>{entry.tags.join(" · ")}</small>}
       </span>
       <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{difficultyLabel(entry.difficulty)}</span>
@@ -1545,7 +1545,7 @@ function ProblemDrawer({ problems, activeSlug, onSelect, onClose }: {
               onClick={() => onSelect(entry.slug)}
             >
               <span className="problem-row-main">
-                <strong>{entry.title}</strong>
+                <strong>{entry.id}. {entry.title}</strong>
                 {entry.tags.length > 0 && <small>{entry.tags.join(" · ")}</small>}
               </span>
               <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{difficultyLabel(entry.difficulty)}</span>

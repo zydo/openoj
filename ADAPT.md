@@ -212,12 +212,21 @@ reasoning path, not the answer.
 ```
 openoj-problems/
   problems/                # live, untouched during the program
+    0000-0100/             # id-range shards, 100 problems each
+      0001_two-sum/ ...
   problems-adapt/
     MAPPING.md             # human-readable, generated from the ledger
-    0001_pair-sum/ ...
+    MAPPING.json           # machine-readable twin (source -> ours)
+    0000-0100/
+      0001_pair-sum/ ...
   .adapt/
     ledger.json            # source id+slug ↔ our id+slug, old/new API names
     report/<slug>.md
+
+Both bundle trees are sharded into `<lo>-<hi>` subdirectories holding the
+100 ids in that range (`0000-0100` = ids 1-100; a bundle's shard is
+`floor((id-1)/100)`). The api, `check.py`, and `adapt_gates.py` walk the
+shards; the flat layout still resolves for old checkouts.
 ```
 
 `MAPPING.md` reads:
