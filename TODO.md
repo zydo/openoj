@@ -42,7 +42,7 @@ So four languages give the contestant no written description of the
 type at all — they must guess that `.val` and `.next` exist.
 
 **The shape of the fix.** One source of truth per shared type
-(`ListNode`, `TreeNode`, n-ary `Node`, `NestedInteger`), owned by the
+(`ListNode`, `TreeNode`, n-ary `Node`), owned by the
 harness and injected the way it already injects them, plus a per-language
 comment block generated from that same definition, so the editor
 documents the interface without granting the power to change it.
@@ -73,7 +73,7 @@ touching the judge.
 **Two kinds of harness, with different homes:**
 
 - **Common harness** — the shared vocabulary every problem may use:
-  `ListNode`, `TreeNode`, n-ary `Node`, `NestedInteger`, and the codecs
+  `ListNode`, `TreeNode`, n-ary `Node`, and the codecs
   that encode and decode them (`runner/leetcode_types.py`, the typed
   binary encoder, `runner/java/{ListNode,TreeNode}.java`). This is
   language-runtime plumbing and stays in the framework, but it should

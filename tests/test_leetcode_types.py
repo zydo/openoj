@@ -27,12 +27,6 @@ class LeetCodeCodecTests(unittest.TestCase):
             with self.subTest(sample=sample):
                 self.assertEqual(sample, encode(decode(sample, "nary_tree"), "nary_tree"))
 
-    def test_nested_integer_top_level(self) -> None:
-        values = decode([[1, 2], 3, [], [4, [5]]], "nested_integer_list")
-        self.assertFalse(values[0].isInteger())
-        self.assertEqual(3, values[1].getInteger())
-        self.assertEqual([], values[2].getList())
-        self.assertEqual(5, values[3].getList()[1].getList()[0].getInteger())
 
 
 if __name__ == "__main__":

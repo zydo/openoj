@@ -55,7 +55,7 @@ templates).
 ## Wrapper types given to submissions
 
 Python submissions get these names in module scope (`runner/python_harness.py`):
-`ListNode`, `TreeNode`, `Node` (n-ary), `NestedInteger`, `HtmlParser`,
+`ListNode`, `TreeNode`, `Node` (n-ary), `HtmlParser`,
 `GridMaster`. Java solutions see the same names from the judge classpath
 (`runner/java/*.java`, compiled into the image). Generated starters reference
 them; solutions never define them.

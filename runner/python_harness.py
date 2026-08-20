@@ -26,7 +26,6 @@ from interactive_oracles import (
 from leetcode_types import (
     HtmlParser,
     ListNode,
-    NestedInteger,
     Node,
     TreeNode,
     decode,
@@ -78,7 +77,6 @@ def _load_solution(solution_path: Path, assembly_paths: list[Path] | None = None
                 "ListNode": ListNode,
                 "TreeNode": TreeNode,
                 "Node": Node,
-                "NestedInteger": NestedInteger,
                 "HtmlParser": HtmlParser,
                 "GridMaster": GridMaster,
                 "Robot": Robot,

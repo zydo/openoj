@@ -202,7 +202,7 @@ function enhance(
   monaco.languages.setMonarchTokensProvider(languageId, grammar);
 }
 
-const JUDGE_TYPES = ["TreeNode", "ListNode", "Node", "NestedInteger", "GridMaster", "Solution"];
+const JUDGE_TYPES = ["TreeNode", "ListNode", "Node", "GridMaster", "Solution"];
 
 enhance("python", pythonLanguage as Grammar, {
   types: [

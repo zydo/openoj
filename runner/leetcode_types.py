@@ -29,25 +29,6 @@ class Node:
         self.children = children if children is not None else []
 
 
-class NestedInteger:
-    def __init__(self, value=None):
-        if isinstance(value, list):
-            self._list = [NestedInteger(item) for item in value]
-            self._integer = None
-        else:
-            self._list = None
-            self._integer = value
-
-    def isInteger(self):
-        return self._list is None
-
-    def getInteger(self):
-        return self._integer
-
-    def getList(self):
-        return self._list
-
-
 class HtmlParser:
     def __init__(self, url_to_urls):
         self._map = url_to_urls
@@ -158,8 +139,6 @@ def decode(value: Any, codec: str) -> Any:
         return [_parse_tree_node(item) for item in value]
     if codec == "nary_tree":
         return _parse_nary_tree(value)
-    if codec == "nested_integer_list":
-        return [NestedInteger(item) for item in value]
     if codec == "html_parser":
         urls = value["urls"]
         mapping = {url: [] for url in urls}

@@ -165,9 +165,9 @@ encodes the neutral testcase payload. Sandboxing, queueing, verdicts, storage,
 and the HTTP API remain language-independent.
 
 Python currently supplies `json`, `list_node`, `tree_node`,
-`list_node_array`, `tree_node_array`, `nary_tree`, `nested_integer_list`,
+`list_node_array`, `tree_node_array`, `nary_tree`,
 and `html_parser` input codecs. Their wire forms match LeetCode conventions,
-and the familiar `ListNode`, `TreeNode`, `Node`, `NestedInteger`, and
+and the familiar `ListNode`, `TreeNode`, `Node`, and
 `HtmlParser` names are injected into submitted modules. Java 21 supports the
 `json`, `list_node`, `tree_node`, `list_node_array`, and `tree_node_array`
 codecs, injecting the matching node classes. Its executor compiles once per
