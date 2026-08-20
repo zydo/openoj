@@ -76,6 +76,9 @@ class GoExecutor(CompiledExecutor):
         limits: dict[str, Any],
         assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
+        if invocation.get("type") == "interactive":
+            from .go_interactive import prepare_interactive
+            return prepare_interactive(self, job_root, scratch, code, invocation, assembly)
         parameters, return_type, method = function_signature(invocation, self.language)
         structs = uses_struct_kinds(invocation)
         item_type = go_type(struct_item_spec(invocation))
@@ -332,4 +335,7 @@ class GoExecutor(CompiledExecutor):
         )
 
     def encode_case(self, invocation: dict[str, Any], case_input: Any) -> bytes:
+        if invocation.get("type") == "interactive":
+            from .typed import encode_interactive_case
+            return encode_interactive_case(invocation, case_input)
         return encode_case(invocation, case_input, self.language)
