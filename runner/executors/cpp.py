@@ -32,10 +32,13 @@ class CppExecutor(CompiledExecutor):
         limits: dict[str, Any],
         assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
-        parameters, _, method = function_signature(invocation, self.language)
         class_name = invocation.get("class_name", "Solution")
         if not isinstance(class_name, str) or not class_name.isidentifier():
             raise ExecutorError("Invalid C++ entry class")
+        if invocation.get("type") == "interactive":
+            from .cpp_interactive import prepare_interactive
+            return prepare_interactive(self, job_root, scratch, code, invocation, assembly)
+        parameters, _, method = function_signature(invocation, self.language)
 
         structs = uses_struct_kinds(invocation)
         item_spec = struct_item_spec(invocation)
@@ -342,4 +345,7 @@ class CppExecutor(CompiledExecutor):
         )
 
     def encode_case(self, invocation: dict[str, Any], case_input: Any) -> bytes:
+        if invocation.get("type") == "interactive":
+            from .typed import encode_interactive_case
+            return encode_interactive_case(invocation, case_input)
         return encode_case(invocation, case_input, self.language)
