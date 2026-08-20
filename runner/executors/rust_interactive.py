@@ -225,7 +225,7 @@ def _convert(spec: dict[str, Any], source: str) -> str:
         inner = _convert(spec["items"], "item")
         return (
             f"(match {source} {{ OjValue::Array(items) => {{ let mut out: Vec<{_rust_type(spec['items'])}> = Vec::with_capacity(items.len()); "
-            f"for item in items {{ out.push({inner};) }} out }}, "
+            f"for item in items {{ out.push({inner}); }} out }}, "
             f"_ => return Err(\"Expected an array\".to_string()) }})"
         )
     raise ExecutorError(f"Interactive auxiliary type {kind} is not supported in Rust")
@@ -268,7 +268,9 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         f"openoj_value_{index}.clone()" for index in range(len(construct_keys))
     )
     call_arguments = ", ".join(["&mut oracle", *auxiliary_args])
-    has_return = bool(invocation.get("return_type"))
+    # A {"kind": "void"} return_type is a declared void, not a value: the
+    # oracle's verdict() judges those (same rule as the python/java sides).
+    has_return = bool(invocation.get("return_type")) and invocation["return_type"].get("kind") != "void"
     if has_return:
         call_block = (
             f"    let actual = Solution::{method}({call_arguments});\n"
