@@ -295,12 +295,63 @@ def _validate_language(problem_data: dict[str, Any], language: str) -> None:
         raise HTTPException(status_code=400, detail="Language runner is not enabled yet")
 
 
+# Where each language's assembled sources live under the problem set:
+# the shared common/ library and a problem's provided/ directory both
+# mirror these names.
+COMMON_DIRECTORIES = {
+    "python3": "python",
+    "java": "java",
+    "cpp": "cpp",
+    "go": "go",
+    "rust": "rust",
+    "typescript": "typescript",
+    "javascript": "javascript",
+}
+
+
+def _assembly_sources(slug: str, language: str) -> dict[str, dict[str, str]]:
+    """The judge-assembled library sources for one submission.
+
+    Reads the problem set's common/<language>/ files plus the problem's
+    own provided/<language>/ files, so the runner compiles or runs one
+    complete program: common + provided + submission (openoj-problems'
+    common/README.md is the contract).
+    """
+    directory = COMMON_DIRECTORIES.get(language)
+    if directory is None:
+        return {}
+    assembly: dict[str, dict[str, str]] = {"common": {}, "provided": {}}
+    try:
+        common_dir = problems.PROBLEMS_DIR / "common" / directory
+        if common_dir.is_dir():
+            for path in sorted(common_dir.iterdir()):
+                if path.is_file():
+                    assembly["common"][path.name] = path.read_text(encoding="utf-8")
+        bundle = problems.safe_problem_path(slug).parent
+        provided_dir = bundle / "provided" / directory
+        if provided_dir.is_dir():
+            for path in sorted(provided_dir.iterdir()):
+                if path.is_file():
+                    assembly["provided"][path.name] = path.read_text(encoding="utf-8")
+    except (problems.ProblemError, OSError):
+        return {}
+    return assembly
+
+
 def _run_judge(
     problem_data: dict[str, Any], language: str, code: str, cases: list[dict[str, Any]], public_count: int
 ) -> list[dict[str, Any]]:
     _validate_language(problem_data, language)
     try:
-        return execute(code, language, problem_data["invocation"], problem_data["limits"], cases, public_count)
+        return execute(
+            code,
+            language,
+            problem_data["invocation"],
+            problem_data["limits"],
+            cases,
+            public_count,
+            assembly=_assembly_sources(problem_data["slug"], language),
+        )
     except RunnerUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except (ValueError, OSError) as error:

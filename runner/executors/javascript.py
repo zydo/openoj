@@ -152,9 +152,19 @@ class JavaScriptExecutor(CompiledExecutor):
         code: str,
         invocation: dict[str, Any],
         limits: dict[str, Any],
+        assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
         parameters, _, method = function_signature(invocation, self.language)
+        # Assembled common/provided source replaces the emitted struct
+        # classes when present (pre-assembly jobs keep the emission).
+        assembly_prelude = "".join(
+            content + "\n"
+            for part in ("common", "provided")
+            for _, content in sorted((assembly or {}).get(part, {}).items())
+        )
         struct_prelude, struct_codecs = _struct_prelude(invocation)
+        if assembly_prelude:
+            struct_prelude = ""
         result_wrapper = _result_wrapper(invocation)
         declarations = "\n".join(
             f"    const openojArg{index} = {_read_expression(spec)};"
@@ -222,7 +232,7 @@ class JavaScriptExecutor(CompiledExecutor):
             """
         )
         source_path = job_root / "main.js"
-        source_path.write_text(struct_prelude + code + "\n" + wrapper, encoding="utf-8")
+        source_path.write_text(assembly_prelude + struct_prelude + code + "\n" + wrapper, encoding="utf-8")
         source_path.chmod(0o444)
         return PreparedProgram(
             command=(

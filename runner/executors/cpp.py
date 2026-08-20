@@ -30,6 +30,7 @@ class CppExecutor(CompiledExecutor):
         code: str,
         invocation: dict[str, Any],
         limits: dict[str, Any],
+        assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
         parameters, _, method = function_signature(invocation, self.language)
         class_name = invocation.get("class_name", "Solution")
@@ -38,14 +39,22 @@ class CppExecutor(CompiledExecutor):
 
         structs = uses_struct_kinds(invocation)
         item_spec = struct_item_spec(invocation)
+        # With the assembled common library the types arrive as source;
+        # without it (pre-assembly jobs) the per-invocation emission below
+        # still applies.
+        assembly_decls = "".join(
+            content
+            for part in ("common", "provided")
+            for _, content in sorted((assembly or {}).get(part, {}).items())
+        )
         struct_decls = ""
-        if "list" in structs:
+        if not assembly_decls and "list" in structs:
             struct_decls += (
                 "struct ListNode { "
                 f"{cpp_type(item_spec)} val; ListNode *next; "
                 f"explicit ListNode({cpp_type(item_spec)} x) : val(x), next(nullptr) {{}} }};\n"
             )
-        if "tree" in structs:
+        if not assembly_decls and "tree" in structs:
             struct_decls += (
                 "struct TreeNode { "
                 f"{cpp_type(item_spec)} val; TreeNode *left; TreeNode *right; "
@@ -300,6 +309,7 @@ class CppExecutor(CompiledExecutor):
             "        std::cout << payload << std::flush;\n"
             "    }\n"
             "}\n"
+            + assembly_decls
             + struct_decls
             + code
             + "\n"

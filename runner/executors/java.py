@@ -69,6 +69,7 @@ class JavaExecutor:
         code: str,
         invocation: dict[str, Any],
         limits: dict[str, Any],
+        assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
         supervisor_uid = os.getuid()
         supervisor_gid = os.getgid()
@@ -78,6 +79,23 @@ class JavaExecutor:
         source_path = job_root / f"{class_name}.java"
         source_path.write_text(code, encoding="utf-8")
         source_path.chmod(0o444)
+        # The assembled program: common-library and problem-provided
+        # sources compile together with the submission as flat
+        # same-package units, so submissions use ListNode with no import.
+        assembly_sources = []
+        for part in ("common", "provided"):
+            for name, content in sorted((assembly or {}).get(part, {}).items()):
+                if not name.endswith(".java"):
+                    continue
+                # javac requires the file name to match the public class,
+                # so assembly sources keep their names, one directory per
+                # part to keep common and provided from colliding.
+                part_dir = job_root / "assembly" / part
+                part_dir.mkdir(parents=True, exist_ok=True)
+                part_path = part_dir / name
+                part_path.write_text(content, encoding="utf-8")
+                part_path.chmod(0o444)
+                assembly_sources.append(str(part_path))
         # javac parses hostile source. Give it a writable job directory, then
         # drop it to the same disposable identity used for runtime execution.
         # Popen changes cwd before the privilege-drop hook runs, so the trusted
@@ -110,6 +128,7 @@ class JavaExecutor:
             "-d",
             str(job_root),
             str(source_path),
+            *assembly_sources,
         )
         process: Optional[subprocess.Popen[bytes]] = None
         try:

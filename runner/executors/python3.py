@@ -35,16 +35,29 @@ class Python3Executor:
         code: str,
         invocation: dict[str, Any],
         limits: dict[str, Any],
+        assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
         source_path = job_root / "solution.py"
         source_path.write_text(code, encoding="utf-8")
         source_path.chmod(0o444)
+        # The assembled program: common library and problem-provided
+        # sources exec into the submission's namespace ahead of the
+        # submission itself, in stable filename order.
+        assembly_paths = []
+        for part in ("common", "provided"):
+            for name, content in sorted((assembly or {}).get(part, {}).items()):
+                part_path = job_root / f"assembly_{part}_{name}"
+                part_path.write_text(content, encoding="utf-8")
+                part_path.chmod(0o444)
+                assembly_paths.append(str(part_path))
         return PreparedProgram(
             command=(
                 self.python_path,
                 "-I",
                 "-S",
                 str(self.harness_path),
+                *assembly_paths,
+                "--",
                 str(source_path),
             ),
             environment={

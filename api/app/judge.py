@@ -216,18 +216,20 @@ def execute(
     limits: dict[str, Any],
     cases: list[dict[str, Any]],
     public_count: int,
+    assembly: dict[str, dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
-    raw_results = _submit(
-        {
-            "version": 2,
-            "language": language,
-            "code": code,
-            "invocation": invocation,
-            "limits": limits,
-            # Expected values deliberately remain in the API trust boundary.
-            "cases": [{"input": case["input"]} for case in cases],
-        }
-    )["results"]
+    body = {
+        "version": 2,
+        "language": language,
+        "code": code,
+        "invocation": invocation,
+        "limits": limits,
+        # Expected values deliberately remain in the API trust boundary.
+        "cases": [{"input": case["input"]} for case in cases],
+    }
+    if assembly:
+        body["assembly"] = assembly
+    raw_results = _submit(body)["results"]
 
     comparison = invocation.get("comparison", "exact")
     results = []

@@ -19,11 +19,12 @@ class SqlExecutor(Python3Executor):
         code: str,
         invocation: dict[str, Any],
         limits: dict[str, Any],
+        assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
         stripped = code.strip().rstrip(";").strip()
         if ";" in stripped:
             raise ExecutorError("SQL submissions must be a single SELECT statement")
-        return super().prepare(job_root, scratch, code, invocation, limits)
+        return super().prepare(job_root, scratch, code, invocation, limits, assembly)
 
     def encode_case(
         self, invocation: dict[str, Any], case_input: Any, limits: dict[str, Any] | None = None

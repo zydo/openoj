@@ -159,9 +159,20 @@ class TypeScriptExecutor(CompiledExecutor):
         code: str,
         invocation: dict[str, Any],
         limits: dict[str, Any],
+        assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
         parameters, _, method = function_signature(invocation, self.language)
+        # With the assembled common library the type declarations arrive as
+        # source ahead of the submission; the per-invocation prelude below
+        # still covers pre-assembly jobs.
+        assembly_prelude = "".join(
+            content + "\n"
+            for part in ("common", "provided")
+            for _, content in sorted((assembly or {}).get(part, {}).items())
+        )
         struct_prelude, struct_codecs = _struct_prelude(invocation)
+        if assembly_prelude:
+            struct_prelude = ""
         result_wrapper = _result_wrapper(invocation)
         declarations = "\n".join(
             f"    const openojArg{index} = {_read_expression(spec)};"
@@ -236,7 +247,7 @@ class TypeScriptExecutor(CompiledExecutor):
         )
         source_path = job_root / "main.ts"
         output_path = job_root / "main.js"
-        source_path.write_text(struct_prelude + code + "\n" + wrapper, encoding="utf-8")
+        source_path.write_text(assembly_prelude + struct_prelude + code + "\n" + wrapper, encoding="utf-8")
         source_path.chmod(0o444)
         self.compile(
             job_root,

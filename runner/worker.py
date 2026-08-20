@@ -251,6 +251,7 @@ def _process_job(job_dir: Path) -> None:
                 code,
                 request["invocation"],
                 request.get("limits", {}),
+                request.get("assembly"),
             )
             job_root.chmod(0o755)
             results = []

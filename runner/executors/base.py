@@ -38,8 +38,17 @@ class LanguageExecutor(Protocol):
         code: str,
         invocation: dict[str, Any],
         limits: dict[str, Any],
+        assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
-        """Write/compile source and return the command used for each testcase."""
+        """Write/compile source and return the command used for each testcase.
+
+        ``assembly`` carries the judge-assembled library sources that make
+        one complete program with the submission: ``{"common": {filename:
+        content}, "provided": {filename: content}}`` from the problem
+        set's common/ library and the problem's provided/ directory. It
+        is None/empty for jobs that predate the assembly model (the
+        built-in fallback types then apply).
+        """
         ...
 
     def encode_case(self, invocation: dict[str, Any], case_input: Any) -> bytes:

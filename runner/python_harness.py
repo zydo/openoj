@@ -55,30 +55,42 @@ def _json_safe(value: Any, output_limit: int = 65_536) -> Any:
     return json.loads(encoded)
 
 
-def _load_solution(solution_path: Path):
+def _load_solution(solution_path: Path, assembly_paths: list[Path] | None = None):
     spec = importlib.util.spec_from_file_location("openoj_solution", solution_path)
     if spec is None or spec.loader is None:
         raise RuntimeError("Unable to load solution")
     module = importlib.util.module_from_spec(spec)
-    # LeetCode supplies these names to submitted source automatically.
-    module.__dict__.update(
-        {
-            "ListNode": ListNode,
-            "TreeNode": TreeNode,
-            "Node": Node,
-            "NestedInteger": NestedInteger,
-            "HtmlParser": HtmlParser,
-            "GridMaster": GridMaster,
-            "Robot": Robot,
-            "Master": Master,
-            "MountainArray": MountainArray,
-            "BinaryMatrix": BinaryMatrix,
-            "ArrayReader": ArrayReader,
-            "SequenceReader": SequenceReader,
-            "InfiniteStream": InfiniteStream,
-            "Sea": Sea,
-        }
-    )
+    if assembly_paths:
+        # The assembled program: the problem set's common library and the
+        # problem's provided sources execute into the submission's
+        # namespace first, so the submission sees exactly one definition.
+        namespace = {"__name__": "openoj_assembly"}
+        for assembly_path in assembly_paths:
+            exec(compile(assembly_path.read_text(encoding="utf-8"), str(assembly_path), "exec"), namespace)
+        for name, value in namespace.items():
+            if not name.startswith("__"):
+                module.__dict__[name] = value
+    else:
+        # Jobs that predate the assembly model: the built-in fallback
+        # names, LeetCode-style.
+        module.__dict__.update(
+            {
+                "ListNode": ListNode,
+                "TreeNode": TreeNode,
+                "Node": Node,
+                "NestedInteger": NestedInteger,
+                "HtmlParser": HtmlParser,
+                "GridMaster": GridMaster,
+                "Robot": Robot,
+                "Master": Master,
+                "MountainArray": MountainArray,
+                "BinaryMatrix": BinaryMatrix,
+                "ArrayReader": ArrayReader,
+                "SequenceReader": SequenceReader,
+                "InfiniteStream": InfiniteStream,
+                "Sea": Sea,
+            }
+        )
     spec.loader.exec_module(module)
     return module
 
@@ -388,7 +400,13 @@ def main() -> None:
         invocation = payload["invocation"]
         output_limit = int(payload.get("limits", {}).get("output_kb", 64)) * 1024
         with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
-            module = _load_solution(Path(sys.argv[1]))
+            argv = sys.argv[1:]
+            if "--" in argv:
+                split = argv.index("--")
+                assembly_args, solution_args = argv[:split], argv[split + 1 :]
+            else:
+                assembly_args, solution_args = [], argv
+            module = _load_solution(Path(solution_args[0]), [Path(a) for a in assembly_args])
             actual = _invoke(module, invocation, payload["input"])
         response = {
             "status": "completed",

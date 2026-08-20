@@ -74,18 +74,34 @@ class GoExecutor(CompiledExecutor):
         code: str,
         invocation: dict[str, Any],
         limits: dict[str, Any],
+        assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
         parameters, return_type, method = function_signature(invocation, self.language)
         structs = uses_struct_kinds(invocation)
         item_type = go_type(struct_item_spec(invocation))
+        # The assembled program compiles as one package: common-library and
+        # problem-provided sources land beside main.go as their own files
+        # (each already declares `package main`). When they are present the
+        # per-invocation type emission below is suppressed.
+        assembled_types = False
+        assembly_paths = []
+        for part in ("common", "provided"):
+            for name, content in sorted((assembly or {}).get(part, {}).items()):
+                if not name.endswith(".go"):
+                    continue
+                part_path = job_root / f"{part}_{name}"
+                part_path.write_text(content, encoding="utf-8")
+                part_path.chmod(0o444)
+                assembly_paths.append(str(part_path))
+                assembled_types = True
         struct_decls = ""
         struct_codecs = ""
         result_conversion = "openojIdentity"
-        if "list" in structs:
+        if not assembled_types and "list" in structs:
             struct_decls += (
                 f"type ListNode struct {{\n\tVal  {item_type}\n\tNext *ListNode\n}}\n\n"
             )
-        if "tree" in structs:
+        if not assembled_types and "tree" in structs:
             struct_decls += (
                 f"type TreeNode struct {{\n\tVal   {item_type}\n\tLeft  *TreeNode\n\tRight *TreeNode\n}}\n\n"
             )
@@ -287,6 +303,7 @@ class GoExecutor(CompiledExecutor):
                 "-o",
                 str(executable),
                 str(source_path),
+                *assembly_paths,
             ),
             executable,
             {

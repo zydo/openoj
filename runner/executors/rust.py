@@ -56,8 +56,17 @@ class RustExecutor(CompiledExecutor):
         code: str,
         invocation: dict[str, Any],
         limits: dict[str, Any],
+        assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
         parameters, return_type, method = function_signature(invocation, self.language)
+        # The assembled program: common-library and problem-provided source
+        # is prepended as one crate's leading items (types the submission
+        # then uses directly).
+        assembly_source = "".join(
+            content + "\n"
+            for part in ("common", "provided")
+            for _, content in sorted((assembly or {}).get(part, {}).items())
+        )
         structs = uses_struct_kinds(invocation)
         item_read = _read_expression(struct_item_spec(invocation), "self")
         struct_codecs = ""
@@ -164,7 +173,7 @@ class RustExecutor(CompiledExecutor):
             for index, spec in enumerate(parameters)
         )
         arguments = ", ".join(f"openoj_arg_{index}" for index in range(len(parameters)))
-        source = textwrap.dedent(
+        source = assembly_source + textwrap.dedent(
             f"""
             use std::fmt::Write as OpenOJFmtWrite;
             use std::io::Read as OpenOJIoRead;
