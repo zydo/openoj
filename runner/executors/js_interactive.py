@@ -154,7 +154,9 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         return f"{name} as any" if is_typescript else name
 
     auxiliary_args = ", ".join(aux(index) for index in range(len(auxiliary_keys)))
-    has_return = bool(invocation.get("return_type"))
+    # A {"kind": "void"} return_type is a declared void, not a value: the
+    # oracle's verdict() judges those (same rule as the python/java sides).
+    has_return = bool(invocation.get("return_type")) and invocation["return_type"].get("kind") != "void"
     if has_return:
         call_block = (
             f"    const actual = solution.{method}(oracle{', ' + auxiliary_args if auxiliary_args else ''});\n"

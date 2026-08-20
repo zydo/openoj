@@ -236,7 +236,9 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         [f"openojValue{index}" for index in range(len(construct_keys))]
     )
     call_arguments = ", ".join(["oracle", *auxiliary_args])
-    has_return = bool(invocation.get("return_type"))
+    # A {"kind": "void"} return_type is a declared void, not a value: the
+    # oracle's Verdict() judges those (same rule as the python/java sides).
+    has_return = bool(invocation.get("return_type")) and invocation["return_type"].get("kind") != "void"
     if has_return:
         call_block = (
             f"\tactual := solution.{method}({call_arguments})\n"

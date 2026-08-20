@@ -272,7 +272,9 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         [f"openoj_value_{index}" for index in range(len(construct_keys))] + ["openoj_budget"]
     )
     call_arguments = ", ".join(["openoj_oracle", *auxiliary_args])
-    if invocation.get("return_type"):
+    # A {"kind": "void"} return_type is a declared void, not a value: the
+    # oracle's verdict() judges those (same rule as the python/java sides).
+    if invocation.get("return_type") and invocation["return_type"].get("kind") != "void":
         call_block = (
             f"auto openoj_actual = openoj_solution.{method}({call_arguments});\n"
             '        openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"completed\\",\\"actual\\":" + openoj_json(openoj_actual) + "}" + "");'
