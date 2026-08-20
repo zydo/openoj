@@ -143,10 +143,13 @@ the standard adaptation gates. The concurrency bundle additionally
 needs the sandbox-judge batch that is pending anyway for the adapted
 design/SQL/concurrent set. When these nine land, the bank is 838/838.
 
-## Multi-solution bundles, beyond the first 42
+## Multi-solution bundles, beyond the first 54
 
 The convention is fully wired (judge, check.py, Solutions tab,
-fastest-variant baseline) and 42 problems carry named variants across all
-seven languages. Extending it is open-ended content work: find further
-problems whose approaches are genuinely distinct and comparable, and
-author the variant sets.
+fastest-variant baseline) and 54 problems carry named variants across
+every enabled language (2026-08-20: the second wave added triple-zero-
+sum, integer streak, majority element, rotated lookup, covering window,
+stock one-sale, happy number, prefix tree, missing value, zeros-to-end,
+repeated value, nearest-zero distances). Extending further is
+open-ended content work: find problems whose approaches are genuinely
+distinct and comparable, and author the variant sets.
