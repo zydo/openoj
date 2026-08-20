@@ -80,7 +80,8 @@ RUN mkdir -p /runner/java-classes /runner/benchmarks \
         /runner/java/OpenOJJavaHarness.java \
         /runner/java/ListNode.java \
         /runner/java/TreeNode.java \
-RUN g++ -std=c++20 -O2 \
+        && \
+    g++ -std=c++20 -O2 \
         -o /runner/benchmarks/cpp /runner/benchmark-sources/benchmark.cpp \
     && go build -trimpath \
         -o /runner/benchmarks/go /runner/benchmark-sources/benchmark.go \
