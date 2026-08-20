@@ -22,7 +22,6 @@ import {
   Play,
   Plus,
   RotateCcw,
-  Wand2,
   Send,
   Moon,
   Sun,
@@ -695,7 +694,7 @@ function App() {
                   title={formatError || "Format Code"}
                   aria-label="Format Code"
                 >
-                  {formatting ? <LoaderCircle className="spin" size={15} /> : <Wand2 size={15} />}
+                  {formatting ? <LoaderCircle className="spin" size={15} /> : <FormatLinesIcon />}
                 </button>
                 <button
                   className="icon-button"
@@ -920,6 +919,20 @@ function LanguageMenu({ value, options, onChange }: {
         </ul>
       )}
     </div>
+  );
+}
+
+// The format action's own mark: four left-aligned bars of alternating
+// length — code re-wrapped to a margin (drawn after a user sketch).
+function FormatLinesIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={2} strokeLinecap="round" aria-hidden="true">
+      <line x1="4" y1="5" x2="13" y2="5" />
+      <line x1="4" y1="10" x2="20" y2="10" />
+      <line x1="4" y1="15" x2="13" y2="15" />
+      <line x1="4" y1="20" x2="20" y2="20" />
+    </svg>
   );
 }
 
