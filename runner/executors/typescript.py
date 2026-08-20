@@ -161,6 +161,9 @@ class TypeScriptExecutor(CompiledExecutor):
         limits: dict[str, Any],
         assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
+        if invocation.get("type") == "interactive":
+            from .js_interactive import prepare_interactive
+            return prepare_interactive(self, job_root, scratch, code, invocation, assembly, is_typescript=True)
         parameters, _, method = function_signature(invocation, self.language)
         # With the assembled common library the type declarations arrive as
         # source ahead of the submission; the per-invocation prelude below
@@ -290,4 +293,7 @@ class TypeScriptExecutor(CompiledExecutor):
         )
 
     def encode_case(self, invocation: dict[str, Any], case_input: Any) -> bytes:
+        if invocation.get("type") == "interactive":
+            from .typed import encode_interactive_case
+            return encode_interactive_case(invocation, case_input)
         return encode_case(invocation, case_input, self.language)
