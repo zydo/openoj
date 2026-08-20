@@ -13,18 +13,7 @@ from typing import Any
 # placed on the import path.
 sys.path.insert(0, "/runner")
 
-from interactive_oracles import (
-    ArrayReader,
-    SequenceReader,
-    BinaryMatrix,
-    InfiniteStream,
-    Master,
-    MountainArray,
-    Robot,
-    Sea,
-)
 from leetcode_types import (
-    HtmlParser,
     ListNode,
     Node,
     TreeNode,
@@ -77,16 +66,6 @@ def _load_solution(solution_path: Path, assembly_paths: list[Path] | None = None
                 "ListNode": ListNode,
                 "TreeNode": TreeNode,
                 "Node": Node,
-                "HtmlParser": HtmlParser,
-                "GridMaster": GridMaster,
-                "Robot": Robot,
-                "Master": Master,
-                "MountainArray": MountainArray,
-                "BinaryMatrix": BinaryMatrix,
-                "ArrayReader": ArrayReader,
-                "SequenceReader": SequenceReader,
-                "InfiniteStream": InfiniteStream,
-                "Sea": Sea,
             }
         )
     spec.loader.exec_module(module)
@@ -188,91 +167,32 @@ def _invoke_design(module, invocation: dict[str, Any], raw_input: Any) -> Any:
     return output
 
 
-class GridMaster:
-    """Interactive oracle for hidden-grid problems (invocation type
-    "interactive"). Mirrors runner/java/GridMaster.java exactly."""
-
-    DELTAS = {"U": (-1, 0), "D": (1, 0), "L": (0, -1), "R": (0, 1)}
-
-    def __init__(self, grid: list[list[int]], start: list[int], target: list[int], budget: int):
-        self.cost = grid
-        self.rows, self.cols = len(grid), len(grid[0]) if grid else 0
-        self.row, self.col = start
-        self.target_row, self.target_col = target
-        self.budget = budget
-
-    def _spend(self) -> None:
-        if self.budget <= 0:
-            raise RuntimeError("GridMaster query budget exhausted")
-        self.budget -= 1
-
-    def _enterable(self, row: int, col: int) -> bool:
-        return 0 <= row < self.rows and 0 <= col < self.cols and self.cost[row][col] > 0
-
-    def canMove(self, direction: str) -> bool:  # noqa: N802 — LeetCode API
-        self._spend()
-        delta_row, delta_col = self.DELTAS[direction]
-        return self._enterable(self.row + delta_row, self.col + delta_col)
-
-    def move(self, direction: str) -> int:
-        self._spend()
-        delta_row, delta_col = self.DELTAS[direction]
-        row, col = self.row + delta_row, self.col + delta_col
-        if not self._enterable(row, col):
-            return -1
-        self.row, self.col = row, col
-        return self.cost[row][col]
-
-    def isTarget(self) -> bool:  # noqa: N802 — LeetCode API
-        self._spend()
-        return (self.row, self.col) == (self.target_row, self.target_col)
-
-
-def _build_oracle(name: str, raw_input: dict[str, Any], budget: int) -> Any:
-    if name == "GridMaster":
-        return GridMaster(raw_input["grid"], raw_input["start"], raw_input["target"], budget)
-    if name == "Robot":
-        return Robot(raw_input["room"], raw_input["start"], budget)
-    if name == "Master":
-        return Master(raw_input["wordlist"], raw_input["secret"], budget)
-    if name == "MountainArray":
-        return MountainArray(raw_input["mountain"], budget)
-    if name == "BinaryMatrix":
-        return BinaryMatrix(raw_input["matrix"], budget)
-    if name in ("ArrayReader", "SequenceReader"):
-        return SequenceReader(raw_input["arr"], budget)
-    if name == "InfiniteStream":
-        return InfiniteStream(raw_input["bits"], budget)
-    if name == "Sea":
-        return Sea(raw_input["ships"], budget)
-    raise ValueError(f"Unsupported interactive oracle: {name}")
-
-
-# Some oracles pair with auxiliary case data the solution method also
-# needs — LeetCode's two-argument signatures (guess-the-word's wordlist,
-# mountain-array's target, ...). The case key listed here is passed to the
-# method as a second argument, after the oracle.
-ORACLE_AUXILIARY = {
-    "Master": ["wordlist"],
-    "MountainArray": ["target"],
-    "ArrayReader": ["target"],
-    "SequenceReader": ["target"],
-    "InfiniteStream": ["pattern"],
-    "Sea": ["topRight", "bottomLeft"],
-}
 
 
 def _invoke_interactive(module, invocation: dict[str, Any], raw_input: Any) -> Any:
-    oracle_name = invocation.get("oracle", "GridMaster")
     if not isinstance(raw_input, dict):
         raise ValueError("Interactive input must be an object")
     budget = int(invocation.get("query_limit", 1_000_000))
-    oracle = _build_oracle(oracle_name, raw_input, budget)
+    provided = (invocation.get("provided") or {}).get("oracle")
+    if not provided:
+        raise ValueError(
+            "Interactive problems must carry their oracle in provided/ "
+            "(invocation.provided.oracle)"
+        )
+    # Bundle-carried oracle: the class ships in the problem's provided/
+    # sources (already assembled into the submission's namespace); the
+    # manifest names it, the case keys that build it, and any keys that
+    # ride as extra method arguments. The judge core holds no per-oracle
+    # knowledge.
+    oracle = getattr(module, provided["class"])(
+        *(raw_input[key] for key in provided.get("construct", ())), budget
+    )
+    auxiliary_keys = provided.get("auxiliary", ())
     instance = getattr(module, invocation["class_name"])()
     arguments = [oracle]
-    for key in ORACLE_AUXILIARY.get(oracle_name, ()):
+    for key in auxiliary_keys:
         if key not in raw_input:
-            raise ValueError(f"Interactive input for {oracle_name} needs {key!r}")
+            raise ValueError(f"Interactive input needs {key!r}")
         arguments.append(raw_input[key])
     result = getattr(instance, invocation["method"])(*arguments)
     # Void-method oracles are judged by their own final state — e.g. the

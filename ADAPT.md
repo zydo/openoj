@@ -151,23 +151,19 @@ and reference implementation — no stale identifier anywhere.
 
 ### Oracles
 
-The nine interactive problems name their oracle after LeetCode's hidden
-API (`GridMaster`, `Master`, `MountainArray`, `BinaryMatrix`,
-`ArrayReader`, `Robot`, `Sea`, `InfiniteStream`). They are as much
-LeetCode's API surface as the method names, so **they get renamed too**.
+The interactive problems name their oracle after LeetCode's hidden API
+(`GridMaster`, `Master`, `MountainArray`, `BinaryMatrix`, `ArrayReader`,
+`Robot`, `Sea`, `InfiniteStream`). They are as much LeetCode's API
+surface as the method names, so **they get renamed too**.
 
-These names live in the **harness**, not the bundle, so the rename
-touches `runner/interactive_oracles.py`,
-`runner/java/InteractiveOracles.java`, both dispatch tables, and
-`gen_starters.py`'s oracle table in the problems repo.
+(2026-08-20: oracles now ship inside each problem's `provided/`
+directory — see docs/CODECS.md — with the judge assembling them from
+`invocation.provided.oracle`. The harness classes, dispatch tables and
+name aliases this section described are gone; a rename now touches only
+the bundle.)
 
-The old names stay as **aliases** for as long as both trees are served —
-the original tree is the default until cutover, and it needs them. The
-aliases are removed only in phase 3, after the swap. Getting that order
-wrong breaks whichever tree loses its names first.
-
-Decision 5 stretches for exactly these nine: a pasted original solution
-needs its oracle *type* renamed as well as its method.
+Decision 5 stretches for exactly these: a pasted original solution needs
+its oracle *type* renamed as well as its method.
 
 That the framework must change at all to rename a problem's own API is
 a coupling worth removing later; see the self-contained-bundle item in

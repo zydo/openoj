@@ -110,112 +110,6 @@ public final class OpenOJJavaHarness {
         return invokeFunction(targetClass, invocation, rawInput);
     }
 
-    /** Builds the oracle named by the invocation from the case state. */
-    private static Object buildOracle(String oracle, Map<String, Object> state, long budget) {
-        switch (oracle) {
-            case "GridMaster": {
-                List<Object> grid = asList(state.get("grid"), "Interactive grid must be a list");
-                List<Object> start = asList(state.get("start"), "Interactive start must be [row, col]");
-                List<Object> target = asList(state.get("target"), "Interactive target must be [row, col]");
-                return new GridMaster(
-                    grid,
-                    numberValue(start.get(0)).intValue(),
-                    numberValue(start.get(1)).intValue(),
-                    numberValue(target.get(0)).intValue(),
-                    numberValue(target.get(1)).intValue(),
-                    budget
-                );
-            }
-            case "Robot": {
-                List<Object> room = asList(state.get("room"), "Robot room must be a list");
-                List<Object> start = asList(state.get("start"), "Robot start must be [row, col]");
-                return new InteractiveOracles.Robot(
-                    room,
-                    numberValue(start.get(0)).intValue(),
-                    numberValue(start.get(1)).intValue(),
-                    budget
-                );
-            }
-            case "Master":
-                return new InteractiveOracles.Master(
-                    asList(state.get("wordlist"), "Master wordlist must be a list"),
-                    asString(state.get("secret"), "Master secret must be a string"),
-                    budget
-                );
-            case "MountainArray":
-                return new InteractiveOracles.MountainArray(
-                    asList(state.get("mountain"), "MountainArray values must be a list"),
-                    budget
-                );
-            case "BinaryMatrix":
-                return new InteractiveOracles.BinaryMatrix(
-                    asList(state.get("matrix"), "BinaryMatrix rows must be a list"),
-                    budget
-                );
-            case "ArrayReader":
-                // Kept for the pre-adaptation problem tree; see ADAPT.md.
-                return new InteractiveOracles.ArrayReader(
-                    asList(state.get("arr"), "ArrayReader values must be a list"),
-                    budget
-                );
-            case "SequenceReader":
-                return new InteractiveOracles.SequenceReader(
-                    asList(state.get("arr"), "SequenceReader values must be a list"),
-                    budget
-                );
-            case "InfiniteStream":
-                return new InteractiveOracles.InfiniteStream(
-                    asList(state.get("bits"), "InfiniteStream bits must be a list"),
-                    budget
-                );
-            case "Sea":
-                return new InteractiveOracles.Sea(
-                    asList(state.get("ships"), "Sea ships must be a list"),
-                    budget
-                );
-            default:
-                throw new IllegalArgumentException("Unsupported interactive oracle: " + oracle);
-        }
-    }
-
-    /**
-     * Some oracles pair with auxiliary case data the solution method also
-     * needs — LeetCode's two-argument signatures (guess-the-word's wordlist,
-     * mountain-array's target, ...). The case key listed here is converted
-     * and passed to the method as a second argument, after the oracle.
-     */
-    private static Object[] auxiliaryArguments(String oracle, Map<String, Object> state) {
-        switch (oracle) {
-            case "Master":
-                return new Object[] {
-                    convert(
-                        asList(state.get("wordlist"), "Master wordlist must be a list"),
-                        String[].class,
-                        String[].class
-                    ),
-                };
-            case "MountainArray":
-            case "ArrayReader":
-            case "SequenceReader":
-                return new Object[] { numberValue(state.get("target")).intValue() };
-            case "InfiniteStream":
-                return new Object[] {
-                    convert(
-                        asList(state.get("pattern"), "InfiniteStream pattern must be a list"),
-                        int[].class,
-                        int[].class
-                    ),
-                };
-            case "Sea":
-                // countShips takes the search box alongside the oracle.
-                return new Object[] {
-                    convert(asList(state.get("topRight"), "Sea topRight must be a list"), int[].class, int[].class),
-                    convert(asList(state.get("bottomLeft"), "Sea bottomLeft must be a list"), int[].class, int[].class),
-                };
-            default:
-                return new Object[0];
-        }
-    }
 
     /**
      * Runs a schedule of calls on real threads and reports what happened.
@@ -303,40 +197,120 @@ public final class OpenOJJavaHarness {
         Map<String, Object> invocation,
         Object rawInput
     ) throws Exception {
-        String oracle = invocation.getOrDefault("oracle", "GridMaster").toString();
         Map<String, Object> state = asMap(rawInput, "Interactive input must be an object");
         long budget = numberValue(invocation.getOrDefault("query_limit", 1_000_000)).longValue();
-        Object oracleInstance = buildOracle(oracle, state, budget);
-        Object[] auxiliary = auxiliaryArguments(oracle, state);
-
-        Constructor<?> constructor = targetClass.getDeclaredConstructor();
-        constructor.setAccessible(true);
-        Object instance = constructor.newInstance();
-        String method = asString(invocation.get("method"), "Invocation method must be a string");
-        for (Method candidate : targetClass.getDeclaredMethods()) {
-            if (!candidate.getName().equals(method)) {
-                continue;
-            }
-            candidate.setAccessible(true);
-            Object[] callArguments = new Object[1 + auxiliary.length];
-            callArguments[0] = oracleInstance;
-            System.arraycopy(auxiliary, 0, callArguments, 1, auxiliary.length);
-            Object result = candidate.invoke(instance, callArguments);
-            // Void-method oracles are judged by their own final state —
-            // e.g. the robot's exact set of cleaned cells.
-            if (result == null) {
-                try {
-                    return oracleInstance
-                        .getClass()
-                        .getMethod("verdict")
-                        .invoke(oracleInstance);
-                } catch (NoSuchMethodException noVerdict) {
-                    return null;
+        Map<String, Object> providedOracle = providedOracle(invocation);
+        if (providedOracle == null) {
+            throw new IllegalArgumentException(
+                "Interactive problems must carry their oracle in provided/ (invocation.provided.oracle)");
+        }
+        {
+            // Bundle-carried oracle: the class ships in the problem's
+            // provided/ sources and compiled with the submission; the
+            // manifest names it, the case keys that build it, and the
+            // keys that ride as extra method arguments (converted to the
+            // method's own parameter types). The judge core holds no
+            // per-oracle knowledge on this path.
+            String providedClass = asString(providedOracle.get("class"), "Provided oracle class must be a string");
+            List<String> constructKeys = stringList(providedOracle.get("construct"), "provided.construct");
+            List<String> auxiliaryKeys = stringList(providedOracle.get("auxiliary"), "provided.auxiliary");
+            Class<?> oracleClass = Class.forName(providedClass);
+            Constructor<?> chosen = null;
+            for (Constructor<?> candidateCtor : oracleClass.getDeclaredConstructors()) {
+                if (candidateCtor.getParameterCount() == constructKeys.size() + 1) {
+                    chosen = candidateCtor;
+                    break;
                 }
             }
-            return result;
+            if (chosen == null) {
+                throw new IllegalArgumentException(
+                    "Provided oracle " + providedClass + " has no constructor taking "
+                        + constructKeys.size() + " case value(s) plus the query budget");
+            }
+            chosen.setAccessible(true);
+            Class<?>[] parameterTypes = chosen.getParameterTypes();
+            Object[] constructorArguments = new Object[parameterTypes.length];
+            for (int index = 0; index < constructKeys.size(); index++) {
+                constructorArguments[index] = convert(
+                    state.get(constructKeys.get(index)),
+                    parameterTypes[index],
+                    parameterTypes[index]
+                );
+            }
+            constructorArguments[constructKeys.size()] = convert(budget, parameterTypes[constructKeys.size()], null);
+            Object oracleInstance = chosen.newInstance(constructorArguments);
+
+            Constructor<?> constructor = targetClass.getDeclaredConstructor();
+            constructor.setAccessible(true);
+            Object instance = constructor.newInstance();
+            String method = asString(invocation.get("method"), "Invocation method must be a string");
+            for (Method candidate : targetClass.getDeclaredMethods()) {
+                if (!candidate.getName().equals(method)) {
+                    continue;
+                }
+                candidate.setAccessible(true);
+                Class<?>[] methodParameters = candidate.getParameterTypes();
+                if (methodParameters.length != 1 + auxiliaryKeys.size()) {
+                    continue;
+                }
+                Object[] callArguments = new Object[methodParameters.length];
+                callArguments[0] = oracleInstance;
+                for (int index = 0; index < auxiliaryKeys.size(); index++) {
+                    callArguments[1 + index] = convert(
+                        state.get(auxiliaryKeys.get(index)),
+                        methodParameters[1 + index],
+                        methodParameters[1 + index]
+                    );
+                }
+                return finishInteractive(candidate, instance, callArguments, oracleInstance);
+            }
+            throw new IllegalArgumentException("Method not found on solution class: " + method);
         }
-        throw new IllegalArgumentException("Method not found on solution class: " + method);
+    }
+
+    private static Object finishInteractive(
+        Method method,
+        Object instance,
+        Object[] callArguments,
+        Object oracleInstance
+    ) throws Exception {
+        Object result = method.invoke(instance, callArguments);
+        // Void-method oracles are judged by their own final state —
+        // e.g. the robot's exact set of cleaned cells.
+        if (result == null) {
+            try {
+                return oracleInstance
+                    .getClass()
+                    .getMethod("verdict")
+                    .invoke(oracleInstance);
+            } catch (NoSuchMethodException noVerdict) {
+                return null;
+            }
+        }
+        return result;
+    }
+
+    /** The invocation's provided.oracle manifest, or null when the oracle is judge-built. */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> providedOracle(Map<String, Object> invocation) {
+        Object provided = invocation.get("provided");
+        if (!(provided instanceof Map)) {
+            return null;
+        }
+        Object oracleManifest = ((Map<String, Object>) provided).get("oracle");
+        return oracleManifest instanceof Map ? (Map<String, Object>) oracleManifest : null;
+    }
+
+    private static List<String> stringList(Object value, String field) {
+        if (value == null) {
+            return List.of();
+        }
+        List<Object> raw = asList(value, field + " must be a list");
+        List<String> keys = new ArrayList<>(raw.size());
+        for (Object item : raw) {
+            keys.add(asString(item, field + " entries must be strings"));
+        }
+        return keys;
     }
 
     private static Object invokeFunction(

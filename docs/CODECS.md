@@ -54,11 +54,12 @@ templates).
 
 ## Wrapper types given to submissions
 
-Python submissions get these names in module scope (`runner/python_harness.py`):
-`ListNode`, `TreeNode`, `Node` (n-ary), `HtmlParser`,
-`GridMaster`. Java solutions see the same names from the judge classpath
-(`runner/java/*.java`, compiled into the image). Generated starters reference
-them; solutions never define them.
+The problem set's `common/` library (`ListNode`, `TreeNode`, `Node`
+n-ary) and the problem's own `provided/` sources are assembled into every
+submission by the judge: executed into the python module namespace,
+compiled in the same java package. Generated starters reference the
+names bare; solutions never define them; the editor never shows the
+implementations.
 
 ## Design problems (`type: "design"`)
 
@@ -102,17 +103,21 @@ draws or more.
 
 ## Interactive problems (`type: "interactive"`)
 
-The judge constructs an oracle from the case's hidden state and passes it to
-the solution method. The first oracle is `GridMaster` (hidden-grid problems):
+The oracle ships **with the problem** in `provided/` (python + java),
+hidden from the editor. The judge assembles it with the submission and
+constructs it from the case's hidden state per `invocation.provided.oracle`:
 
-- case input: `{"grid": [[cost]], "start": [r, c], "target": [r, c]}` where
-  `0` is a blocked cell and `>= 1` is the move-in cost
-- API: `canMove(direction)`, `move(direction)` (cost, or `-1` without
-  moving), `isTarget()` — directions `U`/`D`/`L`/`R`; every call spends one
-  query from the per-case budget (`invocation.query_limit`, default 1 000 000)
+    "provided": {"oracle": {"class": "SequenceReader",
+                            "construct": ["arr"], "auxiliary": ["target"]}}
 
-Offered in Python 3 and Java only. New oracles are added as harness classes
-on both sides.
+- `construct`: case keys passed to the constructor, in order; the query
+  budget (`invocation.query_limit`, default 1 000 000) is appended last
+- `auxiliary`: case keys passed to the solution method after the oracle,
+  converted to the method's own parameter types
+- a void method is judged by the oracle's `verdict()` final state
+
+Offered in Python 3 and Java only. Authoring a new interactive problem
+touches only its own bundle — no judge changes.
 
 ## Concurrency problems (`type: "concurrent"`)
 
