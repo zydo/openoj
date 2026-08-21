@@ -254,7 +254,7 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
     for part in ("common", "provided"):
         for name, content in sorted((assembly or {}).get(part, {}).items()):
             if name.endswith(".go"):
-                provided_files.append((name, content))
+                provided_files.append((name, strip_package(content)))
 
     main_source = (
         MAIN_TEMPLATE

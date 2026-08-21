@@ -76,6 +76,9 @@ class GoExecutor(CompiledExecutor):
         limits: dict[str, Any],
         assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
+        if invocation.get("type") == "design":
+            from .go_design import prepare_design
+            return prepare_design(self, job_root, scratch, code, invocation, assembly)
         if invocation.get("type") == "interactive":
             from .go_interactive import prepare_interactive
             return prepare_interactive(self, job_root, scratch, code, invocation, assembly)
@@ -338,4 +341,7 @@ class GoExecutor(CompiledExecutor):
         if invocation.get("type") == "interactive":
             from .typed import encode_interactive_case
             return encode_interactive_case(invocation, case_input)
+        if invocation.get("type") == "design":
+            from .design_interactive import encode_design_case
+            return encode_design_case(invocation, case_input)
         return encode_case(invocation, case_input, self.language)
