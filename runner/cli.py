@@ -59,7 +59,7 @@ def _executors_ready() -> None:
 
 def cmd_format(arguments: argparse.Namespace) -> int:
     """Format files in place with the pinned toolchain (formatters.py)."""
-    from formatters import format_content
+    from formatters import format_source
 
     changed = 0
     for name in arguments.files:
@@ -68,8 +68,16 @@ def cmd_format(arguments: argparse.Namespace) -> int:
             print(f"not a file: {path}", file=sys.stderr)
             return 2
         extension = path.suffix.lstrip(".")
+        LANGUAGE_BY_EXTENSION = {
+            "py": "python3", "js": "javascript", "ts": "typescript",
+            "java": "java", "cpp": "cpp", "go": "go", "rs": "rust", "sql": "sql",
+        }
+        language = LANGUAGE_BY_EXTENSION.get(extension)
+        if language is None:
+            print(f"no formatter for .{extension}", file=sys.stderr)
+            return 2
         original = path.read_text(encoding="utf-8")
-        formatted = format_content(extension, original, tolerant=False)
+        formatted = format_source(language, original)
         if formatted != original:
             path.write_text(formatted, encoding="utf-8")
             changed += 1
@@ -178,7 +186,7 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
     }
     EXTENSION_LANGUAGE = {
         "py": "python3", "js": "javascript", "ts": "typescript", "java": "java",
-        "cpp": "cpp", "go": "go", "rust": "rust", "sql": "sql",
+        "cpp": "cpp", "go": "go", "rs": "rust", "sql": "sql",
     }
     for solution in solutions:
         language = EXTENSION_LANGUAGE.get(solution.suffix.lstrip("."))
