@@ -7,9 +7,11 @@ designs the program that turns that set into **problems inspired by
 LeetCode** — the same computational task, the same technique, the same
 difficulty, written independently.
 
-Nothing here has been executed. Adapted bundles land in
-`openoj-problems/problems-adapt/`; the live `problems/` tree keeps
-serving until the whole set passes and we choose to cut over.
+The program ran to completion: all 838 bundles were adapted and
+verified. The adapted set IS the default tree now — renamed to
+`openoj-problems/problems/` at the 2026-08-21 cutover — and the
+LeetCode-derived originals live in `problems-bettercode/` as the
+archival record. This document describes how that set was built.
 
 ## The rule the whole design serves
 
@@ -207,14 +209,12 @@ reasoning path, not the answer.
 
 ```
 openoj-problems/
-  problems/                # live, untouched during the program
-    0001-0100/             # id-range shards, 100 problems each
-      0001_two-sum/ ...
-  problems-adapt/
+  problems/                # the adapted set — the default since cutover
     MAPPING.md             # human-readable, generated from the ledger
     MAPPING.json           # machine-readable twin (source -> ours)
-    0001-0100/
+    0001-0100/             # id-range shards, 100 problems each
       0001_pair-sum/ ...
+  problems-bettercode/     # the LeetCode-derived originals, archival
   .adapt/
     ledger.json            # source id+slug ↔ our id+slug, old/new API names
     report/<slug>.md
