@@ -143,3 +143,13 @@ and give it CLI entry points so any machine can pull and run:
   (signatures, class names, method/parameter names, invocation kind) in
   `problem.json`. The schema is the contract; the image is the only
   generator, so bundles anywhere regenerate byte-identically.
+- **judging service** — `... judge <bundle-dir>` runs the authoring
+  loop end-to-end: a problem creator composing a bundle (statement,
+  `problem.json`, `cases.json`, starters, and their reference
+  solutions) submits those solutions through the exact judging path —
+  same executors, same limits, same comparison semantics as a solver's
+  submission — and sees per-case pass/fail for every solution in every
+  language. Most of the machinery already exists (the judge is an API;
+  the worker consumes job files; the executors live in the image), so
+  this is the authoring-side front door to it: local bundle in, judged
+  verdict out, no authoring-machine toolchain required.
