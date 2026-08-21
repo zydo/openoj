@@ -207,24 +207,24 @@ def _convert(spec: dict[str, Any], source: str) -> str:
         bits = spec.get("bits", 32)
         target = "i64" if bits == 64 else "i32"
         return (
-            f"(match {source} {{ OjValue::Int(v) => {target}::try_from(v).map_err(|_| {{ \"Integer out of range\".to_string() }})?, "
+            f"(match (*{source}) {{ OjValue::Int(v) => {target}::try_from(v).map_err(|_| {{ \"Integer out of range\".to_string() }})?, "
             f"_ => return Err(\"Expected an integer\".to_string()) }})"
         )
     if kind == "number":
         return (
-            f"(match {source} {{ OjValue::Double(v) => v, OjValue::Int(v) => v as f64, "
+            f"(match (*{source}) {{ OjValue::Double(v) => v, OjValue::Int(v) => v as f64, "
             f"_ => return Err(\"Expected a number\".to_string()) }})"
         )
     if kind == "boolean":
-        return f"(match {source} {{ OjValue::Bool(v) => v, _ => return Err(\"Expected a boolean\".to_string()) }})"
+        return f"(match (*{source}) {{ OjValue::Bool(v) => v, _ => return Err(\"Expected a boolean\".to_string()) }})"
     if kind == "string":
         return (
-            f"(match {source} {{ OjValue::Str(v) => v, _ => return Err(\"Expected a string\".to_string()) }})"
+            f"(match (*{source}) {{ OjValue::Str(v) => v, _ => return Err(\"Expected a string\".to_string()) }})"
         )
     if kind == "array":
         inner = _convert(spec["items"], "item")
         return (
-            f"(match {source} {{ OjValue::Array(items) => {{ let mut out: Vec<{_rust_type(spec['items'])}> = Vec::with_capacity(items.len()); "
+            f"(match (*{source}) {{ OjValue::Array(items) => {{ let mut out: Vec<{_rust_type(spec['items'])}> = Vec::with_capacity(items.len()); "
             f"for item in items {{ out.push({inner}); }} out }}, "
             f"_ => return Err(\"Expected an array\".to_string()) }})"
         )
