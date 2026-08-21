@@ -4,21 +4,14 @@ Items here are design decisions we have agreed to discuss or build later.
 Nothing on this page is in progress; when work starts, move it to the task
 list and delete it here.
 
-## Self-contained problem bundles — remaining edge
+## Versioned common-harness contract
 
-Bundle-carried code is real: the common/ library and every interactive
-oracle ship in the problems repo (`common/`, `provided/`), the judge
-assembles them with each submission, and authoring an interactive
-problem touches only its own bundle (2026-08-20). What remains of this
-idea:
-
-- **Trust boundary, stated deliberately.** Problem-repo code now
-  compiles/runs in the sandbox next to submissions, trusted the way
-  `cases.json` is — worth an explicit paragraph in the security notes
-  rather than inheriting the fact.
-- **A versioned common-harness contract** (`ListNode`/`TreeNode` codecs,
-  the typed binary encoder) as a declared dependency rather than an
-  ambient one — still open below in "Shared data types" follow-ups.
+Bundles currently assume the `common/` library ambiently (both trees move
+together in one repo, so this is harmless today). The open item: make the
+common vocabulary a declared, versioned dependency per bundle so the
+problems repo stays portable across judge versions. The trust model for
+bundle-carried code — common/, provided/ — is now written down in
+`docs/TRUST-BOUNDARIES.md`.
 
 ## User accounts (multi-user phase 2)
 
