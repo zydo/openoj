@@ -18,7 +18,6 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
 
 FROM python:${PYTHON_VERSION}-slim
 
-ARG CLANG_FORMAT_PACKAGE_VERSION="1:19.0-63"
 ARG RUFF_VERSION="0.16.3"
 
 # The editor's Format button runs prettier and its java plugin out of the
@@ -31,7 +30,7 @@ WORKDIR /runner
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         g++ \
-        g++-14="${GXX_TOOLCHAIN_PACKAGE_VERSION}" \
+        g++-14 \
         golang-go \
         golang-1.24-go \
         golang-1.24-src \
