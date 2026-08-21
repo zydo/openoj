@@ -18,14 +18,6 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
 
 FROM python:${PYTHON_VERSION}-slim
 
-ARG GXX_TOOLCHAIN_PACKAGE_VERSION
-ARG GO_PACKAGE_VERSION
-ARG GO_TOOLCHAIN_PACKAGE_VERSION
-ARG GO_STDLIB_PACKAGE_VERSION
-ARG JDK_PACKAGE_VERSION
-ARG LIBCAP_PACKAGE_VERSION
-ARG RUST_PACKAGE_VERSION
-ARG RUSTFMT_PACKAGE_VERSION
 ARG CLANG_FORMAT_PACKAGE_VERSION="1:19.0-63"
 ARG RUFF_VERSION="0.16.3"
 
@@ -40,14 +32,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         g++ \
         g++-14="${GXX_TOOLCHAIN_PACKAGE_VERSION}" \
-        golang-go="${GO_PACKAGE_VERSION}" \
-        golang-1.24-go="${GO_TOOLCHAIN_PACKAGE_VERSION}" \
-        golang-1.24-src="${GO_STDLIB_PACKAGE_VERSION}" \
-        libcap2-bin="${LIBCAP_PACKAGE_VERSION}" \
-        openjdk-21-jdk-headless="${JDK_PACKAGE_VERSION}" \
-        rustc="${RUST_PACKAGE_VERSION}" \
-        rustfmt="${RUSTFMT_PACKAGE_VERSION}" \
-        clang-format="${CLANG_FORMAT_PACKAGE_VERSION}" \
+        golang-go \
+        golang-1.24-go \
+        golang-1.24-src \
+        libcap2-bin \
+        openjdk-21-jdk-headless \
+        rustc \
+        rustfmt \
+        clang-format \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir ruff=="${RUFF_VERSION}"
 COPY --from=typescript-toolchain /usr/local/bin/node /usr/local/bin/node
