@@ -1,6 +1,6 @@
 ARG NODE_VERSION="22.23.2"
 ARG PYTHON_VERSION="3.14.7"
-ARG TYPESCRIPT_VERSION="7.0.2"
+ARG TYPESCRIPT_VERSION="5.7.3"
 
 FROM node:${NODE_VERSION}-bookworm-slim AS typescript-toolchain
 
@@ -67,6 +67,8 @@ COPY --from=typescript-toolchain \
 RUN ln -s /usr/local/lib/node_modules/typescript/bin/tsc /usr/local/bin/tsc \
     && ln -s /usr/local/lib/node_modules/prettier/bin/prettier.cjs /usr/local/bin/prettier
 COPY worker.py python_harness.py sql_harness.py leetcode_types.py privileges.py formatters.py ./
+COPY cli.py ./
+RUN printf '#!/bin/sh\nexec python3 /runner/cli.py "$@"\n' > /usr/local/bin/openoj && chmod +x /usr/local/bin/openoj
 COPY compiler_sandbox.py runtime_sandbox.py ./
 COPY executors ./executors
 COPY java ./java

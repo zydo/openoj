@@ -273,7 +273,13 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         )
         main_source = main_source.replace(".map((argument, index) => {", ".map((argument: any, index: number) => {")
         main_source = main_source.replace("solution[action](...decodedArguments)", "(solution[action] as any)(...decodedArguments)")
-    source = WRAPPER_HEAD + "\n" + CODEC_HELPERS + "\n" + provided_source + code + "\n" + main_source
+    if is_typescript:
+        # The codec helpers reference ListNode/TreeNode, whose real
+        # classes live in common/typescript/types.ts — the common source
+        # must precede the wrapper for those references to resolve.
+        source = provided_source + "\n" + WRAPPER_HEAD + "\n" + CODEC_HELPERS + "\n" + code + "\n" + main_source
+    else:
+        source = WRAPPER_HEAD + "\n" + CODEC_HELPERS + "\n" + provided_source + code + "\n" + main_source
     if is_typescript:
         source = (
             'declare const require: (name: string) => any;\n'
@@ -284,6 +290,22 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         source = source.replace(
             'class OjReader {\n    constructor(buffer) {',
             'class OjReader {\n    bytes: any; position = 0;\n    constructor(buffer: any) {',
+        )
+        source = source.replace(
+            '    const actions = reader.value();',
+            '    const actions: any = reader.value();',
+        ).replace(
+            '    const params = reader.value();',
+            '    const params: any = reader.value();',
+        ).replace(
+            '        let action = actions[step];',
+            '        let action: any = actions[step];',
+        ).replace(
+            '        const rawArguments = params[step];',
+            '        const rawArguments: any[] = params[step];',
+        ).replace(
+            '        const constructorArguments = params[0];',
+            '        const constructorArguments: any[] = params[0];',
         )
 
     suffix = "ts" if is_typescript else "js"
