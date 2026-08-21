@@ -6,10 +6,10 @@ identically on any machine with Docker; no local compilers, formatters,
 or generators are needed.
 
 ```bash
-docker pull ziyudo/openoj-runner:latest
+docker pull ghcr.io/zydo/openoj-runner:v0.1.0   # :latest tracks main
 alias openoj='docker run --rm --user 0:0 \
   -v /path/to/openoj-problems:/tools \
-  -v /path/to/my-bundle:/bundle:rw ziyudo/openoj-runner:latest openoj'
+  -v /path/to/my-bundle:/bundle:rw ghcr.io/zydo/openoj-runner:latest openoj'
 ```
 
 `/tools` is a checkout of the problems repo (its `common/` library and

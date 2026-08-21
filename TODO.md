@@ -45,7 +45,7 @@ The runner image already carries the pinned toolchain for every language
 (and `POST /format` already exposes it to the editor). Publish the image
 and give it CLI entry points so any machine can pull and run:
 
-- **format service** — `docker run ziyudo/openoj-runner format
+- **format service** — `docker run ghcr.io/zydo/openoj-runner format
   <files...>` formats starters and solutions in any offered language to
   the OpenOJ standard. This replaces the fragile "authoring machine must
   install every formatter" arrangement (see the earlier
