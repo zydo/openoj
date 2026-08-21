@@ -202,29 +202,34 @@ def _rust_type(spec: dict[str, Any]) -> str:
 
 
 def _convert(spec: dict[str, Any], source: str) -> str:
+    """Conversion expression turning a `&OjValue` (`source`) into the spec's
+    Rust type. Matching a reference flips the default binding mode to by-ref,
+    so `items` borrows and the `for item in items` loop hands the recursive
+    call another `&OjValue` — any nesting depth works without moving out of
+    the borrowed wrapper values."""
     kind = spec["kind"]
     if kind == "integer":
         bits = spec.get("bits", 32)
         target = "i64" if bits == 64 else "i32"
         return (
-            f"(match (*{source}) {{ OjValue::Int(v) => {target}::try_from(v).map_err(|_| {{ \"Integer out of range\".to_string() }})?, "
+            f"(match {source} {{ OjValue::Int(v) => {target}::try_from(*v).map_err(|_| {{ \"Integer out of range\".to_string() }})?, "
             f"_ => return Err(\"Expected an integer\".to_string()) }})"
         )
     if kind == "number":
         return (
-            f"(match (*{source}) {{ OjValue::Double(v) => v, OjValue::Int(v) => v as f64, "
+            f"(match {source} {{ OjValue::Double(v) => *v, OjValue::Int(v) => *v as f64, "
             f"_ => return Err(\"Expected a number\".to_string()) }})"
         )
     if kind == "boolean":
-        return f"(match (*{source}) {{ OjValue::Bool(v) => v, _ => return Err(\"Expected a boolean\".to_string()) }})"
+        return f"(match {source} {{ OjValue::Bool(v) => *v, _ => return Err(\"Expected a boolean\".to_string()) }})"
     if kind == "string":
         return (
-            f"(match (*{source}) {{ OjValue::Str(v) => v, _ => return Err(\"Expected a string\".to_string()) }})"
+            f"(match {source} {{ OjValue::Str(v) => v.clone(), _ => return Err(\"Expected a string\".to_string()) }})"
         )
     if kind == "array":
         inner = _convert(spec["items"], "item")
         return (
-            f"(match (*{source}) {{ OjValue::Array(items) => {{ let mut out: Vec<{_rust_type(spec['items'])}> = Vec::with_capacity(items.len()); "
+            f"(match {source} {{ OjValue::Array(items) => {{ let mut out: Vec<{_rust_type(spec['items'])}> = Vec::with_capacity(items.len()); "
             f"for item in items {{ out.push({inner}); }} out }}, "
             f"_ => return Err(\"Expected an array\".to_string()) }})"
         )
@@ -260,7 +265,7 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
             raise ExecutorError(f"Auxiliary key {key!r} has no invocation parameter type")
         spec = type_spec(spec, key)
         convert_lines.append(
-            f"    let openoj_aux_{index}: {_rust_type(spec)} = {_convert(spec, f'openoj_value_{len(construct_keys) + index}')};"
+            f"    let openoj_aux_{index}: {_rust_type(spec)} = {_convert(spec, f'&openoj_value_{len(construct_keys) + index}')};"
         )
         auxiliary_args.append(f"openoj_aux_{index}")
 

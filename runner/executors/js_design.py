@@ -85,6 +85,81 @@ function openojJSON(value) {
 }
 """
 
+CODEC_HELPERS = """\
+// Codec-aware argument/result conversion, mirroring the harness's
+// decode/encode (python_harness._invoke_design). Only the tree codecs
+// transform; json is the identity.
+function openojDecode(value, codec) {
+    if (codec === "tree_node") {
+        return openojTreeFromArray(value);
+    }
+    return value;
+}
+
+function openojEncode(value, codec) {
+    if (value === undefined) {
+        return null;
+    }
+    if (codec === "tree_node") {
+        return openojTreeToArray(value);
+    }
+    return value;
+}
+
+// Level-order array (nulls for absent children) -> TreeNode tree, two
+// slots consumed per queued node exactly like the harness's codec.
+function openojTreeFromArray(slots) {
+    if (!Array.isArray(slots) || slots.length === 0 || slots[0] === null) {
+        return null;
+    }
+    const root = new TreeNode(slots[0]);
+    const queue = [root];
+    let index = 1;
+    while (queue.length > 0 && index < slots.length) {
+        const node = queue.shift();
+        if (index < slots.length) {
+            if (slots[index] !== null) {
+                node.left = new TreeNode(slots[index]);
+                queue.push(node.left);
+            }
+            index++;
+        }
+        if (index < slots.length) {
+            if (slots[index] !== null) {
+                node.right = new TreeNode(slots[index]);
+                queue.push(node.right);
+            }
+            index++;
+        }
+    }
+    return root;
+}
+
+// TreeNode tree -> level-order array, trailing nulls trimmed, so results
+// compare as plain JSON.
+function openojTreeToArray(root) {
+    if (root === null || root === undefined) {
+        return [];
+    }
+    const output = [];
+    const queue = [root];
+    while (queue.length > 0) {
+        const node = queue.shift();
+        if (node === null) {
+            output.push(null);
+            continue;
+        }
+        output.push(node.val);
+        queue.push(node.left);
+        queue.push(node.right);
+    }
+    while (output.length > 0 && output[output.length - 1] === null) {
+        output.pop();
+    }
+    return output;
+}
+"""
+
 MAIN_TEMPLATE = """\
 async function main() {
     const chunks = [];
@@ -101,7 +176,10 @@ async function main() {
     if (!Array.isArray(actions) || !Array.isArray(params) || actions.length !== params.length) {
         throw new Error("Design input requires equally sized actions and params");
     }
-    const constructorArguments = params[0];
+    const constructorCodecs = @CTOR_CODECS@;
+    const methodCodecs = @METHOD_CODECS@;
+    const returnCodecs = @RETURN_CODECS@;
+    const constructorArguments = params[0].map((argument, index) => openojDecode(argument, constructorCodecs[index] || "json"));
     const solution = new @CLASS_NAME@(...constructorArguments);
     const outputs = [null];
     let previous = null;
@@ -113,26 +191,34 @@ async function main() {
             action = action.call;
         }
         const rawArguments = params[step];
-        const callArguments = rawArguments.map((argument) => (
-            (argument !== null && typeof argument === "object" && !Array.isArray(argument)
-                && Object.keys(argument).length === 1 && "$prev" in argument)
-                ? previous : argument
-        ));
+        const codecs = methodCodecs[action] || [];
+        // A piped argument ({"$prev": ...}) crosses as the previous call's
+        // live object, not its wire form; everything else decodes through
+        // its parameter codec (python_harness._invoke_design).
+        const decodedArguments = rawArguments.map((argument, index) => {
+            if (argument !== null && typeof argument === "object" && !Array.isArray(argument)
+                    && Object.keys(argument).length === 1 && "$prev" in argument) {
+                return previous;
+            }
+            return openojDecode(argument, codecs[index] || "json");
+        });
+        const returnCodec = returnCodecs[action] || "json";
         if (repeat > 1) {
             const frequencies = new Map();
+            let last = null;
             for (let trial = 0; trial < repeat; trial++) {
-                const result = solution[action](...callArguments);
-                const key = openojJSON(result === undefined ? null : result);
+                last = solution[action](...decodedArguments);
+                const key = openojJSON(openojEncode(last, returnCodec));
                 frequencies.set(key, (frequencies.get(key) || 0) + 1);
             }
             const table = {};
             for (const [key, count] of frequencies) table[key] = count;
             outputs.push(table);
-            previous = table;
+            previous = last;
         } else {
-            const result = solution[action](...callArguments);
-            outputs.push(result === undefined ? null : result);
-            previous = result;
+            const rawResult = solution[action](...decodedArguments);
+            outputs.push(openojEncode(rawResult, returnCodec));
+            previous = rawResult;
         }
     }
     openojEmit("__OPENOJ_RESULT__" + openojJSON({ status: "completed", actual: outputs }));
@@ -151,12 +237,32 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
     if not isinstance(class_name, str) or not class_name.isidentifier():
         raise ExecutorError("Invalid design entry class")
 
+    # Codec tables (python_harness._invoke_design's per-method codec map):
+    # each argument is decoded from its wire form, each result encoded back.
+    constructor = invocation.get("constructor", {}).get("parameters", [])
+    constructor_codecs = [p.get("codec", "json") for p in constructor if isinstance(p, dict)]
+    method_codecs: dict[str, list[str]] = {}
+    return_codecs: dict[str, str] = {}
+    for method in invocation.get("methods", []):
+        if not isinstance(method, dict) or not isinstance(method.get("name"), str):
+            continue
+        method_codecs[method["name"]] = [
+            p.get("codec", "json") for p in method.get("parameters", []) if isinstance(p, dict)
+        ]
+        return_codecs[method["name"]] = method.get("return_codec", "json")
+
     provided_source = "".join(
         content + "\n"
         for part in ("common", "provided")
         for _, content in sorted((assembly or {}).get(part, {}).items())
     )
-    main_source = MAIN_TEMPLATE.replace("@CLASS_NAME@", class_name)
+    main_source = (
+        MAIN_TEMPLATE
+        .replace("@CLASS_NAME@", class_name)
+        .replace("@CTOR_CODECS@", json.dumps(constructor_codecs))
+        .replace("@METHOD_CODECS@", json.dumps(method_codecs))
+        .replace("@RETURN_CODECS@", json.dumps(return_codecs))
+    )
     if not is_typescript:
         main_source = main_source.replace("...(constructorArguments as any[]))", "...constructorArguments)")
         main_source = main_source.replace("(solution[action] as any)", "solution[action]")
@@ -165,9 +271,9 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
             f"new {class_name}(...constructorArguments);",
             f"new ({class_name} as any)(...constructorArguments);",
         )
-        main_source = main_source.replace(".map((argument) => (", ".map((argument: any) => (")
-        main_source = main_source.replace("solution[action](...callArguments)", "(solution[action] as any)(...callArguments)")
-    source = WRAPPER_HEAD + "\n" + provided_source + code + "\n" + main_source
+        main_source = main_source.replace(".map((argument, index) => {", ".map((argument: any, index: number) => {")
+        main_source = main_source.replace("solution[action](...decodedArguments)", "(solution[action] as any)(...decodedArguments)")
+    source = WRAPPER_HEAD + "\n" + CODEC_HELPERS + "\n" + provided_source + code + "\n" + main_source
     if is_typescript:
         source = (
             'declare const require: (name: string) => any;\n'

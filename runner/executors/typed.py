@@ -20,6 +20,12 @@ def type_spec(value: Any, location: str) -> dict[str, Any]:
         type_spec(value.get("items"), f"{location} array items")
     if kind in {"linked_list", "binary_tree"}:
         items = value.get("items")
+        if items is None:
+            # Node payloads are 32-bit integers throughout the judge's
+            # common types; manifests may omit the implied items spec
+            # (every codec-driven path — the harnesses — never needed it).
+            items = {"kind": "integer", "bits": 32}
+            value = {**value, "items": items}
         if not isinstance(items, dict) or items.get("kind") != "integer":
             raise ExecutorError(f"{location} {kind} items must be integers")
         type_spec(items, f"{location} {kind} items")

@@ -139,7 +139,7 @@ static std::string openoj_json(const OjValue& value) {
             out << '{';
             for (size_t i = 0; i < value.fields.size(); ++i) {
                 if (i) out << ',';
-                out << '"' << value.fields[i].first << "\':" << openoj_json(value.fields[i].second);
+                out << '"' << value.fields[i].first << '"' << ':' << openoj_json(value.fields[i].second);
             }
             out << '}';
             break;

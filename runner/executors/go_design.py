@@ -10,6 +10,7 @@ via generated conversion per the invocation's parameter specs.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -215,6 +216,71 @@ def strip_package(source: str) -> str:
     return "\n".join(lines)
 
 
+TREE_HELPERS = """\
+// openojDesignTree builds a *TreeNode from the tree_node codec's
+// level-order row (nil for absent children), assigning two slots per
+// queued node exactly like the harness's codec.
+func openojDesignTree(value any) *TreeNode {
+	row, ok := value.([]any)
+	if !ok {
+		panic("Expected a level-order tree array")
+	}
+	if len(row) == 0 || row[0] == nil {
+		return nil
+	}
+	rootValue, _ := row[0].(int64)
+	root := &TreeNode{Val: int(rootValue)}
+	queue := []*TreeNode{root}
+	index := 1
+	for len(queue) > 0 && index < len(row) {
+		node := queue[0]
+		queue = queue[1:]
+		if index < len(row) {
+			if row[index] != nil {
+				childValue, _ := row[index].(int64)
+				node.Left = &TreeNode{Val: int(childValue)}
+				queue = append(queue, node.Left)
+			}
+			index++
+		}
+		if index < len(row) {
+			if row[index] != nil {
+				childValue, _ := row[index].(int64)
+				node.Right = &TreeNode{Val: int(childValue)}
+				queue = append(queue, node.Right)
+			}
+			index++
+		}
+	}
+	return root
+}
+
+// openojDesignTreeArray serializes a tree back to the codec's level-order
+// row (trailing nils trimmed) so results compare as plain JSON.
+func openojDesignTreeArray(root *TreeNode) []any {
+	if root == nil {
+		return []any{}
+	}
+	values := []any{}
+	queue := []*TreeNode{root}
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		if node == nil {
+			values = append(values, nil)
+			continue
+		}
+		values = append(values, node.Val)
+		queue = append(queue, node.Left, node.Right)
+	}
+	for len(values) > 0 && values[len(values)-1] == nil {
+		values = values[:len(values)-1]
+	}
+	return values
+}
+"""
+
+
 def _convert(spec: dict[str, Any], source: str) -> str:
     kind = spec["kind"]
     if kind == "integer":
@@ -228,6 +294,8 @@ def _convert(spec: dict[str, Any], source: str) -> str:
         return f'(func() bool {{ v, ok := {source}.(bool); if !ok {{ panic("Expected a boolean") }}; return v }})()'
     if kind == "string":
         return f'(func() string {{ v, ok := {source}.(string); if !ok {{ panic("Expected a string") }}; return v }})()'
+    if kind == "binary_tree":
+        return f"openojDesignTree({source})"
     if kind == "array":
         inner = _convert(spec["items"], "item")
         return (
@@ -250,6 +318,7 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         for index, p in enumerate(constructor)
     ]
 
+    needs_tree = any(spec["kind"] == "binary_tree" for spec in constructor_specs)
     dispatch_cases = []
     for method in invocation.get("methods", []):
         name = method.get("name")
@@ -258,11 +327,15 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
             type_spec(p.get("value_type"), f"{name} parameter {index + 1}")
             for index, p in enumerate(method.get("parameters", []))
         ]
+        needs_tree = needs_tree or any(spec["kind"] == "binary_tree" for spec in specs)
         args = ", ".join(
             _convert(spec, f"callArguments[{index}]") for index, spec in enumerate(specs)
         )
         returns = method.get("return_type") is not None and method["return_type"].get("kind") != "void"
         call = f"solution.{go_name}({args})"
+        if method.get("return_type") is not None and method["return_type"].get("kind") == "binary_tree":
+            needs_tree = True
+            call = f"openojDesignTreeArray({call})"
         dispatch_cases.append(
             f'\tcase "{name}":\n\t\t{"return " + call if returns else call + "; return nil"}'
         )
@@ -285,7 +358,10 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
             f"}}\n"
         )
     else:
-        constructor_shim = f"func New{class_name}(row []any) *{class_name} {{\n\treturn &{class_name}{{}}\n}}\n"
+        # No constructor parameters: still route through the submission's
+        # own NewXTyped — skipping it would leave its fields zero-valued
+        # (nil maps, nil pointers) and never run user initialization.
+        constructor_shim = f"func New{class_name}(row []any) *{class_name} {{\n\treturn New{class_name}Typed()\n}}\n"
 
     provided_source = "".join(
         strip_package(content) + "\n"
@@ -294,11 +370,24 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         if _.endswith(".go")
     )
 
+    # Submitted code may import stdlib packages; Go requires every import
+    # to sit in the file's import preamble, so user imports are lifted out
+    # of the code and merged with the wrapper's own (same rule as the
+    # non-design wrapper's _merge_imports).
+    from .go import GO_IMPORT_BLOCK
+    user_code = strip_package(code)
+    packages = {"encoding/json", "fmt", "os", "unsafe"}
+    for match in GO_IMPORT_BLOCK.finditer(user_code):
+        packages.update(re.findall(r'"([^"]+)"', match.group(0)))
+        user_code = user_code.replace(match.group(0), "", 1)
+    import_block = "import (\n" + "".join(f'\t"{package}"\n' for package in sorted(packages)) + ")"
+
     source = (
-        'package main\n\nimport (\n\t"encoding/json"\n\t"fmt"\n\t"os"\n\t"unsafe"\n)\n\n'
+        "package main\n\n" + import_block + "\n\n"
         + WRAPPER_HEAD_HEADLESS
         + "\n" + JSON_HELPER.replace("jsonMarshalStable", "json.Marshal")
-        + "\n" + provided_source + "\n" + strip_package(code) + "\n"
+        + "\n" + provided_source + "\n" + (TREE_HELPERS + "\n" if needs_tree else "")
+        + user_code.strip("\n") + "\n"
         + constructor_shim + "\n" + dispatch + "\n"
         + MAIN_TEMPLATE.replace("@CLASS_NAME@", class_name)
     )

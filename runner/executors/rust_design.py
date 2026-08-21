@@ -19,6 +19,86 @@ from .base import ExecutorError, PreparedProgram
 from .typed import rust_type, type_spec
 from .rust_interactive import WRAPPER_HEAD, _convert, _rust_type
 
+TREE_HELPERS = """\
+// tree_node codec decode: level-order OjValue array (Null for absent
+// children) -> owned tree, same slot-to-node assignment as the harness.
+fn openoj_design_tree(value: &OjValue) -> Result<Option<Box<TreeNode>>, String> {
+    let items = match value {
+        OjValue::Array(items) => items,
+        _ => return Err("Expected a level-order tree array".to_string()),
+    };
+    let mut pool: Vec<Option<Box<TreeNode>>> = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            OjValue::Int(number) => {
+                pool.push(Some(Box::new(TreeNode { val: *number as i32, left: None, right: None })));
+            }
+            OjValue::Null => pool.push(None),
+            _ => return Err("Tree slots must be integers or null".to_string()),
+        }
+    }
+    if pool.is_empty() || pool[0].is_none() {
+        return Ok(None);
+    }
+    let mut root = pool[0].take();
+    let mut queue: std::collections::VecDeque<*mut TreeNode> = std::collections::VecDeque::new();
+    queue.push_back(root.as_mut().unwrap().as_mut());
+    let mut index = 1usize;
+    while let Some(node_pointer) = queue.pop_front() {
+        for side in 0..2 {
+            if index >= pool.len() {
+                break;
+            }
+            if pool[index].is_some() {
+                let mut child = pool[index].take().unwrap();
+                queue.push_back(child.as_mut() as *mut TreeNode);
+                unsafe {
+                    if side == 0 {
+                        (*node_pointer).left = Some(child);
+                    } else {
+                        (*node_pointer).right = Some(child);
+                    }
+                }
+            }
+            index += 1;
+        }
+    }
+    Ok(root)
+}
+
+// tree_node codec encode: tree -> level-order OjValue array, trailing
+// nulls trimmed, so results compare as plain JSON.
+fn openoj_design_tree_value(root: Option<Box<TreeNode>>) -> OjValue {
+    let mut items: Vec<OjValue> = Vec::new();
+    let mut queue: std::collections::VecDeque<Option<&TreeNode>> = std::collections::VecDeque::new();
+    if root.is_some() {
+        queue.push_back(root.as_deref());
+    }
+    while let Some(node) = queue.pop_front() {
+        match node {
+            None => items.push(OjValue::Null),
+            Some(tree_node) => {
+                items.push(OjValue::Int(tree_node.val as i64));
+                queue.push_back(tree_node.left.as_deref());
+                queue.push_back(tree_node.right.as_deref());
+            }
+        }
+    }
+    while items.last().map_or(false, |item| matches!(item, OjValue::Null)) {
+        items.pop();
+    }
+    OjValue::Array(items)
+}
+"""
+
+
+def _design_convert(spec: dict[str, Any], source: str) -> str:
+    """Parameter conversion for the design replay: the interactive
+    converter plus the tree_node codec's level-order array -> tree."""
+    if spec["kind"] == "binary_tree":
+        return f"openoj_design_tree({source})?"
+    return _convert(spec, source)
+
 MAIN_TEMPLATE = """\
 fn openoj_run() -> Result<String, String> {
     let mut raw = Vec::new();
@@ -109,9 +189,10 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
     ]
 
     constructor_convert = []
+    needs_tree = any(spec["kind"] == "binary_tree" for spec in constructor_specs)
     for index, spec in enumerate(constructor_specs):
         constructor_convert.append(
-            f"    let openoj_ctor_{index}: {_rust_type(spec)} = {_convert(spec, f'&constructor_row[{index}]')};"
+            f"    let openoj_ctor_{index}: {_rust_type(spec)} = {_design_convert(spec, f'&constructor_row[{index}]')};"
         )
     constructor_args = ", ".join(f"openoj_ctor_{index}" for index in range(len(constructor_specs)))
 
@@ -123,10 +204,21 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
             type_spec(p.get("value_type"), f"{name} parameter {index + 1}")
             for index, p in enumerate(method.get("parameters", []))
         ]
+        needs_tree = needs_tree or any(spec["kind"] == "binary_tree" for spec in specs)
         args = ", ".join(
-            _convert(spec, f"&call_arguments[{index}]") for index, spec in enumerate(specs)
+            _design_convert(spec, f"&call_arguments[{index}]") for index, spec in enumerate(specs)
         )
-        dispatch_arms.append(f'        "{name}" => Ok(OjValue::oj_from(solution.{rust_name}({args}))),')
+        returns_tree = (
+            method.get("return_type") is not None
+            and method["return_type"].get("kind") == "binary_tree"
+        )
+        needs_tree = needs_tree or returns_tree
+        if returns_tree:
+            dispatch_arms.append(
+                f'        "{name}" => Ok(openoj_design_tree_value(solution.{rust_name}({args}))),'
+            )
+        else:
+            dispatch_arms.append(f'        "{name}" => Ok(OjValue::oj_from(solution.{rust_name}({args}))),')
     dispatch = (
         f"fn dispatch_{class_name}(solution: &mut {class_name}, name: &str, call_arguments: &[OjValue]) -> Result<OjValue, String> {{\n"
         "    match name {\n"
@@ -147,6 +239,8 @@ impl OjFrom<()> for OjValue { fn oj_from(_value: ()) -> OjValue { OjValue::Null 
 impl OjFrom<Vec<i32>> for OjValue { fn oj_from(values: Vec<i32>) -> OjValue { OjValue::Array(values.into_iter().map(|v| OjValue::Int(v as i64)).collect()) } }
 impl OjFrom<Vec<i64>> for OjValue { fn oj_from(values: Vec<i64>) -> OjValue { OjValue::Array(values.into_iter().map(OjValue::Int).collect()) } }
 impl OjFrom<Vec<String>> for OjValue { fn oj_from(values: Vec<String>) -> OjValue { OjValue::Array(values.into_iter().map(OjValue::Str).collect()) } }
+impl OjFrom<Vec<Vec<i32>>> for OjValue { fn oj_from(rows: Vec<Vec<i32>>) -> OjValue { OjValue::Array(rows.into_iter().map(OjValue::oj_from).collect()) } }
+impl OjFrom<Vec<Vec<i64>>> for OjValue { fn oj_from(rows: Vec<Vec<i64>>) -> OjValue { OjValue::Array(rows.into_iter().map(OjValue::oj_from).collect()) } }
 """
 
     provided_source = "".join(
@@ -158,7 +252,8 @@ impl OjFrom<Vec<String>> for OjValue { fn oj_from(values: Vec<String>) -> OjValu
     code = re.sub(r"^\s*(?:pub )?struct Solution;\s*$\n?", "", code, flags=re.M)
 
     source = (
-        WRAPPER_HEAD + "\n" + oj_from + "\n" + provided_source + code + "\n"
+        WRAPPER_HEAD + "\n" + oj_from + "\n" + provided_source
+        + (TREE_HELPERS + "\n" if needs_tree else "") + code + "\n"
         + dispatch + "\n"
         + (MAIN_TEMPLATE
            .replace("@CONSTRUCTOR_CONVERT@", "\n".join(constructor_convert))
