@@ -153,3 +153,30 @@ and give it CLI entry points so any machine can pull and run:
   the worker consumes job files; the executors live in the image), so
   this is the authoring-side front door to it: local bundle in, judged
   verdict out, no authoring-machine toolchain required.
+
+## Authoring tutorial: drafting a new problem end to end
+
+A doc for problem creators walking the whole loop with the CLI services
+above:
+
+1. **Write the statement** — description, examples, constraints, hints
+   (house style per FORMAT.md).
+2. **Declare the language-agnostic signature** — the invocation schema
+   in `problem.json` (kind, class/method names, parameters, return
+   type); one schema, every language.
+3. **Provide testcases with expected results**, also language-agnostic —
+   including the documented standard for representing common structures
+   on the wire (how a binary tree, linked list, grid, or nested value is
+   encoded in a case). That representation standard is part of the doc.
+4. **Generate the scaffolding** — run the OpenOJ tool to emit every
+   language's starters and solutions; at generation time solutions equal
+   starters, awaiting implementation.
+5. **Implement the solutions in every offered language** — all languages
+   must be provided; a problem with a missing port is not done.
+6. **Judge against your own cases** — run the OpenOJ core (the judge
+   service); every solution in every language must pass every case. Only
+   when all pass is the problem successfully created.
+
+The three CLI services (format, gen-starters, judge) are the toolchain
+this tutorial runs on; this doc is the glue that makes authoring
+self-service.
