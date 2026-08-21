@@ -109,11 +109,13 @@ if the resolved repository contains a `problems/` subdirectory, it is used as
 the package root; otherwise the repository root is. When `OPENOJ_PROBLEMS`
 is unset, problems come from the `OPENOJ_PROBLEMS_DIR` mount as before.
 
-Each problem is one self-contained, flattened Markdown document:
+The fallback problem set (used when `OPENOJ_PROBLEMS` is unset) is one
+sharded bundle:
 
 ```text
 problems/
-└── 0001_two-sum.md
+└── 0001-0100/
+    └── 0001_pair-sum/
 ```
 
 The filename schema is `<zero-padded id>_<slug>.md`. Its id and slug must match
