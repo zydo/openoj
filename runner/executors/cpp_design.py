@@ -94,15 +94,6 @@ def _design_convert(spec: dict[str, Any], source: str) -> str:
     return _convert(spec, source)
 
 
-def _design_type(spec: dict[str, Any]) -> str:
-    """Declared type of a converted design parameter: the interactive type
-    map plus the tree_node codec's TreeNode* (constructor locals need a
-    spelled-out type; method arguments infer theirs from the call)."""
-    if spec["kind"] == "binary_tree":
-        return "TreeNode*"
-    return _cpp_type(spec)
-
-
 MAIN_TEMPLATE = """\
 int main() {
     try {
