@@ -124,3 +124,22 @@ stock one-sale, happy number, prefix tree, missing value, zeros-to-end,
 repeated value, nearest-zero distances). Extending further is
 open-ended content work: find problems whose approaches are genuinely
 distinct and comparable, and author the variant sets.
+
+## Formatting and starter generation as published CLI services of core
+
+The runner image already carries the pinned toolchain for every language
+(and `POST /format` already exposes it to the editor). Publish the image
+and give it CLI entry points so any machine can pull and run:
+
+- **format service** — `docker run ghcr.io/zydo/openoj-runner format
+  <files...>` formats starters and solutions in any offered language to
+  the OpenOJ standard. This replaces the fragile "authoring machine must
+  install every formatter" arrangement (see the earlier
+  "authoring machine cannot format what it generates" item) — the image
+  is the standard, by construction identical to CI and the editor's
+  Format button.
+- **starter generation service** — `... gen-starters <problem.json>`
+  emits every language's `starter.*` from the language-agnostic schema
+  (signatures, class names, method/parameter names, invocation kind) in
+  `problem.json`. The schema is the contract; the image is the only
+  generator, so bundles anywhere regenerate byte-identically.
