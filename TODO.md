@@ -125,6 +125,15 @@ repeated value, nearest-zero distances). Extending further is
 open-ended content work: find problems whose approaches are genuinely
 distinct and comparable, and author the variant sets.
 
+## DONE 2026-08-21: CLI services live on the runner image
+
+`openoj format` (7 languages), `openoj gen-starters` (language-agnostic
+schema in, seven starters out), and `openoj judge` (every solution in
+every language through the real executors, common + provided assembly
+included) are implemented in `runner/cli.py`, installed as the `openoj`
+entrypoint by the runner image, and verified in-image on all four
+invocation kinds. The authoring tutorial below is the remaining piece.
+
 ## Formatting and starter generation as published CLI services of core
 
 The runner image already carries the pinned toolchain for every language
