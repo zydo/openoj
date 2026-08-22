@@ -6,6 +6,7 @@ name: Publish runner image
 # merge to main refreshes :latest.
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths: ['runner/**', '.github/workflows/publish-runner.yml']
