@@ -118,9 +118,10 @@ problems/
     └── 0001_pair-sum/
 ```
 
-The filename schema is `<zero-padded id>_<slug>.md`. Its id and slug must match
-the document's level-one title and metadata. Every document must contain these
-level-two headings exactly once and in this order:
+The flat single-file format (`<zero-padded id>_<slug>.md` with the
+level-two headings below) is also supported; it is what the fallback
+directory name schema historically referenced. Every document must contain
+these level-two headings exactly once and in this order:
 
 ```text
 # <id>. <title>
