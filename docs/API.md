@@ -58,7 +58,7 @@ scale).
 ```sh
 # One problem with statement, hints, invocation, limits, languages,
 # starters, and public cases (inputs only — expected values are hidden)
-curl -b jar.txt https://openoj.dongziyu.com/api/problems/two-sum
+curl -b jar.txt https://openoj.dongziyu.com/api/problems/pair-sum
 ```
 
 `invocation` describes the judge contract: parameter names/types (`integer`
@@ -72,10 +72,10 @@ source). For `type: "design"` problems, cases carry LeetCode-style
 ## Drafts (session-scoped editor state)
 
 ```sh
-curl -b jar.txt https://openoj.dongziyu.com/api/drafts/two-sum
+curl -b jar.txt https://openoj.dongziyu.com/api/drafts/pair-sum
 # [{"language":"python3","code":"…","updated_at":1786790973.5}]
 
-curl -b jar.txt -X PUT https://openoj.dongziyu.com/api/drafts/two-sum/python3 \
+curl -b jar.txt -X PUT https://openoj.dongziyu.com/api/drafts/pair-sum/python3 \
   -H 'content-type: application/json' -d '{"code":"class Solution:\n    …"}'
 ```
 
@@ -84,7 +84,7 @@ curl -b jar.txt -X PUT https://openoj.dongziyu.com/api/drafts/two-sum/python3 \
 ```sh
 curl -b jar.txt -X POST https://openoj.dongziyu.com/api/run \
   -H 'content-type: application/json' \
-  -d '{"slug":"two-sum","language":"python3","code":"…"}'
+  -d '{"slug":"pair-sum","language":"python3","code":"…"}'
 ```
 
 Omit `cases` to run the problem's public cases. Pass `cases` (a list of
@@ -106,7 +106,7 @@ without an assertion and return the actual output. Response:
 ```sh
 curl -b jar.txt -X POST https://openoj.dongziyu.com/api/submit \
   -H 'content-type: application/json' \
-  -d '{"slug":"two-sum","language":"python3","code":"…"}'
+  -d '{"slug":"pair-sum","language":"python3","code":"…"}'
 ```
 
 Judges every hidden case. Verdict statuses: `accepted`, `wrong_answer`,
@@ -117,7 +117,7 @@ on the same runner; the ratio is a hardware-independent speed signal).
 
 ```sh
 # Session's submission history for a problem (strictly session-scoped)
-curl -b jar.txt 'https://openoj.dongziyu.com/api/submissions?slug=two-sum'
+curl -b jar.txt 'https://openoj.dongziyu.com/api/submissions?slug=pair-sum'
 curl -b jar.txt https://openoj.dongziyu.com/api/submissions/42
 ```
 
