@@ -186,6 +186,19 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
                     f"common harness schema {contract.get('schema')!r} is newer than this image understands; update the image"
                 )
             print(f"common harness v{contract.get('version')}")
+            # the per-bundle half: every problem.json declares the common
+            # version it was authored against; it may not exceed the checkout's
+            declared = problem.get("common_version")
+            if not isinstance(declared, int) or isinstance(declared, bool) or declared < 1:
+                raise SystemExit(
+                    "problem.json must declare a positive integer 'common_version' "
+                    "(the common-harness version it targets; see common/VERSION.json)"
+                )
+            if declared > contract["version"]:
+                raise SystemExit(
+                    f"bundle targets common harness v{declared}, "
+                    f"this checkout ships v{contract['version']}"
+                )
     common_root = tools / "common" if tools else None
     for name, directory in LANGUAGE_DIRECTORIES.items():
         common_dir = common_root / directory if common_root else None
