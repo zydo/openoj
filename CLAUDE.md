@@ -1,0 +1,231 @@
+# OpenOJ — judge infrastructure and problem bank
+
+Two repos, deliberately decoupled:
+
+- **openoj** (this repo) — the judge: FastAPI app, React frontend, runner
+  image (`ghcr.io/zydo/openoj`), toolchain, docs. Knows nothing about any
+  specific problem.
+- **openoj-problems** (sibling `../openoj-problems`) — the problem bank:
+  bundles, shared code, authoring tooling. Knows nothing about the judge
+  except its published contract.
+
+The bank's live tree is `problems-adapt/`; `problems` is a **symlink** to
+it, so the served set can be swapped to any other layout/repo by moving
+one link. `problems-bettercode/` archives the LeetCode originals the
+adapted set derives from. Scrape origin: `~/code/lc-crawl` (raw) →
+`~/code/bettercode` (curated) → `problems-bettercode` (in-repo archive).
+
+## Adaptation philosophy
+
+Every problem is a **copyright-free, algorithm-identical adaptation** of a
+curated LeetCode original: rewritten statements in the bank's own voice,
+renumbered into one 1–838 id sequence (source ids folded in; shard =
+`problems/0001-0100/`-style hundreds buckets), descriptive kebab slugs
+(`0001_pair-sum`), restated examples/constraints. Metadata normalizes to
+the bettercode difficulty/tags scheme (`.localonly/alt/normalize_meta.py`).
+
+## Bundle format (openoj-problems/FORMAT.md is authoritative)
+
+    problems-adapt/<shard>/<id>_<slug>/
+      problem.json    schema_version, common_version, reference_solution,
+                      id, slug, title, difficulty, tags, invocation, limits
+      cases.json      public[] + hidden[], {"input": [...], "expected": ...}
+      statement.md    '# Title', '## Description' (### Example N, Constraints)
+      solutions.md    shared intro paragraph, then '## <Approach>' sections,
+                      each ending '**Complexity:** `O(...)` time, `O(...)` space.'
+      starter.<ext>   GENERATED from problem.json (gen_starters) — never hand-edit
+      solution.<ext>  canonical solution (the reference when
+                      reference_solution == "")
+      solution_<variant>.<ext>   named alternative solutions
+      provided/<lang>/   problem-specific oracle/helper sources (design and
+                      interactive kinds) assembled into every submission
+      figures/*.svg   statement/solutions figures
+
+Canonical JSON form (both repos, enforced by the image formatter):
+`json.dumps(..., indent=2, ensure_ascii=False) + "\n"`, key order authorial.
+Markdown is hand-wrapped (~75 col); code follows each language's pinned
+formatter via the image.
+
+## Shared code and the versioned contract
+
+- `common/<lang>/` (bank-owned) — the shared data-type vocabulary every
+  language compiles in: `ListNode`, `TreeNode`, n-ary `Node`. Narrow types
+  do NOT belong here — they live in the using problem's `provided/`.
+- `common/VERSION.json` declares `{schema, version, types, wire}`. Every
+  bundle's `problem.json` declares `"common_version": <n>` (required);
+  a bundle may not target a version newer than the checkout's — both the
+  authoring CLI and the live judge refuse to assemble it.
+- `reference_solution` (required string) designates the ONE time-cost
+  baseline: `""` = the canonical `solution.<ext>`, a variant slug =
+  `solution_<variant>.<ext>`. It is always the optimal approach — the
+  section the worst-to-best `solutions.md` ordering ends with. The judge
+  runs exactly this reference (plus the submission) when scoring the
+  time-cost percentage; the solutions page badges it.
+- Trust model for bundle-carried code (common/, provided/): see
+  `docs/TRUST-BOUNDARIES.md` — they are problem-set content, trusted like
+  cases.json, confined by the sandbox; assembly reads exactly two
+  well-known directories and nothing else.
+
+## Judge infrastructure (openoj/)
+
+- `runner/` — executors for python3, java, cpp, go, rust, typescript,
+  javascript (+sql), compiler/runtime privilege split
+  (`compiler_sandbox.py`, `runtime_sandbox.py`), and the authoring CLI.
+- **The judge protocol travels on fd 63; stdout is only a local-tooling
+  fallback.** Anything that spawns harnesses outside the worker (local
+  verify scripts) parses stdout instead.
+- Runner image `ghcr.io/zydo/openoj-runner` owns the pinned toolchain and
+  **all formatting**: `runner/formatters.py` is the single formatting owner
+  (markdown + canonical JSON + per-language code). The bank's
+  `scripts/format.py` is only a loader shim; there is deliberately no
+  local toolchain in openoj-problems.
+- The app fetches the problem set from `zydo/openoj-problems` on start
+  (cache under openoj `/.cache/problems/`), or serves a local path via
+  `OPENOJ_PROBLEMS`. Restarting the stack picks up newly pushed problems.
+
+## Core APIs and CLI
+
+App (`api/app/`): `/problems`, `/problems/{slug}`, `/run`, `/submit`,
+`/format`, `/drafts/*`, `/submissions*`, `/progress` (per-viewer solved/
+attempted marks), `/session` (GET accepts `?touch=0` — validate without
+extending the idle clock, used by the frontend's inactivity watcher),
+`/auth/*`. Submit stores the attempt (code, verdicts, runtime, and the
+reference runtime the time-cost % is measured against) under the viewer's
+scope: `user:<id>` when signed in (survives idle expiry), the guest
+session id otherwise (purged with the session). Idle expiry routes the
+UI to a dedicated logged-out page.
+
+CLI (inside the runner image): `openoj format <files>` (formats in place;
+combine with hash-compare for a check), `openoj gen-starters`,
+`openoj judge <bundle>` (judges every `solution*.<ext>` through the real
+executors; also asserts the bundle's common_version).
+
+## Authoring and verification loop
+
+1. Scrape/curate originals (lc-crawl → bettercode), archive into
+   `problems-bettercode/`, adapt into a new bundle (statement, problem.json,
+   cases, canonical solution in all 7 languages).
+2. `scripts/gen_starters.py` regenerates starters from problem.json.
+3. **Verify**: `python3 .localonly/verify_solution.py problems/<shard>/<key>`
+   (openoj repo's .localonly) — judges every solution in the bundle
+   through the real executors. The key must be shard-qualified; a bare
+   key resolves without the shard and fails.
+4. **Check**: `python3 scripts/check.py` (bank repo) — static tier:
+   problem.json exact key set, statement grammar, starter = generator
+   output (needs clang-format, i.e. the image — locally this check false-
+   positives on every starter.cpp), plus a judged runtime tier.
+5. **Format**: run the pinned formatters in-image (see Environment below);
+   hand-matched formatting is verified byte-exact this way.
+
+## Multi-solution law
+
+Solutions run **worst-to-best, optimal LAST**. The intro paragraph's
+sentences mirror that order; section bodies move byte-identical on
+reorder. Tie rule (equal complexity): naive/general first, refined/clever
+last; a "(Follow-up)" variant always last. Variants must be **genuinely
+distinct ideas, competitively priced** — similar constants, same or
+comparable asymptotics (O(n) vs O(n log n) is the outer edge); no
+brute-force fillers, no mechanical recursive↔iterative rewrites. The
+statement's own hints often reveal the intended optimal — it closes the
+file and carries the `reference_solution` designation.
+
+Variant-wave process that worked (54 bundles, 378 files, all green):
+curate candidates in chunked read-only agents (strict bar, statement-
+verified, ranked) → author one bundle per agent (read exemplars
+`0001_pair-sum` + FORMAT.md; author 7 languages mirroring the canonical
+fragment shape; insert the section per the law; verify until green; no
+formatters, no git) → on landing, hash-check the new files through the
+in-image formatter (normalizes any whitespace drift) and re-verify.
+
+Deferred corpus decisions live in `CORPUS-FLAGS.md` (bank repo) with full
+evidence — read it before touching cases.json or statement wording.
+
+## Tooling map
+
+- openoj `/.localonly/` (gitignored): authoring contracts
+  (`alt/SPEC.md`, `alt/DESIGN.md`), `alt/roster.json`, `verify_solution.py`,
+  sweeps (`add_common_version.py`, `designate_references.py`),
+  `reorder_audit.py`, the svg_* figure-audit pipeline, headless-UI
+  drivers (`stub-server.mjs`, `shot.mjs`, `session-e2e.mjs`).
+- openoj-problems `/.localonly/`: per-bundle scratch, build scripts,
+  `dsw_shape_study.py` (tracked at scripts/ — see CORPUS-FLAGS).
+- openoj-problems `/.adapt/`: fleet state (`concurrency.json` — cap,
+  floor, target, event log) and wave/ledger bookkeeping.
+
+## Fleet discipline (agent concurrency)
+
+State in `openoj-problems/.adapt/concurrency.json`; record every rate-limit
+event there. Two death classes: per-minute 429s (concurrency-driven —
+step the target down, roughly halve, floor 4) vs 5-hour-pool exhaustion
+(consumption-driven — do NOT step down; wait for the reset timestamp in
+the error and resume). Prefer resuming a dead agent (SendMessage keeps
+its context) over launching fresh. Note: agents stopped *by the user*
+cannot be resumed — re-create fresh. Timers for post-reset resumes are
+session-scoped one-shots; they do not fire while the machine sleeps —
+check the clock against the reset time before waiting on one.
+
+## Environment gotchas (this Mac)
+
+- The runner image is linux/amd64; on this arm64 host run docker with
+  `--platform linux/amd64` (works via emulation, warns).
+- clang-format (and the rest of the pinned toolchain) exist ONLY in the
+  image. Local check.py starter comparisons and "is it formatted"
+  questions must go through the image:
+  `docker run --rm --platform linux/amd64 -v $PWD:/work -w /work
+  ghcr.io/zydo/openoj-runner:latest openoj format <files>`
+  (hash files before/after for a check).
+- `openoj format` takes FILES, not directories; `xargs -n 200` a list.
+- macOS `split` has no `-n l/3`; use `-l <lines>`. `timeout` is absent.
+- Tests that patch `problems.PROBLEMS_DIR` must pass a resolved `Path`
+  (safe_problem_path compares resolved paths; /var is a symlink).
+
+## Workflow conventions
+
+- Git: never commit/push unless asked this turn (see ~/.claude/CLAUDE.md
+  for the full rules — no auto-amend, no attribution trailers). Session
+  work typically lands as a handful of focused commits when the user says
+  so; scoped `git add` by path lists, never blanket `git add problems/`
+  mid-split.
+- `TODO.md` (openoj): design decisions agreed but not started; when work
+  starts, it moves to the session task list; when done, the entry is
+  deleted. Keep entries terse — full context goes in docs or CORPUS-FLAGS.
+- Scratch/planning files: `.localonly/` (gitignored) in either repo.
+- Problems CI (in the runner image): format + static checks on push,
+  full judge sweep on dispatch/weekly. Push only format-normalized trees.
+
+## Deployment
+
+Production: GCP VM `openoj` (us-west1-a, project
+`zdong-14850-alefa-ai`, account `zdong.14850@gmail.com`), repo at
+`/home/dongziyu/code/openoj`, site https://openoj.dongziyu.com
+(edge TLS is the bedtimenews caddy, which reverse-proxies
+`openoj-web-1:8080` and is attached to the `openoj_app` network —
+reconnect it if that container is ever recreated).
+
+    gcloud compute ssh openoj --zone=us-west1-a \
+      --project=zdong-14850-alefa-ai --account=zdong.14850@gmail.com \
+      --command="cd /home/dongziyu/code/openoj && git pull -q && \
+                 docker compose up -d --build --scale caddy=0"
+    curl -fsS https://openoj.dongziyu.com/api/health
+
+`--scale caddy=0` because the edge caddy owns 80/443. The stack fetches
+the problem set from `zydo/openoj-problems` on start. gcloud ssh can be
+flaky; retry. First account registered through the gate bootstraps as
+admin on a fresh DB.
+
+## Extending the problem set — checklist
+
+1. Adapt the statement (copyright-free, algorithm-identical), pick the
+   next id/slug, write problem.json (`common_version`: current,
+   `reference_solution`: "" initially), cases.json, statement.md.
+2. gen_starters → starters; author the canonical solution ×7 languages
+   (fragment shape: the harness assembles common/ + provided/ + starter
+   context; mirror an existing bundle's files exactly).
+3. verify_solution.py green → check.py green (in image) → in-image
+   format → commit per conventions above.
+4. Second solution only when a genuinely distinct, competitive
+   alternative exists (see the law); author per the variant-wave process;
+   set `reference_solution` to the optimal-last variant; update
+   solutions.md intro to mirror.
+5. Suspect a corpus/judge-data contradiction? Do NOT edit frozen
+   cases.json quietly — add it to CORPUS-FLAGS.md with evidence.
