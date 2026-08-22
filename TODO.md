@@ -35,7 +35,7 @@ second solution just to have one.
 
 ## Multi-arch runner image
 
-`ghcr.io/zydo/openoj-runner` is published amd64-only (CI builds on
+`ghcr.io/zydo/openoj` is published amd64-only (CI builds on
 amd64 runners). Add `linux/arm64` via QEMU (`platforms:` +
 `docker/setup-qemu-action`) when arm consumers appear; roughly doubles
 build time. Deliberately deferred 2026-08-22: one arch only for now.
