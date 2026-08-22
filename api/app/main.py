@@ -336,7 +336,11 @@ def _assembly_sources(slug: str, language: str) -> dict[str, dict[str, str]]:
             for path in sorted(common_dir.iterdir()):
                 if path.is_file():
                     assembly["common"][path.name] = path.read_text(encoding="utf-8")
-        bundle = problems_module.safe_problem_path(slug).parent
+        # directory candidates ARE the bundle; flat-file candidates are a
+        # bundle-format single file whose parent carries no provided/ anyway
+        bundle = problems_module.safe_problem_path(slug)
+        if not bundle.is_dir():
+            bundle = bundle.parent
         provided_dir = bundle / "provided" / directory
         if provided_dir.is_dir():
             for path in sorted(provided_dir.iterdir()):
