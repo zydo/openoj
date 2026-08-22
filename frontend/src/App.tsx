@@ -230,6 +230,10 @@ function App() {
           draftCache.current.clear();
           pendingDrafts.current.clear();
           setSessionUser(null);
+          setActiveSlug(null);
+          // leave the problem URL behind too, so refresh/back lands on the
+          // home screen (re-login or continue as guest), not the dead view
+          window.history.replaceState({}, "", "/");
           setSessionPhase("gate");
           setSessionExpired(true);
         });
