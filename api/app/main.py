@@ -24,6 +24,8 @@ from .database import (
     verify_user,
 )
 from .judge import FormatRejected, RunnerUnavailable, execute, format_code
+# the module (not the /problems route function of the same name below)
+from . import problems as problems_module
 from .models import FormatRequest, RunRequest, SubmitRequest
 from .problems import (
     LANGUAGE_REGISTRY,
@@ -322,18 +324,25 @@ def _assembly_sources(slug: str, language: str) -> dict[str, dict[str, str]]:
         return {}
     assembly: dict[str, dict[str, str]] = {"common": {}, "provided": {}}
     try:
-        common_dir = problems.PROBLEMS_DIR / "common" / directory
+        # common/ lives at the problem-set repo root; PROBLEMS_DIR may be
+        # that root itself (local dir) or its problems/ subtree (fetched
+        # checkout), so probe both rather than guess.
+        candidates = (
+            problems_module.PROBLEMS_DIR / "common" / directory,
+            problems_module.PROBLEMS_DIR.parent / "common" / directory,
+        )
+        common_dir = next((c for c in candidates if c.is_dir()), candidates[0])
         if common_dir.is_dir():
             for path in sorted(common_dir.iterdir()):
                 if path.is_file():
                     assembly["common"][path.name] = path.read_text(encoding="utf-8")
-        bundle = problems.safe_problem_path(slug).parent
+        bundle = problems_module.safe_problem_path(slug).parent
         provided_dir = bundle / "provided" / directory
         if provided_dir.is_dir():
             for path in sorted(provided_dir.iterdir()):
                 if path.is_file():
                     assembly["provided"][path.name] = path.read_text(encoding="utf-8")
-    except (problems.ProblemError, OSError):
+    except (problems_module.ProblemError, OSError):
         return {}
     return assembly
 
