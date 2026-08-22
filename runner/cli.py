@@ -175,6 +175,17 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
     }
     assembly: dict[str, dict[str, str]] = {"common": {}, "provided": {}}
     tools = next((c for c in TOOLS_CANDIDATES if (c / "scripts" / "gen_starters.py").exists()), None)
+    # versioned common-harness contract: the checkout's declared version
+    # must match what this image understands (see common/VERSION.json)
+    if tools is not None:
+        version_file = tools / "common" / "VERSION.json"
+        if version_file.is_file():
+            contract = json.loads(version_file.read_text(encoding="utf-8"))
+            if contract.get("schema") != 1:
+                raise SystemExit(
+                    f"common harness schema {contract.get('schema')!r} is newer than this image understands; update the image"
+                )
+            print(f"common harness v{contract.get('version')}")
     common_root = tools / "common" if tools else None
     for name, directory in LANGUAGE_DIRECTORIES.items():
         common_dir = common_root / directory if common_root else None
