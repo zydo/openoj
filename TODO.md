@@ -24,9 +24,9 @@ logout) and user-scoped drafts/submissions are done and live. Remaining:
 - Admin management surface (listing/deleting accounts, resetting
   passwords) once the accounts UI grows beyond the gate.
 
-## Multi-solution bundles, beyond the first 54
+## Multi-solution bundles, beyond the first 76
 
-Fully wired and 54 problems carry named variants. Open-ended content
+Fully wired and 76 problems carry named variants (waves 2 and 3; 2026-08-21). Open-ended content
 work: find further problems whose approaches are genuinely distinct and
 comparable, and author the variant sets.
 
