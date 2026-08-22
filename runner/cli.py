@@ -57,31 +57,54 @@ def _executors_ready() -> None:
     from executors import get_executor  # noqa: F401  (probe)
 
 
+LANGUAGE_BY_EXTENSION = {
+    "py": "python3", "js": "javascript", "ts": "typescript",
+    "java": "java", "cpp": "cpp", "go": "go", "rs": "rust", "sql": "sql",
+    "json": "json", "md": "markdown",
+}
+
+
 def cmd_format(arguments: argparse.Namespace) -> int:
-    """Format files in place with the pinned toolchain (formatters.py)."""
+    """Format files (in place, or --check) with the pinned toolchain."""
     from formatters import format_source
 
-    changed = 0
+    # expand directories into their formattable files
+    files: list[Path] = []
     for name in arguments.files:
         path = Path(name)
-        if not path.is_file():
+        if path.is_dir():
+            files += sorted(
+                child for child in path.rglob("*")
+                if child.is_file() and child.suffix.lstrip(".") in LANGUAGE_BY_EXTENSION
+            )
+        elif path.is_file():
+            files.append(path)
+        else:
             print(f"not a file: {path}", file=sys.stderr)
             return 2
+
+    changed = unformatted = 0
+    for path in files:
         extension = path.suffix.lstrip(".")
-        LANGUAGE_BY_EXTENSION = {
-            "py": "python3", "js": "javascript", "ts": "typescript",
-            "java": "java", "cpp": "cpp", "go": "go", "rs": "rust", "sql": "sql",
-        }
         language = LANGUAGE_BY_EXTENSION.get(extension)
         if language is None:
-            print(f"no formatter for .{extension}", file=sys.stderr)
-            return 2
+            if not arguments.check:
+                print(f"no formatter for .{extension}", file=sys.stderr)
+                return 2
+            continue
         original = path.read_text(encoding="utf-8")
         formatted = format_source(language, original)
         if formatted != original:
-            path.write_text(formatted, encoding="utf-8")
-            changed += 1
-            print(f"formatted {path}")
+            if arguments.check:
+                unformatted += 1
+                print(f"UNFORMATTED {path}")
+            else:
+                path.write_text(formatted, encoding="utf-8")
+                changed += 1
+                print(f"formatted {path}")
+    if arguments.check:
+        print(f"format check: {unformatted} unformatted files")
+        return 1 if unformatted else 0
     print(f"{changed} file(s) changed")
     return 0
 
@@ -277,8 +300,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="openoj", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    fmt = sub.add_parser("format", help="format files with the pinned toolchain")
-    fmt.add_argument("files", nargs="+")
+    fmt = sub.add_parser("format", help="format files (or --check) with the pinned toolchain")
+    fmt.add_argument("files", nargs="+", help="files or directories (dirs walk for formattable files)")
+    fmt.add_argument("--check", action="store_true", help="report unformatted files, change nothing, exit 1")
     fmt.set_defaults(fn=cmd_format)
 
     gen = sub.add_parser("gen-starters", help="emit starter.* from problem.json")

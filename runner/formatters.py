@@ -1,7 +1,10 @@
-"""Source formatting for the editor's Format button.
+"""Source formatting for the editor's Format button, the authoring CLI,
+and CI — the single owner of every formatter pin.
 
 The runner already carries every language toolchain, so it is also the only
-place the real formatters can live. Widths here are the same 120 columns the
+place the real formatters can live. The problems repo formats its files
+through this module too (a thin loader shim in its scripts/), which is
+what keeps editor, generator, CLI, and CI byte-identical. Widths here are the same 120 columns the
 problems repo formats its bundles at (`openoj-problems/.prettierrc.json`,
 `ruff.toml`, `.clang-format`, `rustfmt.toml`) — a starter formatted in the
 editor should come out byte-identical to the one the generator writes.
@@ -12,19 +15,36 @@ directly rather than through the sandboxes the judge uses.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 FORMAT_TIMEOUT_SECONDS = 20
 WIDTH = "120"
 
 # Prettier v3 resolves plugins as ESM relative to the working directory, which
 # the runner has none of, so the java plugin is named by absolute path rather
-# than left to NODE_PATH (which ESM import ignores).
-# The ESM entry point itself, not the package directory: directory imports
-# are not resolvable under ESM.
-_PRETTIER_JAVA_PLUGIN = "/usr/local/lib/node_modules/prettier-plugin-java/dist/index.mjs"
+# than left to NODE_PATH (which ESM import ignores). The ESM entry point
+# itself, not the package directory: directory imports are not resolvable
+# under ESM. The image installs globally; a host checkout may instead have
+# prettier in a node_modules beside this module, so both are probed.
+def _prettier_java_plugin() -> str:
+    image_path = "/usr/local/lib/node_modules/prettier-plugin-java/dist/index.mjs"
+    if Path(image_path).is_file():
+        return image_path
+    import shutil
+    executable = shutil.which("prettier")
+    if executable:
+        # a node_modules install: .bin/prettier -> ../prettier/bin/prettier.cjs,
+        # so the package root is three parents up from the resolved entry point
+        node_modules = Path(executable).resolve().parent.parent.parent
+        sibling = node_modules / "prettier-plugin-java" / "dist" / "index.mjs"
+        if sibling.is_file():
+            return str(sibling)
+    return image_path
+
 
 _PRETTIER = ["prettier", "--print-width", WIDTH, "--tab-width", "4", "--parser"]
 
@@ -35,9 +55,10 @@ _COMMANDS: dict[str, list[str]] = {
     "go": ["gofmt"],
     "rust": ["rustfmt", "--edition", "2021", "--config", f"max_width={WIDTH}", "--emit", "stdout"],
     "cpp": ["clang-format", f"--style={_CLANG_STYLE}", "--assume-filename=solution.cpp"],
-    "java": [*_PRETTIER, "java", "--plugin", _PRETTIER_JAVA_PLUGIN],
+    "java": [*_PRETTIER, "java"],  # --plugin appended lazily in format_source
     "typescript": [*_PRETTIER, "typescript"],
     "javascript": [*_PRETTIER, "babel"],
+    "markdown": [*_PRETTIER, "markdown", "--prose-wrap", "preserve"],
     # sql-formatter rather than prettier, matching how the problems repo
     # formats bundle SQL (`openoj-problems/scripts/format.py`).
     "sql": [
@@ -76,6 +97,13 @@ def _unwrap_go(formatted: str) -> str:
     return body[1:] if body.startswith("\n") else body
 
 
+def _format_json(code: str) -> str:
+    # Canonical JSON: 2-space indent, ensure_ascii=False, trailing newline —
+    # the form the problems repo has always committed its JSON in. Sorting
+    # keys would churn every committed file; key order is authorial.
+    return json.dumps(json.loads(code), indent=2, ensure_ascii=False) + "\n"
+
+
 def formattable_languages() -> tuple[str, ...]:
     return tuple(sorted(_COMMANDS))
 
@@ -88,9 +116,16 @@ def format_source(language: str, code: str) -> str:
     that into a 4xx, because an unformattable draft is the user's to fix and
     not a judge failure.
     """
+    if language == "json":
+        try:
+            return _format_json(code)
+        except json.JSONDecodeError as error:
+            raise FormatError(f"Invalid JSON: {error.msg}") from error
     command = _COMMANDS.get(language)
     if command is None:
         raise FormatError(f"No formatter is installed for {language!r}")
+    if language == "java":
+        command = [*command, "--plugin", _prettier_java_plugin()]
     if shutil.which(command[0]) is None:
         raise FormatError(f"The {command[0]} formatter is unavailable")
     source, wrapped = _wrap_go(code) if language == "go" else (code, False)
