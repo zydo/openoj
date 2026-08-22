@@ -10,6 +10,8 @@ BUNDLE = {
     "problem.json": json.dumps(
         {
             "schema_version": 1,
+            "common_version": 1,
+            "reference_solution": "",
             "id": 1,
             "slug": "demo-problem",
             "title": "Demo Problem",
@@ -46,6 +48,7 @@ BUNDLE = {
         "## Hints\n\n### Hint 1\n\nIt is a sum.\n"
     ),
     "starter.py": "from typing import List, Optional\n\n\nclass Solution:\n    def demoProblem(self, values: List[int]) -> int:\n        raise NotImplementedError(\"TODO\")\n",
+    "solution.py": "from typing import List\n\n\nclass Solution:\n    def demoProblem(self, values: List[int]) -> int:\n        return sum(values)\n",
 }
 
 
@@ -67,6 +70,18 @@ class ProblemBundleTests(unittest.TestCase):
 
     def parse(self, **overrides):
         return parse_problem_bundle(write_bundle(self.root, **overrides))
+
+    def test_bundle_requires_common_version(self):
+        problem = json.loads(BUNDLE["problem.json"])
+        del problem["common_version"]
+        with self.assertRaises(ProblemError):
+            self.parse(**{"problem.json": json.dumps(problem)})
+
+    def test_bundle_rejects_non_integer_common_version(self):
+        problem = json.loads(BUNDLE["problem.json"])
+        problem["common_version"] = "1"
+        with self.assertRaises(ProblemError):
+            self.parse(**{"problem.json": json.dumps(problem)})
 
     def test_bundle_parses_like_the_flat_format(self):
         problem, cases, public_count = self.parse()

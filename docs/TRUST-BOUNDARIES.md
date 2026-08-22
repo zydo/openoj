@@ -46,10 +46,6 @@ Concretely, the existing protections all still apply:
 - No code signing or provenance chain on the problems repo; the git
   history and review process are the provenance. If the problem set is
   ever sourced from third parties, revisit this section first.
-- A **versioned common-harness contract** (bundles declaring which
-  common-library version they assume) remains open — see TODO.md. The
-  ambient-dependency coupling it would remove is currently harmless
-  because both trees move together in one repo.
 
 ## Where the boundary is enforced in code
 
@@ -61,3 +57,8 @@ Concretely, the existing protections all still apply:
   request is ever executed or included by reference.
 - `runner/compiler_sandbox.py` / `runtime_sandbox.py` — the privilege
   split between compiler, runtime, and supervisor.
+- `api/app/problems.py` `assert_common_contract` + `runner/cli.py` — the
+  versioned common-harness contract: every bundle's `problem.json`
+  declares the common version it targets, and a bundle declaring
+  anything newer than the set's `common/` is refused before a single
+  source is assembled.

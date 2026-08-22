@@ -78,6 +78,9 @@ def initialize_database() -> None:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(submissions)")}
         if "session_id" not in columns:
             connection.execute("ALTER TABLE submissions ADD COLUMN session_id TEXT")
+        # Submissions recorded before time-cost scoring carry no reference runtime.
+        if "reference_runtime_ms" not in columns:
+            connection.execute("ALTER TABLE submissions ADD COLUMN reference_runtime_ms INTEGER")
 
 
 @contextmanager
@@ -103,15 +106,27 @@ def save_submission(
     runtime_ms: int,
     results: list[dict[str, Any]],
     session_id: str | None = None,
+    reference_runtime_ms: int | None = None,
 ) -> int:
     with connect() as connection:
         cursor = connection.execute(
             """
             INSERT INTO submissions
-                (session_id, problem_slug, language, code, status, passed, total, runtime_ms, results_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (session_id, problem_slug, language, code, status, passed, total, runtime_ms, results_json, reference_runtime_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (session_id, slug, language, code, status, passed, total, runtime_ms, json.dumps(results)),
+            (
+                session_id,
+                slug,
+                language,
+                code,
+                status,
+                passed,
+                total,
+                runtime_ms,
+                json.dumps(results),
+                reference_runtime_ms,
+            ),
         )
         return int(cursor.lastrowid)
 
@@ -122,7 +137,7 @@ def list_submissions(
     with connect() as connection:
         rows = connection.execute(
             """
-            SELECT id, problem_slug, language, status, passed, total, runtime_ms, created_at
+            SELECT id, problem_slug, language, status, passed, total, runtime_ms, reference_runtime_ms, created_at
             FROM submissions
             WHERE problem_slug = ? AND session_id = ?
             ORDER BY id DESC LIMIT ?
@@ -130,6 +145,24 @@ def list_submissions(
             (slug, session_id, limit),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def list_progress(scope: str) -> dict[str, str]:
+    """Per-problem solving state for one storage scope: 'solved' when any
+    submission in any language was accepted, else 'attempted'. Problems with
+    no submissions are absent from the map — readers treat absence as
+    never-tried."""
+    with connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT problem_slug, MAX(status = 'accepted') AS solved
+            FROM submissions
+            WHERE session_id = ?
+            GROUP BY problem_slug
+            """,
+            (scope,),
+        ).fetchall()
+    return {row["problem_slug"]: ("solved" if row["solved"] else "attempted") for row in rows}
 
 
 def get_submission(submission_id: int, session_id: str | None = None) -> dict[str, Any] | None:
@@ -179,10 +212,12 @@ def create_session() -> str:
     return session_id
 
 
-def validate_session(session_id: str) -> str | None:
+def validate_session(session_id: str, touch: bool = True) -> str | None:
     """Return the session id if it exists and is not idle-expired (touching
     its last-seen clock at most once a minute, so reads do not write on every
-    request); otherwise None. Expired sessions are purged."""
+    request); otherwise None. Expired sessions are purged. touch=False checks
+    without extending the clock — the idle watcher probes with it so its
+    polling can never keep an abandoned session alive."""
     now = time.time()
     cutoff = now - SESSION_IDLE_SECONDS
     with connect() as connection:
@@ -194,7 +229,7 @@ def validate_session(session_id: str) -> str | None:
         if row["last_seen_at"] < cutoff:
             _purge_session(connection, session_id)
             return None
-        if now - row["last_seen_at"] > 60:
+        if touch and now - row["last_seen_at"] > 60:
             connection.execute("UPDATE sessions SET last_seen_at = ? WHERE id = ?", (now, session_id))
     return session_id
 

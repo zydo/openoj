@@ -14,6 +14,7 @@ from .database import (
     get_submission,
     initialize_database,
     list_drafts,
+    list_progress,
     list_submissions,
     purge_expired_sessions,
     save_draft,
@@ -33,8 +34,8 @@ from .problems import (
     ProblemError,
     list_problems,
     load_all_cases,
+    load_designated_reference,
     load_problem,
-    load_reference_solutions,
     load_solutions,
     public_problem,
 )
@@ -88,8 +89,16 @@ def start_session(response: Response, request: Request) -> dict[str, Any]:
 
 
 @app.get("/session")
-def session_status(session_id: Annotated[str, Depends(current_session)]) -> dict[str, Any]:
-    user = session_user(session_id)
+def session_status(
+    touch: int = Query(default=1, ge=0, le=1),
+    openoj_session: Annotated[str | None, Cookie()] = None,
+) -> dict[str, Any]:
+    # touch=0 validates without extending the idle clock: the frontend's
+    # inactivity watcher probes with it, so watching cannot keep an
+    # abandoned session alive.
+    if not (openoj_session and validate_session(openoj_session, touch=bool(touch))):
+        raise HTTPException(status_code=401, detail="No active session")
+    user = session_user(openoj_session)
     return {
         "status": "active",
         "idle_seconds": SESSION_IDLE_SECONDS,
@@ -322,6 +331,9 @@ def _assembly_sources(slug: str, language: str) -> dict[str, dict[str, str]]:
     directory = COMMON_DIRECTORIES.get(language)
     if directory is None:
         return {}
+    # per-bundle half of the versioned common-harness contract: refuse to
+    # assemble a bundle that targets a newer common/ than the set ships
+    problems_module.assert_common_contract(slug)
     assembly: dict[str, dict[str, str]] = {"common": {}, "provided": {}}
     try:
         # common/ lives at the problem-set repo root; PROBLEMS_DIR may be
@@ -431,36 +443,31 @@ def _reference_runtime_ms(
     public_count: int,
     accepted: bool,
 ) -> int | None:
-    """Run the bundle's reference solution and return its total runtime.
+    """Run the bundle's designated reference solution, return its runtime.
 
     A hardware-independent baseline: both runs share the same container,
     executor calibration, and cases, so the ratio of the user's total to this
-    total is meaningful even though absolute times vary by host. Best-effort —
-    absent references, unavailable runners, or a failing reference simply
-    yield None and the UI omits the comparison."""
+    total is meaningful even though absolute times vary by host. Exactly one
+    reference program runs — problem.json's 'reference_solution' designates
+    the optimal approach (the one the worst-to-best guide ends with), so a
+    three-solution problem judges two programs per accepted submission, not
+    four. Best-effort — an absent reference, unavailable runner, or failing
+    reference simply yields None and the UI omits the comparison."""
     if not accepted:
         return None
     try:
-        references = load_reference_solutions(request.slug, request.language)
+        reference = load_designated_reference(request.slug, request.language)
     except (ProblemError, OSError):
         return None
-    if not references:
+    if reference is None:
         return None
-    # Multi-solution bundles carry equivalent approaches; the baseline is the
-    # fastest reference run, so a user solution is never penalized by a slow
-    # (but correct) reference port.
-    best: int | None = None
-    for _, reference in references:
-        try:
-            results = _run_judge(problem_data, request.language, reference, cases, public_count)
-        except HTTPException:
-            return None
-        if any(result["status"] not in {"accepted", "completed"} for result in results):
-            return None
-        total = sum(result.get("runtime_ms", result.get("_runtime_ms", 0)) for result in results)
-        if best is None or total < best:
-            best = total
-    return best
+    try:
+        results = _run_judge(problem_data, request.language, reference, cases, public_count)
+    except HTTPException:
+        return None
+    if any(result["status"] not in {"accepted", "completed"} for result in results):
+        return None
+    return sum(result.get("runtime_ms", result.get("_runtime_ms", 0)) for result in results)
 
 
 @app.post("/submit")
@@ -489,6 +496,7 @@ def submit(request: SubmitRequest, session_id: Annotated[str, Depends(current_se
         summary["runtime_ms"],
         results,
         scope,
+        summary["reference_runtime_ms"],
     )
     summary["submission_id"] = submission_id
     return summary
@@ -527,3 +535,11 @@ def submission(submission_id: int, session_id: Annotated[str, Depends(current_se
     if result is None:
         raise HTTPException(status_code=404, detail="Submission not found")
     return result
+
+
+@app.get("/progress")
+def progress(session_id: Annotated[str, Depends(current_session)] = None) -> dict[str, str]:
+    """Per-problem status marks for the current viewer (signed-in user or
+    guest): 'solved' when any submission in any language was accepted,
+    'attempted' otherwise; absent slugs are never-tried."""
+    return list_progress(scope_key(session_id))

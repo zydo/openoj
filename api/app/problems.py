@@ -384,11 +384,49 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
         raise ProblemError("problem.json must contain an object")
     _require_exact_keys(
         problem_data,
-        {"schema_version", "id", "slug", "title", "difficulty", "tags", "invocation", "limits"},
+        {
+            "schema_version",
+            "common_version",
+            "reference_solution",
+            "id",
+            "slug",
+            "title",
+            "difficulty",
+            "tags",
+            "invocation",
+            "limits",
+        },
         "problem.json",
     )
     if problem_data["schema_version"] != 1:
         raise ProblemError("Unsupported problem bundle schema version")
+    if (
+        not isinstance(problem_data["common_version"], int)
+        or isinstance(problem_data["common_version"], bool)
+        or problem_data["common_version"] < 1
+    ):
+        raise ProblemError(
+            "problem.json common_version must be a positive integer "
+            "(the common-library version it targets; see common/VERSION.json)"
+        )
+    # The designated time-cost reference: "" names the canonical solution.*,
+    # a variant slug names solution_<variant>.* — always the optimal
+    # approach, the one the worst-to-best guide ends with.
+    designated = problem_data["reference_solution"]
+    if not isinstance(designated, str):
+        raise ProblemError("problem.json reference_solution must be a string")
+    solution_names = [member.name for member in path.iterdir() if member.is_file()]
+    if designated:
+        if re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", designated) is None or not any(
+            name.startswith(f"solution_{designated}.") for name in solution_names
+        ):
+            raise ProblemError(
+                "problem.json reference_solution names no solution_<variant>.* file in this bundle"
+            )
+    elif not any(name.startswith("solution.") for name in solution_names):
+        raise ProblemError(
+            "problem.json reference_solution is empty but the bundle carries no canonical solution.* files"
+        )
     if problem_data["id"] != int(matched.group("number")) or problem_data["slug"] != matched.group("slug"):
         raise ProblemError("Bundle directory name must match problem.json id and slug")
     if not isinstance(problem_data["title"], str) or not problem_data["title"].strip():
@@ -568,6 +606,51 @@ def safe_problem_path(slug: str) -> Path:
     return matches[0]
 
 
+def common_contract_version() -> Optional[int]:
+    """The common/VERSION.json contract version of the active problem set,
+    or None when the set predates the versioned contract (no common/, or an
+    unreadable VERSION.json — legacy sets are judged as they always were)."""
+    for root in (PROBLEMS_DIR, PROBLEMS_DIR.parent):
+        version_file = root / "common" / "VERSION.json"
+        if version_file.is_file():
+            try:
+                return int(json.loads(version_file.read_text(encoding="utf-8"))["version"])
+            except (OSError, ValueError, KeyError, TypeError):
+                return None
+    return None
+
+
+def assert_common_contract(slug: str) -> None:
+    """The per-bundle half of the versioned common-harness contract.
+
+    Every bundle's problem.json declares the common-library version it was
+    authored against ('common_version'); a bundle may not target a version
+    newer than the common/ its problem set ships. Flat single-file problems
+    carry no provided/ sources and no declaration, so they are exempt."""
+    shipped = common_contract_version()
+    if shipped is None:
+        return
+    bundle = safe_problem_path(slug)
+    if not bundle.is_dir():
+        return
+    try:
+        declared = json.loads((bundle / "problem.json").read_text(encoding="utf-8")).get(
+            "common_version"
+        )
+    except (OSError, ValueError):
+        raise ProblemError("problem.json is unreadable; cannot check the common-harness contract")
+    if not isinstance(declared, int) or isinstance(declared, bool) or declared < 1:
+        raise ProblemError(
+            "problem.json must declare a positive integer 'common_version' "
+            "(the common-library version it targets; see common/VERSION.json)"
+        )
+    if declared > shipped:
+        raise ProblemError(
+            f"this bundle targets common harness v{declared}, "
+            f"but the problem set ships v{shipped}"
+        )
+
+
 def load_problem(slug: str) -> dict[str, Any]:
     problem, cases, public_count = _load_path(safe_problem_path(slug))
     problem["public_cases"] = [
@@ -608,6 +691,7 @@ def load_solutions(slug: str) -> Optional[dict[str, Any]]:
     guide_path = path / "solutions.md"
     guide: dict[str, str] = {}
     titles: dict[str, str] = {}
+    order: list[str] = []
     if guide_path.is_file():
         text = guide_path.read_text(encoding="utf-8")
         headings = _headings(text)
@@ -622,13 +706,28 @@ def load_solutions(slug: str) -> Optional[dict[str, Any]]:
             for key, (title, body) in resolved.items():
                 guide[key] = body
                 titles[key] = title
+            # The authored section order (worst-to-best), as variant keys —
+            # "" for a section that belongs to the canonical solution.
+            if implementations:
+                title_to_variant = {title: key for key, (title, _) in resolved.items()}
+                order = [title_to_variant.get(title, "") for title, _ in sections]
+            else:
+                order = [""] * len(sections)
     if not guide and not implementations and not canonical:
         return None
+    try:
+        reference = json.loads((path / "problem.json").read_text(encoding="utf-8")).get(
+            "reference_solution", ""
+        )
+    except (OSError, ValueError):
+        reference = ""
     return {
         "guide": guide,
         "titles": titles,
         "implementations": implementations,
         "canonical": canonical,
+        "order": order,
+        "reference": reference if isinstance(reference, str) else "",
     }
 
 
@@ -703,36 +802,40 @@ def load_all_cases(slug: str) -> tuple[list[dict[str, Any]], int]:
     return named_cases, public_count
 
 
+def load_designated_reference(slug: str, language: str) -> Optional[str]:
+    """The bundle's designated reference solution for a language, if present.
+
+    problem.json's 'reference_solution' names the variant whose
+    solution_<variant>.<ext> is the time-cost baseline ("" = the canonical
+    solution.<ext>) — the optimal approach, the one the worst-to-best guide
+    ends with, so exactly one reference program runs per accepted
+    submission. Best-effort: a bundle without that file for the language
+    returns None and the UI omits the comparison."""
+    path = safe_problem_path(slug)
+    if not path.is_dir():
+        return None
+    extension = LANGUAGE_EXTENSION.get(language)
+    if extension is None:
+        return None
+    try:
+        designated = json.loads((path / "problem.json").read_text(encoding="utf-8")).get(
+            "reference_solution", ""
+        )
+    except (OSError, ValueError):
+        return None
+    stem = "solution" if not designated else f"solution_{designated}"
+    file_path = path / f"{stem}.{extension}"
+    if not file_path.is_file():
+        return None
+    return file_path.read_text(encoding="utf-8")
+
+
 def load_reference_solution(slug: str, language: str) -> Optional[str]:
     """The bundle's recommended solution for a language, if it provides one.
 
     Only bundle-format problems carry solutions; flat markdown packages have
     none, and a bundle may legitimately lack a given language."""
-    solutions = load_reference_solutions(slug, language)
-    if not solutions:
-        return None
-    return solutions[0][1]
-
-
-def load_reference_solutions(slug: str, language: str) -> list[tuple[str, str]]:
-    """Every reference solution for a language as (variant, code) pairs —
-    the canonical `solution.<ext>` plus any named `solution_<variant>.<ext>`
-    siblings. The canonical solution sorts first."""
-    path = safe_problem_path(slug)
-    if not path.is_dir():
-        return []
-    extension = LANGUAGE_EXTENSION.get(language)
-    if extension is None:
-        return []
-    found: list[tuple[str, str]] = []
-    for solution_path in sorted(path.glob(f"solution*.{extension}")):
-        name = solution_path.name[: -len(extension) - 1]
-        # variant names may themselves contain underscores (solution_union_find.py)
-        if not re.fullmatch(r"solution(?:_[a-z0-9]+)*", name):
-            continue
-        variant = name[len("solution") :]
-        found.append((variant, solution_path.read_text(encoding="utf-8")))
-    return found
+    return load_designated_reference(slug, language)
 
 
 def list_problems() -> list[dict[str, Any]]:

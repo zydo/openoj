@@ -10,6 +10,8 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
+  CircleCheck,
+  CircleDashed,
   Clock3,
   Code2,
   FileText,
@@ -152,8 +154,14 @@ function App() {
   // Guest-session gate: "checking" while the session cookie is validated,
   // "gate" shows the Continue-as-guest entrance (the only way in until
   // accounts exist), "active" runs the app. An idle-expired session mid-use
-  // returns to the gate with a notice.
-  const [sessionPhase, setSessionPhase] = useState<"checking" | "gate" | "active">("checking");
+  // lands on "logged-out" — a dedicated page back to login/signup.
+  const [sessionPhase, setSessionPhase] = useState<"checking" | "gate" | "logged-out" | "active">("checking");
+  // Who the expired session belonged to (drives the logged-out page copy)
+  // and the mode the gate opens in after that page's buttons are used.
+  const [expiredAsUser, setExpiredAsUser] = useState(false);
+  const [gateEntryMode, setGateEntryMode] = useState<"welcome" | "signup" | "login">("welcome");
+  // The server's idle window, for the inactivity watcher.
+  const idleSecondsRef = useRef(3600);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [gateError, setGateError] = useState("");
   const [needsSetup, setNeedsSetup] = useState(false);
@@ -163,6 +171,9 @@ function App() {
   // fetches its own paginated slice instead.
   const [allProblems, setAllProblems] = useState<ProblemSummary[] | null>(null);
   const [problemsError, setProblemsError] = useState("");
+  // Per-problem status marks for the current viewer (signed-in user or
+  // guest): fetched once a session is active, updated after each submit.
+  const [progress, setProgress] = useState<Record<string, "attempted" | "solved">>({});
   const [activeSlug, setActiveSlug] = useState<string | null>(slugFromPath);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -212,32 +223,21 @@ function App() {
   }, [flushDrafts]);
 
   useEffect(() => {
+    if (sessionPhase !== "active") return;
+    api.getProgress().then(setProgress).catch(() => undefined);
+  }, [sessionPhase]);
+
+  useEffect(() => {
     api.authStatus()
       .then((status) => setNeedsSetup(status.needs_setup))
       .catch(() => undefined);
     api.sessionStatus()
       .then((status) => {
         setSessionUser(status.user);
+        idleSecondsRef.current = status.idle_seconds || 3600;
         setSessionPhase("active");
       })
-      .catch(() => setSessionPhase("gate"))
-      .finally(() => {
-        // Registered after the boot probe so the expected first-visit 401
-        // does not read as "your session expired". Any later 401 (idle
-        // expiry mid-use) routes back to the gate with the notice.
-        onUnauthorized(() => {
-          flushDrafts();
-          draftCache.current.clear();
-          pendingDrafts.current.clear();
-          setSessionUser(null);
-          setActiveSlug(null);
-          // leave the problem URL behind too, so refresh/back lands on the
-          // home screen (re-login or continue as guest), not the dead view
-          window.history.replaceState({}, "", "/");
-          setSessionPhase("gate");
-          setSessionExpired(true);
-        });
-      });
+      .catch(() => setSessionPhase("gate"));
     const onHide = () => {
       if (document.visibilityState === "hidden") flushDrafts();
     };
@@ -248,9 +248,55 @@ function App() {
     };
   }, [flushDrafts]);
 
+  // Any 401 once the app is running (idle expiry mid-use, or the idle
+  // watcher's touch-free probe agreeing with the server) leaves the current
+  // view for the dedicated logged-out page. The phase guard keeps the
+  // expected first-visit 401 from reading as an expiry.
+  useEffect(() => {
+    onUnauthorized(() => {
+      flushDrafts();
+      draftCache.current.clear();
+      pendingDrafts.current.clear();
+      setExpiredAsUser(sessionUser !== null);
+      setSessionUser(null);
+      setProgress({});
+      setActiveSlug(null);
+      // leave the problem URL behind too, so refresh/back lands on the
+      // logged-out page, not the dead view
+      window.history.replaceState({}, "", "/");
+      setSessionExpired(false);
+      setSessionPhase((phase) => (phase === "active" ? "logged-out" : phase));
+    });
+  }, [flushDrafts, sessionUser]);
+
+  // Server-authoritative idle watch: after a full idle window with no user
+  // input, probe the session WITHOUT touching its clock (touch=0) — a
+  // polling touch would keep abandoned sessions alive forever. A 401 routes
+  // to the logged-out page through the handler above.
+  useEffect(() => {
+    if (sessionPhase !== "active") return;
+    let timer: number | null = null;
+    const arm = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        api.probeSession().then(arm).catch(() => undefined);
+      }, Math.max(60, idleSecondsRef.current) * 1000);
+    };
+    const onActivity = () => arm();
+    window.addEventListener("pointerdown", onActivity);
+    window.addEventListener("keydown", onActivity);
+    arm();
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+      window.removeEventListener("pointerdown", onActivity);
+      window.removeEventListener("keydown", onActivity);
+    };
+  }, [sessionPhase]);
+
   const enterAsGuest = useCallback(() => {
     api.startSession()
-      .then(() => {
+      .then((status) => {
+        idleSecondsRef.current = status.idle_seconds || idleSecondsRef.current;
         setSessionExpired(false);
         setGateError("");
         setSessionUser(null);
@@ -262,7 +308,10 @@ function App() {
 
   const registerAccount = useCallback((username: string, password: string) => {
     api.register(username, password)
-      .then(() => api.authStatus())
+      .then((session) => {
+        idleSecondsRef.current = session.idle_seconds || idleSecondsRef.current;
+        return api.authStatus();
+      })
       .then((status) => {
         setNeedsSetup(status.needs_setup);
         setSessionUser({ username: username === "admin" ? "admin" : username, is_admin: status.needs_setup ? false : username === "admin" });
@@ -277,6 +326,7 @@ function App() {
     api.startSession()
       .then(() => api.login(username, password))
       .then((result) => {
+        idleSecondsRef.current = result.idle_seconds || idleSecondsRef.current;
         setSessionUser({ username: result.username, is_admin: result.is_admin });
         setGateError("");
         setSessionExpired(false);
@@ -452,7 +502,11 @@ function App() {
         ? await api.run(problem.slug, language, code, parsedCases!)
         : await api.submit(problem.slug, language, code);
       setResult(response);
-      if (mode === "submit") refreshSubmissions();
+      if (mode === "submit") {
+        refreshSubmissions();
+        const state = response.status === "accepted" ? "solved" : "attempted";
+        setProgress((previous) => ({ ...previous, [problem.slug]: state }));
+      }
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "The judge could not complete this request.");
     } finally {
@@ -523,10 +577,22 @@ function App() {
     if (sessionPhase === "checking") {
       return <FullPageMessage icon={<LoaderCircle className="spin" />} title="Preparing the judge bench" detail="Checking your session…" />;
     }
-    return <GuestGate expired={sessionExpired} error={gateError} needsSetup={needsSetup} onEnter={enterAsGuest} onRegister={registerAccount} onLogin={loginAccount} theme={theme} onToggleTheme={toggleTheme} />;
+    if (sessionPhase === "logged-out") {
+      return (
+        <LoggedOut
+          asUser={expiredAsUser}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          onSignIn={() => { setGateEntryMode("login"); setSessionPhase("gate"); }}
+          onCreateAccount={() => { setGateEntryMode("signup"); setSessionPhase("gate"); }}
+          onGuest={() => { setGateEntryMode("welcome"); setSessionPhase("gate"); }}
+        />
+      );
+    }
+    return <GuestGate expired={sessionExpired} error={gateError} needsSetup={needsSetup} entryMode={gateEntryMode} onEnter={enterAsGuest} onRegister={registerAccount} onLogin={loginAccount} theme={theme} onToggleTheme={toggleTheme} />;
   }
   if (loadError) return <FullPageMessage icon={<CircleAlert />} title="OpenOJ could not load" detail={loadError} />;
-  if (activeSlug === null) return <Landing theme={theme} onToggleTheme={toggleTheme} onOpen={openProblem} onLogout={logoutAccount} />;
+  if (activeSlug === null) return <Landing theme={theme} onToggleTheme={toggleTheme} onOpen={openProblem} onLogout={logoutAccount} progress={progress} />;
   if (problemsError && allProblems === null) {
     return <FullPageMessage icon={<CircleAlert />} title="The problem set could not load" detail={problemsError} />;
   }
@@ -622,7 +688,7 @@ function App() {
           {leftTab === "description" ? (
             <article className="problem-scroll">
               <div className="problem-heading">
-                <h1>{problem.id}. {problem.title}</h1>
+                <h1>{problem.id}. {problem.title}{progress[problem.slug] && <StatusMark state={progress[problem.slug]} size={17} />}</h1>
                 <div className="problem-meta">
                   <span className={`difficulty ${difficultyTone(problem.difficulty)}`}>{difficultyLabel(problem.difficulty)}</span>
                   {problem.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
@@ -780,6 +846,7 @@ function App() {
         <ProblemDrawer
           problems={allProblems!}
           activeSlug={activeSlug}
+          progress={progress}
           onSelect={(slug) => {
             setProblemListOpen(false);
             if (slug !== activeSlug) openProblem(slug);
@@ -1020,11 +1087,12 @@ function pageNumbers(current: number, pages: number): Array<number | "ellipsis-s
   return numbers;
 }
 
-function Landing({ theme, onToggleTheme, onOpen, onLogout }: {
+function Landing({ theme, onToggleTheme, onOpen, onLogout, progress }: {
   theme: Theme;
   onToggleTheme: () => void;
   onOpen: (slug: string) => void;
   onLogout: () => void;
+  progress: Record<string, "attempted" | "solved">;
 }) {
   const [items, setItems] = useState<ProblemSummary[]>([]);
   const [total, setTotal] = useState(0);
@@ -1083,6 +1151,7 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout }: {
         <strong>{entry.id}. {entry.title}</strong>
         {entry.tags.length > 0 && <small>{entry.tags.join(" · ")}</small>}
       </span>
+      {progress[entry.slug] && <StatusMark state={progress[entry.slug]} />}
       <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{difficultyLabel(entry.difficulty)}</span>
     </button>
   );
@@ -1351,14 +1420,19 @@ function Solutions({ slug, language, languages, theme, onLanguageChange }: {
 
   // Variants are the named approaches (bfs, dfs, …); a canonical-only
   // problem shows its single solution untitled. Multi-solution problems
-  // number their sections so the order is legible at a glance.
+  // number their sections in the guide's authored order (worst-to-best,
+  // optimal last) — the order the server reports, never alphabetical.
   const variants = Object.keys(content.implementations).sort();
+  const authored = (content.order ?? []).filter((name) => variants.includes(name));
+  const sequence = authored.length === variants.length ? authored : variants;
+  const reference = content.reference ?? "";
   const entries = variants.length > 0
-    ? variants.map((variant, index) => ({
+    ? sequence.map((variant, index) => ({
         name: variant,
         title: `Solution ${index + 1}: ${content.titles?.[variant] ?? variant.toUpperCase()}`,
         body: content.guide[variant] ?? "",
         code: content.implementations[variant],
+        isReference: reference === variant,
       }))
     : Object.keys(content.canonical).length > 0
       ? [{
@@ -1366,6 +1440,7 @@ function Solutions({ slug, language, languages, theme, onLanguageChange }: {
           title: "",
           body: Object.values(content.guide)[0] ?? "",
           code: content.canonical,
+          isReference: reference === "",
         }]
       : [];
   if (entries.length === 0) {
@@ -1380,6 +1455,7 @@ function Solutions({ slug, language, languages, theme, onLanguageChange }: {
           title={entry.title}
           body={entry.body}
           code={entry.code}
+          isReference={entry.isReference}
           languages={languages}
           slug={slug}
           theme={theme}
@@ -1391,10 +1467,11 @@ function Solutions({ slug, language, languages, theme, onLanguageChange }: {
   );
 }
 
-function SolutionBlock({ title, body, code, languages, slug, theme, selected, onSelect }: {
+function SolutionBlock({ title, body, code, isReference = false, languages, slug, theme, selected, onSelect }: {
   title: string;
   body: string;
   code: Record<string, string>;
+  isReference?: boolean;
   languages: Problem["languages"];
   slug: string;
   theme: Theme;
@@ -1420,7 +1497,19 @@ function SolutionBlock({ title, body, code, languages, slug, theme, selected, on
 
   return (
     <section className="solution-block">
-      {title && <h3 className="solution-block-title">{title}</h3>}
+      {title && (
+        <h3 className="solution-block-title">
+          {title}
+          {isReference && (
+            <span className="reference-badge" title="The time-cost percentage shown after a submission is measured against this solution">Reference</span>
+          )}
+        </h3>
+      )}
+      {!title && isReference && (
+        <h3 className="solution-block-title">
+          <span className="reference-badge" title="The time-cost percentage shown after a submission is measured against this solution">Reference</span>
+        </h3>
+      )}
       <div className="solution-block-bar">
         <LanguageMenu
           value={shown}
@@ -1500,9 +1589,10 @@ function Submissions({ submissions, problem }: { submissions: Submission[]; prob
   );
 }
 
-function ProblemDrawer({ problems, activeSlug, onSelect, onClose }: {
+function ProblemDrawer({ problems, activeSlug, progress, onSelect, onClose }: {
   problems: ProblemSummary[];
   activeSlug: string;
+  progress: Record<string, "attempted" | "solved">;
   onSelect: (slug: string) => void;
   onClose: () => void;
 }) {
@@ -1552,12 +1642,23 @@ function ProblemDrawer({ problems, activeSlug, onSelect, onClose }: {
                 <strong>{entry.id}. {entry.title}</strong>
                 {entry.tags.length > 0 && <small>{entry.tags.join(" · ")}</small>}
               </span>
+              {progress[entry.slug] && <StatusMark state={progress[entry.slug]} />}
               <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{difficultyLabel(entry.difficulty)}</span>
             </button>
           )) : <p className="drawer-empty">No problems match “{query.trim()}”.</p>}
         </div>
       </aside>
     </div>
+  );
+}
+
+// The per-viewer solving mark: solved (any language passed every case) or
+// attempted (submissions exist, none accepted). Never-tried renders nothing.
+function StatusMark({ state, size = 14 }: { state: "attempted" | "solved"; size?: number }) {
+  return state === "solved" ? (
+    <span className="status-mark solved" title="Solved — a submission in some language passed every case"><CircleCheck size={size} /></span>
+  ) : (
+    <span className="status-mark attempted" title="Attempted — no passing submission yet"><CircleDashed size={size} /></span>
   );
 }
 
@@ -1569,20 +1670,61 @@ function FullPageMessage({ icon, title, detail }: { icon: React.ReactNode; title
   return <main className="full-page-message"><span>{icon}</span><h1>{title}</h1><p>{detail}</p></main>;
 }
 
+// Where an idle-expired session lands instead of a dead view: guests lose
+// the session's ephemeral work, account holders keep everything under their
+// user id and sign straight back in.
+function LoggedOut({ asUser, onSignIn, onCreateAccount, onGuest, theme, onToggleTheme }: {
+  asUser: boolean;
+  onSignIn: () => void;
+  onCreateAccount: () => void;
+  onGuest: () => void;
+  theme: Theme;
+  onToggleTheme: () => void;
+}) {
+  return (
+    <main className="guest-gate">
+      <button
+        className="icon-button theme-toggle gate-theme"
+        onClick={onToggleTheme}
+        title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+        aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+      >
+        {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+      </button>
+      <div className="guest-card">
+        <span className="brand-mark gate-mark"><LogOut size={22} strokeWidth={2.4} /></span>
+        <h1>Session ended</h1>
+        {asUser ? (
+          <p className="gate-copy">You were signed out after inactivity. Your submissions, drafts, and progress are saved under your account — sign in to pick up where you left off.</p>
+        ) : (
+          <p className="gate-copy">Your guest session idled out, and its drafts and submissions were cleared with it. Accounts keep their work — guests start fresh after every idle hour.</p>
+        )}
+        <button className="gate-enter" onClick={onSignIn}>Sign in</button>
+        <div className="gate-links">
+          <button className="gate-link" onClick={onCreateAccount}>Create account</button>
+          <span aria-hidden="true">·</span>
+          <button className="gate-link" onClick={onGuest}>Continue as guest</button>
+        </div>
+      </div>
+    </main>
+  );
+}
+
 // The entrance: accounts persist their work under the user id; guests get an
 // ephemeral session that idles out after about an hour. A fresh install
 // (no accounts yet) offers the one-time admin setup.
-function GuestGate({ expired, error, needsSetup, onEnter, onRegister, onLogin, theme, onToggleTheme }: {
+function GuestGate({ expired, error, needsSetup, entryMode = "welcome", onEnter, onRegister, onLogin, theme, onToggleTheme }: {
   expired: boolean;
   error: string;
   needsSetup: boolean;
+  entryMode: "welcome" | "signup" | "login";
   onEnter: () => void;
   onRegister: (username: string, password: string) => void;
   onLogin: (username: string, password: string) => void;
   theme: Theme;
   onToggleTheme: () => void;
 }) {
-  const [mode, setMode] = useState<"welcome" | "signup" | "login">("welcome");
+  const [mode, setMode] = useState<"welcome" | "signup" | "login">(entryMode);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");

@@ -568,3 +568,30 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Per-viewer status marks on problems (never-tried shows nothing) */
+.status-mark {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.problem-row .status-mark { margin-left: 8px; }
+h1 .status-mark { margin-left: 8px; vertical-align: -2px; }
+.status-mark.solved { color: var(--green); }
+.status-mark.attempted { color: var(--amber); }
+
+/* The designated time-cost reference, marked on the solutions page */
+.reference-badge {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 1px 8px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--cyan);
+  border: 1px solid var(--cyan);
+  border-radius: 999px;
+  vertical-align: 2px;
+  opacity: 0.9;
+}

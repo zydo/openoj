@@ -39,6 +39,9 @@ export type DraftRow = { language: string; code: string; updated_at: number };
 
 export const api = {
   sessionStatus: (): Promise<SessionStatus> => request<SessionStatus>("/session"),
+  // Idle-expiry probe: validates without extending the session's clock, so
+  // the inactivity watcher can poll without keeping the session alive.
+  probeSession: (): Promise<SessionStatus> => request<SessionStatus>("/session?touch=0"),
   startSession: (): Promise<SessionStatus> =>
     request<SessionStatus>("/session", { method: "POST" }),
   authStatus: (): Promise<{ needs_setup: boolean }> =>
@@ -89,4 +92,7 @@ export const api = {
       body: JSON.stringify({ slug, language, code }),
     }),
   getSubmissions: (slug: string) => request<Submission[]>(`/submissions?slug=${encodeURIComponent(slug)}`),
+  // Per-problem status marks for the current viewer (user or guest):
+  // "solved" (any language accepted) or "attempted"; absent slugs are never-tried.
+  getProgress: (): Promise<Record<string, "attempted" | "solved">> => request("/progress"),
 };

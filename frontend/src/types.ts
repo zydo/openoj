@@ -89,4 +89,10 @@ export type SolutionsContent = {
   titles: Record<string, string>;
   implementations: Record<string, Record<string, string>>;
   canonical: Record<string, string>;
+  // Variant keys in the guide's authored order (worst-to-best; "" for the
+  // canonical solution's section), so the page reads as written.
+  order: string[];
+  // The designated time-cost reference — the variant ("" = canonical) whose
+  // runtime the time-cost percentage is measured against.
+  reference: string;
 };
