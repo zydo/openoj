@@ -1,4 +1,5 @@
 import textwrap
+import re
 from pathlib import Path
 from typing import Any
 
@@ -178,7 +179,10 @@ class TypeScriptExecutor(CompiledExecutor):
         )
         struct_prelude, struct_codecs = _struct_prelude(invocation)
         if assembly_prelude:
-            struct_prelude = ""
+            # common/ provides the classes; keep the array-JSON helpers,
+            # which are wire codecs the library does not ship.
+            helpers = re.findall(r"function openoj\w+\(values[^)]*\) \{.*?\}\n", struct_prelude, re.S)
+            struct_prelude = "".join(helpers)
         result_wrapper = _result_wrapper(invocation)
         declarations = "\n".join(
             f"    const openojArg{index} = {_read_expression(spec)};"
