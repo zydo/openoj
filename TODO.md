@@ -67,3 +67,10 @@ and give it CLI entry points so any machine can pull and run:
   the worker consumes job files; the executors live in the image), so
   this is the authoring-side front door to it: local bundle in, judged
   verdict out, no authoring-machine toolchain required.
+
+## Multi-arch runner image
+
+`ghcr.io/zydo/openoj-runner` is published amd64-only (CI builds on
+amd64 runners). Add `linux/arm64` via QEMU (`platforms:` +
+`docker/setup-qemu-action`) when arm consumers appear; roughly doubles
+build time. Deliberately deferred 2026-08-22: one arch only for now.
