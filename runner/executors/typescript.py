@@ -181,7 +181,7 @@ class TypeScriptExecutor(CompiledExecutor):
         if assembly_prelude:
             # common/ provides the classes; keep the array-JSON helpers,
             # which are wire codecs the library does not ship.
-            helpers = re.findall(r"function openoj\w+\(values[^)]*\) \{.*?\}\n", struct_prelude, re.S)
+            helpers = re.findall(r"function openoj\w+\([^)]*\): [^\n]*\{.*?\n\}", struct_prelude, re.S)
             struct_prelude = "".join(helpers)
         result_wrapper = _result_wrapper(invocation)
         declarations = "\n".join(
