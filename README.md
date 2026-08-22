@@ -45,7 +45,7 @@ problems/
         └── solution.*       recommended solutions (not served by the API)
 ```
 
-The flat single-file format (`0001_two-sum.md` with `## Metadata`,
+The flat single-file format (`0001_pair-sum.md` with `## Metadata`,
 `## Description`, … `## Test Cases` sections) is still supported; the
 bundled `./problems` fallback set now uses the split format. Both formats can coexist in one directory;
 the split format's statement grammar is `# <Title>`, required `## Description`
