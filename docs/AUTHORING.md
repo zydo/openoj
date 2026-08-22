@@ -9,7 +9,7 @@ or generators are needed.
 docker pull ghcr.io/zydo/openoj-runner:v0.1.0   # :latest tracks main
 alias openoj='docker run --rm --user 0:0 \
   -v /path/to/openoj-problems:/tools \
-  -v /path/to/my-bundle:/bundle:rw ghcr.io/zydo/openoj-runner:latest openoj'
+  -v /path/to/my-bundle:/bundle:rw ghcr.io/zydo/openoj-runner:v0.1.0 openoj'
 ```
 
 `/tools` is a checkout of the problems repo (its `common/` library and
