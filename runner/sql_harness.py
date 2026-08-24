@@ -37,7 +37,10 @@ def main() -> None:
             connection.executescript(schema)
         if case_setup.strip():
             connection.executescript(case_setup)
-        query = Path(sys.argv[1]).read_text(encoding="utf-8")
+        argv = sys.argv[1:]
+        if "--" in argv:
+            argv = argv[argv.index("--") + 1 :]
+        query = Path(argv[0]).read_text(encoding="utf-8")
         # The submission is a single SELECT whose row set is the answer.
         cursor = connection.execute(f"SELECT * FROM ({query})")
         rows = cursor.fetchall()

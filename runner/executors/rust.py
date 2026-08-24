@@ -110,6 +110,12 @@ class RustExecutor(CompiledExecutor):
             )
             if return_type.get("kind") == "linked_list":
                 result_expression = "Ok(openoj_list_node_json(&openoj_actual))"
+            if return_type.get("kind") == "array" and return_type.get("items", {}).get("kind") == "linked_list":
+                result_expression = (
+                    "Ok(format!(\"[{}]\", openoj_actual.iter()"
+                    ".map(|part| openoj_list_node_json(part))"
+                    ".collect::<Vec<String>>().join(\",\")))"
+                )
         if "tree" in structs:
             struct_codecs += textwrap.dedent(
                 f"""
