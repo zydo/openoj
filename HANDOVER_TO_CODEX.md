@@ -18,16 +18,24 @@ disjoint, so the two sides never touch each other's files:
 |---|---|---|---|
 | **A (Claude)** | 0001-0100 … 1401-1500 | ~646 pending | sole owner below 1501 (working 0501-0600 upward) |
 | **C (Claude-C)** | 1501-1600 … 1901-2000 | 401 pending | sole owner of 1501..2000 (see HANDOVER_TO_ANOTHER_CLAUDE.md) |
-| **B (Codex, you)** | 2001-2100 … 4001-4100 | 1,737 pending | sole owner from 2001 onward |
+| **B (Codex, you)** | 2001-2100 … 2901-3000 | 827 pending | sole owner of ids 2001..3000 |
+| **D (Claude-D)** | 3001-3100 … 4001-4100 | 910 pending | sole owner from 3001 onward (see HANDOVER_TO_CLAUDE_D.md) |
 
 Update 2026-08-23: a THIRD session (Claude-C, a different model) now owns
 shards 1501-2000, carved from A's upper range. Nothing changed for you:
 your scope, tracker, and protocol are identical. The three fleets share
 one account's rate limits.
 
+Update 2026-08-23 (later): a FOURTH session (Claude-D) now owns shards
+3001-3100 through 4001-4100, carved from your upper range. Your scope
+ends at id 3000: work only shards 2001-2100 through 2901-3000 and NEVER
+author anything at id 3001 or above — that is Partition D's territory
+now. The four fleets share one account's rate limits.
+
 **Your scope**: author every `pending` problem in shards 2001-2100
-through 4001-4100, in tracker order, shard by shard. NEVER author
-inside shards below 2001 — A owns them.
+through 2901-3000, in tracker order, shard by shard. NEVER author
+inside shards below 2001 — A/C own them — nor at 3001 and above —
+Claude-D owns those.
 
 The tracker is intentionally SPARSE. An id absent from `partition.json`
 is out of scope, commonly because it already exists in
