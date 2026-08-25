@@ -20,7 +20,12 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
     networks:
+      # web needs a non-internal network: Docker 29.x does not publish ports
+      # for containers that sit only on an `internal: true` network, which
+      # silently dropped the 8081 host binding below. `app` keeps it able to
+      # reach api:8000; `edge` makes the published port actually bind.
       - app
+      - edge
 
   problems-fetcher:
     # One-shot: the only component allowed to reach github.com; fills the
