@@ -1,32 +1,12 @@
 name: openoj
 
 services:
-  caddy:
-    image: caddy:2-alpine
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp" # HTTP/3
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      # Optional direct-API site block (docs/API.md); /dev/null = no extra
-      # sites, so the import glob in Caddyfile matches an empty file.
-      - ${OPENOJ_CADDY_EXTRA:-/dev/null}:/etc/caddy/extra/api.caddy:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - web
-    restart: unless-stopped
-    networks:
-      - edge
-      - app
-
   web:
     build:
       context: ./frontend
     ports:
-      # Local debugging only; public traffic goes through caddy on 80/443
-      - "127.0.0.1:${OPENOJ_PORT:-8080}:8080"
+      # Served directly, plain HTTP; TLS is terminated by an external edge.
+      - "${OPENOJ_PORT:-8081}:8080"
     depends_on:
       api:
         condition: service_healthy
@@ -41,7 +21,6 @@ services:
     restart: unless-stopped
     networks:
       - app
-      - edge
 
   problems-fetcher:
     # One-shot: the only component allowed to reach github.com; fills the
@@ -150,10 +129,10 @@ services:
 volumes:
   openoj_data:
   judge_queue:
-  caddy_data:
-  caddy_config:
 
 networks:
   app:
     internal: true
+  # Non-internal network so the one-shot problems-fetcher can reach the
+  # remote problem set; everything else lives on the internal app network.
   edge:

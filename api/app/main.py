@@ -67,7 +67,7 @@ def current_session(openoj_session: Annotated[str | None, Cookie()] = None) -> s
 
 
 def _set_session_cookie(response: Response, session_id: str, request: Request) -> None:
-    # Secure only when the client actually reaches us over https (caddy
+    # Secure only when the client actually reaches us over https (the edge
     # terminates TLS and forwards the scheme); localhost/CI stay usable.
     scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
     response.set_cookie(

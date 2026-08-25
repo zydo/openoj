@@ -1,7 +1,0 @@
-# Optional direct-API endpoint for scripted/external callers (docs/API.md).
-# Enable by pointing OPENOJ_CADDY_EXTRA at this file:
-#   OPENOJ_CADDY_EXTRA=./deploy/api.caddy docker compose up -d
-# Caddy provisions the certificate on first request; point DNS at this host.
-api.openoj.dongziyu.com {
-	reverse_proxy api:8000
-}

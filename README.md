@@ -13,7 +13,7 @@ volume.
 docker compose up --build
 ```
 
-Open <http://localhost:8080>. Set `OPENOJ_PORT` to publish another port:
+Open <http://localhost:8081>. Set `OPENOJ_PORT` to publish another port:
 
 ```bash
 OPENOJ_PORT=9090 docker compose up --build
@@ -293,7 +293,7 @@ comparison modes are documented in [docs/CODECS.md](docs/CODECS.md).
 
 The judge's HTTP API (problems, run, submit, submissions, guest sessions,
 drafts) is available to scripted callers — see [docs/API.md](docs/API.md) for
-endpoints, the session model, and the opt-in direct-API endpoint.
+endpoints and the session model.
 
 ## Persistence
 

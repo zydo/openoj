@@ -10,18 +10,10 @@ deployment's API as public and rate-limit at the edge if you expose it.
 
 ## Base URL
 
-- Same origin as the web UI: `https://openoj.dongziyu.com/api/…` (always on —
-  this is how the UI works).
-- Optional direct endpoint without the web container in the path:
-  `https://api.openoj.dongziyu.com/…`, off by default. Enable with
-
-  ```sh
-  OPENOJ_CADDY_EXTRA=./deploy/api.caddy docker compose up -d
-  ```
-
-  and point DNS for `api.openoj.dongziyu.com` at the host (Caddy provisions
-  the certificate on first request). Paths below assume the same-origin form;
-  strip the `/api` prefix on the direct endpoint.
+The API is served at the web UI's same origin, under `/api/`:
+`https://openoj.dongziyu.com/api/…` (the edge terminating TLS lives outside
+this repo; the plain-HTTP origin is the web service's published port, 8081
+by default). Paths below assume this form.
 
 ## Sessions
 

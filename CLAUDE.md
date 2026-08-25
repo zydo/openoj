@@ -198,20 +198,19 @@ check the clock against the reset time before waiting on one.
 Production: GCP VM `openoj` (us-west1-a, project
 `zdong-14850-alefa-ai`, account `zdong.14850@gmail.com`), repo at
 `/home/dongziyu/code/openoj`, site https://openoj.dongziyu.com
-(edge TLS is the bedtimenews caddy, which reverse-proxies
-`openoj-web-1:8080` and is attached to the `openoj_app` network —
-reconnect it if that container is ever recreated).
+(TLS is terminated by an edge proxy maintained outside this repo, which
+forwards to the web service's published port 8081).
 
     gcloud compute ssh openoj --zone=us-west1-a \
       --project=zdong-14850-alefa-ai --account=zdong.14850@gmail.com \
       --command="cd /home/dongziyu/code/openoj && git pull -q && \
-                 docker compose up -d --build --scale caddy=0"
+                 docker compose up -d --build"
     curl -fsS https://openoj.dongziyu.com/api/health
 
-`--scale caddy=0` because the edge caddy owns 80/443. The stack fetches
-the problem set from `zydo/openoj-problems` on start. gcloud ssh can be
-flaky; retry. First account registered through the gate bootstraps as
-admin on a fresh DB.
+The web UI is served plain HTTP on host port 8081 (no TLS inside this
+repo). The stack fetches the problem set from `zydo/openoj-problems` on
+start. gcloud ssh can be flaky; retry. First account registered through
+the gate bootstraps as admin on a fresh DB.
 
 ## Extending the problem set — checklist
 
