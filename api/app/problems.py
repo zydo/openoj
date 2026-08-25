@@ -74,7 +74,7 @@ EXTENSION_LANGUAGE = {
     "java": "java",
     "cpp": "cpp",
     "go": "go",
-    "rust": "rust",
+    "rs": "rust",
     "sql": "sql",
 }
 PROBLEM_BUNDLE_DIR = re.compile(
