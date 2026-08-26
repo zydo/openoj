@@ -269,27 +269,42 @@ function App() {
     });
   }, [flushDrafts, sessionUser]);
 
-  // Server-authoritative idle watch: after a full idle window with no user
-  // input, probe the session WITHOUT touching its clock (touch=0) — a
-  // polling touch would keep abandoned sessions alive forever. A 401 routes
-  // to the logged-out page through the handler above.
+  // Server-authoritative idle watch: once a full idle window has passed with
+  // no user input, probe the session WITHOUT touching its clock (touch=0) —
+  // a polling touch would keep abandoned sessions alive forever. A 401
+  // routes to the logged-out page through the handler above. The deadline is
+  // re-checked on a short interval rather than one long timer: background
+  // tabs freeze timers (throttling, Memory Saver, system sleep), and a
+  // returning user's first input must not postpone the overdue probe — it
+  // fires right there, or on the tab becoming visible.
   useEffect(() => {
     if (sessionPhase !== "active") return;
-    let timer: number | null = null;
-    const arm = () => {
-      if (timer !== null) window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        api.probeSession().then(arm).catch(() => undefined);
-      }, Math.max(60, idleSecondsRef.current) * 1000);
+    const idleMs = () => Math.max(60, idleSecondsRef.current) * 1000;
+    let lastActivity = Date.now();
+    const check = () => {
+      if (Date.now() - lastActivity >= idleMs()) {
+        api.probeSession().catch(() => undefined);
+      }
     };
-    const onActivity = () => arm();
+    const onActivity = () => {
+      // Check BEFORE resetting the clock: if the idle window already elapsed
+      // while the tab was frozen or the machine asleep, this input is the
+      // first moment the expiry can be detected.
+      check();
+      lastActivity = Date.now();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") check();
+    };
+    const timer = window.setInterval(check, 30_000);
     window.addEventListener("pointerdown", onActivity);
     window.addEventListener("keydown", onActivity);
-    arm();
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
-      if (timer !== null) window.clearTimeout(timer);
+      window.clearInterval(timer);
       window.removeEventListener("pointerdown", onActivity);
       window.removeEventListener("keydown", onActivity);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [sessionPhase]);
 
