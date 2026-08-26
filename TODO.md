@@ -17,10 +17,3 @@ problem view; guests included) are done and live. Remaining:
   bootstrap are a baseline, not the destination.
 - Admin management surface (listing/deleting accounts, resetting
   passwords) once the accounts UI grows beyond the gate.
-
-## Multi-arch runner image
-
-`ghcr.io/zydo/openoj` is published amd64-only (CI builds on
-amd64 runners). Add `linux/arm64` via QEMU (`platforms:` +
-`docker/setup-qemu-action`) when arm consumers appear; roughly doubles
-build time. Deliberately deferred 2026-08-22: one arch only for now.
