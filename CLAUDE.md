@@ -74,7 +74,7 @@ formatter via the image.
 - **The judge protocol travels on fd 63; stdout is only a local-tooling
   fallback.** Anything that spawns harnesses outside the worker (local
   verify scripts) parses stdout instead.
-- Runner image `ghcr.io/zydo/openoj-runner` owns the pinned toolchain and
+- Runner image `ghcr.io/zydo/openoj` owns the pinned toolchain and
   **all formatting**: `runner/formatters.py` is the single formatting owner
   (markdown + canonical JSON + per-language code). The bank's
   `scripts/format.py` is only a loader shim; there is deliberately no
@@ -166,13 +166,13 @@ check the clock against the reset time before waiting on one.
 
 ## Environment gotchas (this Mac)
 
-- The runner image is linux/amd64; on this arm64 host run docker with
-  `--platform linux/amd64` (works via emulation, warns).
+- The runner image is published multi-arch (linux/amd64 + linux/arm64);
+  on this arm64 host docker pulls the native variant automatically.
 - clang-format (and the rest of the pinned toolchain) exist ONLY in the
   image. Local check.py starter comparisons and "is it formatted"
   questions must go through the image:
-  `docker run --rm --platform linux/amd64 -v $PWD:/work -w /work
-  ghcr.io/zydo/openoj-runner:latest openoj format <files>`
+  `docker run --rm -v $PWD:/work -w /work
+  ghcr.io/zydo/openoj:latest openoj format <files>`
   (hash files before/after for a check).
 - `openoj format` takes FILES, not directories; `xargs -n 200` a list.
 - macOS `split` has no `-n l/3`; use `-l <lines>`. `timeout` is absent.

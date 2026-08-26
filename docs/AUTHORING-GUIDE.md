@@ -108,8 +108,8 @@ Coordinator re-runs the gate independently after each agent green; audit
 (inventory / canonical JSON / pins / starter regeneration diff /
 crawl-fidelity probes) before batches land. In-image format pass over
 changed non-JSON files at landing
-(`docker run --rm --platform linux/amd64 -v $PWD:/work -w /work
-ghcr.io/zydo/openoj-runner:latest openoj format <files>` — FILES not
+(`docker run --rm -v $PWD:/work -w /work
+ghcr.io/zydo/openoj:latest openoj format <files>` — FILES not
 dirs; there is NO formatter for .json/.rs: JSON canonicality is
 byte-compared instead). Commit/push only when the user says so that
 turn; scoped `git add` by path list, never blanket adds.
