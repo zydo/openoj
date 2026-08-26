@@ -164,7 +164,7 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         )
     else:
         call_block = (
-            f"    solution.{method}(oracle{', ' + auxiliary_args if auxiliary_args else ''});\n"
+            f"    await solution.{method}(oracle{', ' + auxiliary_args if auxiliary_args else ''});\n"
             '    openojEmit("__OPENOJ_RESULT__" + openojJSON({ status: "completed", actual: oracle.verdict() }));'
         )
 
