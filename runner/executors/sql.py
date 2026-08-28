@@ -21,9 +21,11 @@ class SqlExecutor(Python3Executor):
         limits: dict[str, Any],
         assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
-        stripped = code.strip().rstrip(";").strip()
-        if ";" in stripped:
-            raise ExecutorError("SQL submissions must be a single SELECT statement")
+        invocation_sql = invocation.get("sql") or {}
+        if not invocation_sql.get("dynamic_columns"):
+            stripped = code.strip().rstrip(";").strip()
+            if ";" in stripped:
+                raise ExecutorError("SQL submissions must be a single SELECT statement")
         return super().prepare(job_root, scratch, code, invocation, limits, assembly)
 
     def encode_case(

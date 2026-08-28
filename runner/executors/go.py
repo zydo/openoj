@@ -9,6 +9,7 @@ from .typed import (
     encode_case,
     function_signature,
     go_type,
+    provided_node_class,
     struct_item_spec,
     uses_struct_kinds,
 )
@@ -21,19 +22,56 @@ GO_IMPORT_BLOCK = re.compile(
 )
 WRAPPER_IMPORTS = ("encoding/binary", "encoding/json", "fmt", "io", "math", "os")
 
+# Reader method per value_type kind; struct kinds read through a method
+# named after the class. The assembled program is kept gofmt-canonical, so
+# every emitted block is written with 4-space indents and expanded to tabs.
+READER_METHODS = {
+    "linked_list": "linkedList",
+    "binary_tree": "tree",
+    "nary_tree": "naryTree",
+    "quad_tree": "quadTree",
+    "nested": "nestedInteger",
+    "next_tree": "nextTree",
+    "circular_list": "circularList",
+    "doubly_circular": "doublyCircular",
+    "multi_list": "multiList",
+    "graph": "graph",
+    "random_list": "randomList",
+}
+# Kinds that share one fallback node class (a bundle still uses a single
+# shape, but the aliases tie the ListNode/NodeWithNext declarations to every
+# wire kind that needs them).
+LIST_NODE_KINDS = {"list", "circular_list", "alias_list"}
+NEXT_NODE_KINDS = {"next_tree", "doubly_circular"}
 
-def _merge_imports(code: str) -> tuple[str, str]:
-    packages = set(WRAPPER_IMPORTS)
+
+def _tabs(text: str) -> str:
+    """Expand leading 4-space indents to the tabs gofmt expects."""
+    lines = []
+    for line in text.splitlines():
+        width = len(line) - len(line.lstrip(" "))
+        lines.append("\t" * (width // 4) + " " * (width % 4) + line[width:])
+    return "\n".join(lines)
+
+
+def _merge_imports(code: str, extra: tuple[str, ...] = ()) -> tuple[str, str]:
+    packages = set(WRAPPER_IMPORTS) | set(extra)
     remaining = code
     for match in GO_IMPORT_BLOCK.finditer(code):
         packages.update(re.findall(r'"([^"]+)"', match.group(0)))
         remaining = remaining.replace(match.group(0), "", 1)
-    imports = "".join(f'\t\t\t"{package}"\n' for package in sorted(packages))
+    imports = "".join(f'\t"{package}"\n' for package in sorted(packages))
     return remaining.strip("\n"), imports
 
 
 def _read_expression(spec: dict[str, Any], reader: str = "openojReader") -> str:
     kind = spec["kind"]
+    if kind in READER_METHODS:
+        return f"{reader}.{READER_METHODS[kind]}()"
+    if kind == "struct":
+        # The class is the using problem's provided/ source; the reader
+        # carries a same-named method per generated fallback type.
+        return f"{reader}.{spec['class']}()"
     if kind == "integer":
         return f"{reader}.int32()" if spec.get("bits", 32) == 32 else f"{reader}.int64()"
     if kind == "number":
@@ -42,10 +80,6 @@ def _read_expression(spec: dict[str, Any], reader: str = "openojReader") -> str:
         return f"{reader}.boolean()"
     if kind == "string":
         return f"{reader}.text()"
-    if kind == "linked_list":
-        return f"{reader}.linkedList()"
-    if kind == "binary_tree":
-        return f"{reader}.tree()"
     item_type = go_type(spec["items"])
     nested = _read_expression(spec["items"], "reader")
     return f"openojArray({reader}, func(reader *openojReaderType) {item_type} {{ return {nested} }})"
@@ -84,7 +118,13 @@ class GoExecutor(CompiledExecutor):
             return prepare_interactive(self, job_root, scratch, code, invocation, assembly)
         parameters, return_type, method = function_signature(invocation, self.language)
         structs = uses_struct_kinds(invocation)
+        # Graph and random_list nodes are the using problem's provided/
+        # class (LC 133/138 ship their own); the readers, collectors, and
+        # serializers below render around that name.
+        graph_class = provided_node_class(invocation, "graph")
+        random_class = provided_node_class(invocation, "random_list")
         item_type = go_type(struct_item_spec(invocation))
+        item_expression = _read_expression(struct_item_spec(invocation), "reader")
         # The assembled program compiles as one package: common-library and
         # problem-provided sources land beside main.go as their own files
         # (each already declares `package main`). When they are present the
@@ -100,17 +140,153 @@ class GoExecutor(CompiledExecutor):
                 part_path.chmod(0o444)
                 assembly_paths.append(str(part_path))
                 assembled_types = True
+        # Struct classes arrive as source (the bank's common library or the
+        # problem's provided/); pre-assembly jobs fall back to generated
+        # equivalents below.
+        struct_specs: dict[str, dict[str, Any]] = {}
+
+        def collect_structs(spec: Any) -> None:
+            if not isinstance(spec, dict):
+                return
+            if spec.get("kind") == "struct":
+                struct_specs.setdefault(spec["class"], spec)
+            elif spec.get("kind") == "array":
+                collect_structs(spec.get("items"))
+
+        for spec in parameters:
+            collect_structs(spec)
+
         struct_decls = ""
         struct_codecs = ""
         result_conversion = "openojIdentity"
-        if not assembled_types and "list" in structs:
-            struct_decls += (
-                f"type ListNode struct {{\n\tVal  {item_type}\n\tNext *ListNode\n}}\n\n"
+        if not assembled_types and structs & LIST_NODE_KINDS:
+            struct_decls += textwrap.dedent(
+                f"""
+                type ListNode struct {{
+                    Val  {item_type}
+                    Next *ListNode
+                }}
+
+                """
             )
         if not assembled_types and "tree" in structs:
-            struct_decls += (
-                f"type TreeNode struct {{\n\tVal   {item_type}\n\tLeft  *TreeNode\n\tRight *TreeNode\n}}\n\n"
+            struct_decls += textwrap.dedent(
+                f"""
+                type TreeNode struct {{
+                    Val   {item_type}
+                    Left  *TreeNode
+                    Right *TreeNode
+                }}
+
+                """
             )
+        if not assembled_types and "nary_tree" in structs:
+            struct_decls += textwrap.dedent(
+                f"""
+                type Node struct {{
+                    Val      {item_type}
+                    Children []*Node
+                }}
+
+                """
+            )
+        if not assembled_types and "quad_tree" in structs:
+            struct_decls += textwrap.dedent(
+                """
+                type QuadNode struct {
+                    Val         bool
+                    IsLeaf      bool
+                    TopLeft     *QuadNode
+                    TopRight    *QuadNode
+                    BottomLeft  *QuadNode
+                    BottomRight *QuadNode
+                }
+
+                """
+            )
+        if not assembled_types and "nested" in structs:
+            struct_decls += textwrap.dedent(
+                """
+                type NestedInteger struct {
+                    integer  *int
+                    children []*NestedInteger
+                }
+
+                func NewNestedInteger(value int) NestedInteger {
+                    held := value
+                    return NestedInteger{integer: &held}
+                }
+                func (value NestedInteger) IsInteger() bool { return value.integer != nil }
+                func (value NestedInteger) GetInteger() int { return *value.integer }
+                func (value NestedInteger) GetList() []*NestedInteger { return value.children }
+                func (value *NestedInteger) SetInteger(newValue int) {
+                    held := newValue
+                    value.integer = &held
+                    value.children = nil
+                }
+                func (value *NestedInteger) Add(item NestedInteger) {
+                    value.integer = nil
+                    value.children = append(value.children, &item)
+                }
+
+                """
+            )
+        if not assembled_types and structs & NEXT_NODE_KINDS:
+            struct_decls += textwrap.dedent(
+                f"""
+                type NodeWithNext struct {{
+                    Val    {item_type}
+                    Left   *NodeWithNext
+                    Right  *NodeWithNext
+                    Next   *NodeWithNext
+                    Parent *NodeWithNext
+                }}
+
+                """
+            )
+        if not assembled_types and "multi_list" in structs:
+            struct_decls += textwrap.dedent(
+                f"""
+                type MultiListNode struct {{
+                    Val   {item_type}
+                    Prev  *MultiListNode
+                    Next  *MultiListNode
+                    Child *MultiListNode
+                }}
+
+                """
+            )
+        if not assembled_types and "graph" in structs:
+            struct_decls += textwrap.dedent(
+                f"""
+                type {graph_class} struct {{
+                    Val       {item_type}
+                    Neighbors []*{graph_class}
+                }}
+
+                """
+            )
+        if not assembled_types and "random_list" in structs:
+            struct_decls += textwrap.dedent(
+                f"""
+                type {random_class} struct {{
+                    Val    {item_type}
+                    Next   *{random_class}
+                    Random *{random_class}
+                }}
+
+                """
+            )
+        if not assembled_types:
+            for name, spec in sorted(struct_specs.items()):
+                fields = spec.get("fields") or []
+                width = max(len(field["name"]) for field in fields) + 1
+                body = "".join(
+                    f"    {field['name'].ljust(width)}{go_type(field['value_type'])}\n"
+                    for field in fields
+                )
+                struct_decls += f"type {name} struct {{\n{body}}}\n\n"
+
         if "list" in structs:
             struct_codecs += textwrap.dedent(
                 f"""
@@ -119,11 +295,16 @@ class GoExecutor(CompiledExecutor):
                     length := int(reader.uint32())
                     var head, current *ListNode
                     for index := 0; index < length; index++ {{
-                        node := &ListNode{{Val: {_read_expression(struct_item_spec(invocation), 'reader')}}}
+                        node := &ListNode{{Val: {item_expression}}}
                         if current == nil {{ head = node }} else {{ current.Next = node }}
                         current = node
                     }}
                     return head
+                }}
+                func openojCollectList(head *ListNode) {{
+                    for node := head; node != nil; node = node.Next {{
+                        openojInputNodes = append(openojInputNodes, node)
+                    }}
                 }}
                 func openojListNodeJSON(head *ListNode) []any {{
                     values := []any{{}}
@@ -133,11 +314,7 @@ class GoExecutor(CompiledExecutor):
                     return values
                 }}
                 func openojListNodeArrayJSON(heads []*ListNode) []any {{
-                    values := make([]any, len(heads))
-                    for index, head := range heads {{
-                        values[index] = openojListNodeJSON(head)
-                    }}
-                    return values
+                    return openojArrayOfMapped(heads, openojListNodeJSON)
                 }}
                 """
             )
@@ -158,7 +335,7 @@ class GoExecutor(CompiledExecutor):
                     slots := make([]slot, length)
                     for index := 0; index < length; index++ {{
                         if reader.take(1)[0] == 1 {{
-                            slots[index] = slot{{present: true, value: {_read_expression(struct_item_spec(invocation), 'reader')}}}
+                            slots[index] = slot{{present: true, value: {item_expression}}}
                         }}
                     }}
                     if length == 0 || !slots[0].present {{ return nil }}
@@ -205,11 +382,7 @@ class GoExecutor(CompiledExecutor):
                     return values
                 }}
                 func openojTreeNodeArrayJSON(roots []*TreeNode) []any {{
-                    values := make([]any, len(roots))
-                    for index, root := range roots {{
-                        values[index] = openojTreeNodeJSON(root)
-                    }}
-                    return values
+                    return openojArrayOfMapped(roots, openojTreeNodeJSON)
                 }}
                 """
             )
@@ -218,83 +391,728 @@ class GoExecutor(CompiledExecutor):
             if (return_type.get("kind") == "array"
                     and (return_type.get("items") or {}).get("kind") == "binary_tree"):
                 result_conversion = "openojTreeNodeArrayJSON"
-
-        declarations = "\n".join(
-            f"\topenojArg{index} := {_read_expression(spec)}"
-            for index, spec in enumerate(parameters)
-        )
-        arguments = ", ".join(f"openojArg{index}" for index in range(len(parameters)))
-        code, merged_imports = _merge_imports(code)
-        source = textwrap.dedent(
-            f"""
-            package main
-
-            import (
-            {merged_imports}            )
-
-            {struct_decls}{code}
-
-            type openojReaderType struct {{
-                data []byte
-                offset int
-            }}
-
-            func (reader *openojReaderType) take(count int) []byte {{
-                if count < 0 || count > len(reader.data)-reader.offset {{ panic("truncated judge input") }}
-                value := reader.data[reader.offset:reader.offset+count]
-                reader.offset += count
-                return value
-            }}
-            func (reader *openojReaderType) uint32() uint32 {{ return binary.BigEndian.Uint32(reader.take(4)) }}
-            func (reader *openojReaderType) int32() int {{ return int(int32(reader.uint32())) }}
-            func (reader *openojReaderType) int64() int64 {{ return int64(binary.BigEndian.Uint64(reader.take(8))) }}
-            func (reader *openojReaderType) number() float64 {{ return math.Float64frombits(binary.BigEndian.Uint64(reader.take(8))) }}
-            func (reader *openojReaderType) boolean() bool {{ value := reader.take(1)[0]; if value > 1 {{ panic("invalid boolean input") }}; return value == 1 }}
-            func (reader *openojReaderType) text() string {{ return string(reader.take(int(reader.uint32()))) }}
-            func (reader *openojReaderType) finished() {{ if reader.offset != len(reader.data) {{ panic("trailing judge input") }} }}
-            func openojArray[T any](reader *openojReaderType, read func(*openojReaderType) T) []T {{
-                length := int(reader.uint32())
-                values := make([]T, length)
-                for index := range values {{ values[index] = read(reader) }}
-                return values
-            }}
-            func openojIdentity(value any) any {{ return value }}
-{struct_codecs}
-            func openojExecute() (response map[string]any) {{
-                defer func() {{
-                    if recovered := recover(); recovered != nil {{
-                        response = map[string]any{{"status": "runtime_error", "error": fmt.Sprint(recovered)}}
+        if "nary_tree" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                func (reader *openojReaderType) naryTree() *Node {{
+                    length := int(reader.uint32())
+                    type slot struct {{
+                        present bool
+                        value   {item_type}
                     }}
-                }}()
-                bytes, errorValue := io.ReadAll(os.Stdin)
-                if errorValue != nil {{ panic(errorValue) }}
-                openojReader := &openojReaderType{{data: bytes}}
-            {declarations}
-                openojReader.finished()
-                openojRaw := {method}({arguments})
-                openojActual := {result_conversion}(openojRaw)
-                return map[string]any{{"status": "completed", "actual": openojActual}}
-            }}
-
-            func openojEmit(line string) {{
-                // Judge protocol prefers the dedicated fd so submission code
-                // cannot forge verdicts on stdout; stdout is the fallback.
-                if channel := os.NewFile(63, "protocol"); channel != nil {{
-                    if _, errorValue := channel.WriteString(line + "\\n"); errorValue == nil {{
-                        return
+                    slots := make([]slot, length)
+                    for index := 0; index < length; index++ {{
+                        if reader.take(1)[0] == 1 {{
+                            slots[index] = slot{{present: true, value: {item_expression}}}
+                        }}
+                    }}
+                    if length == 0 || !slots[0].present {{ return nil }}
+                    root := &Node{{Val: slots[0].value}}
+                    queue := []*Node{{root}}
+                    // Display wire: slot 1 closes the root group, then every
+                    // node's children run until that node's own separator
+                    // slot. Tolerate the marker's absence for hand-written
+                    // inputs.
+                    index := 2
+                    if length > 1 && slots[1].present {{ index = 1 }}
+                    for len(queue) > 0 && index < length {{
+                        node := queue[0]
+                        queue = queue[1:]
+                        for index < length && slots[index].present {{
+                            child := &Node{{Val: slots[index].value}}
+                            node.Children = append(node.Children, child)
+                            queue = append(queue, child)
+                            index++
+                        }}
+                        if index < length {{ index++ }}  // group separator
+                    }}
+                    return root
+                }}
+                // Display wire: root value, the marker closing the root
+                // group, then each node's children followed by its own
+                // marker; trailing markers are trimmed.
+                func openojNodeJSON(root *Node) []any {{
+                    if root == nil {{ return []any{{}} }}
+                    values := []any{{root.Val, nil}}
+                    queue := []*Node{{root}}
+                    for len(queue) > 0 {{
+                        node := queue[0]
+                        queue = queue[1:]
+                        for _, child := range node.Children {{
+                            values = append(values, child.Val)
+                            queue = append(queue, child)
+                        }}
+                        values = append(values, nil)
+                    }}
+                    for len(values) > 0 && values[len(values)-1] == nil {{
+                        values = values[:len(values)-1]
+                    }}
+                    return values
+                }}
+                func openojNodeArrayJSON(roots []*Node) []any {{
+                    return openojArrayOfMapped(roots, openojNodeJSON)
+                }}
+                """
+            )
+            if return_type.get("kind") == "nary_tree":
+                result_conversion = "openojNodeJSON"
+            if (return_type.get("kind") == "array"
+                    and (return_type.get("items") or {}).get("kind") == "nary_tree"):
+                result_conversion = "openojNodeArrayJSON"
+        if "quad_tree" in structs:
+            struct_codecs += textwrap.dedent(
+                """
+                func (reader *openojReaderType) quadTree() *QuadNode {
+                    if reader.take(1)[0] == 0 { return nil }
+                    isLeaf := reader.take(1)[0] == 1
+                    node := &QuadNode{IsLeaf: isLeaf, Val: reader.take(1)[0] == 1}
+                    if !node.IsLeaf {
+                        node.TopLeft = reader.quadTree()
+                        node.TopRight = reader.quadTree()
+                        node.BottomLeft = reader.quadTree()
+                        node.BottomRight = reader.quadTree()
+                    }
+                    return node
+                }
+                // LC display wire: a flat preorder of [isLeaf, val] pairs; a
+                // non-leaf's val normalizes to 0 on both sides.
+                func openojQuadJSON(node *QuadNode) any {
+                    // LC display wire: one flat preorder list of [isLeaf,
+                    // val] pairs; a non-leaf's val normalizes to 0.
+                    if node == nil { return nil }
+                    rows := []any{}
+                    var walk func(node *QuadNode)
+                    walk = func(node *QuadNode) {
+                        if node == nil {
+                            rows = append(rows, nil)
+                            return
+                        }
+                        if node.IsLeaf {
+                            value := 0
+                            if node.Val { value = 1 }
+                            rows = append(rows, []any{1, value})
+                            return
+                        }
+                        rows = append(rows, []any{0, 0})
+                        walk(node.TopLeft)
+                        walk(node.TopRight)
+                        walk(node.BottomLeft)
+                        walk(node.BottomRight)
+                    }
+                    walk(node)
+                    return rows
+                }
+                func openojQuadArrayJSON(nodes []*QuadNode) []any {
+                    return openojArrayOfMapped(nodes, openojQuadJSON)
+                }
+                """
+            )
+            if return_type.get("kind") == "quad_tree":
+                result_conversion = "openojQuadJSON"
+            if (return_type.get("kind") == "array"
+                    and (return_type.get("items") or {}).get("kind") == "quad_tree"):
+                result_conversion = "openojQuadArrayJSON"
+        if "nested" in structs:
+            struct_codecs += textwrap.dedent(
+                """
+                func (reader *openojReaderType) nestedInteger() NestedInteger {
+                    tag := reader.take(1)[0]
+                    if tag == 1 {
+                        value := NestedInteger{}
+                        value.SetInteger(reader.int32())
+                        return value
+                    }
+                    if tag != 2 { panic("Invalid nested tag") }
+                    length := int(reader.uint32())
+                    value := NestedInteger{}
+                    for index := 0; index < length; index++ { value.Add(reader.nestedInteger()) }
+                    return value
+                }
+                func openojNestedJSON(value NestedInteger) any {
+                    if value.IsInteger() { return value.GetInteger() }
+                    values := []any{}
+                    for _, item := range value.GetList() {
+                        values = append(values, openojNestedJSON(*item))
+                    }
+                    return values
+                }
+                func openojNestedArrayJSON(values []NestedInteger) []any {
+                    return openojArrayOfMapped(values, openojNestedJSON)
+                }
+                """
+            )
+            if return_type.get("kind") == "nested":
+                result_conversion = "openojNestedJSON"
+            if (return_type.get("kind") == "array"
+                    and (return_type.get("items") or {}).get("kind") == "nested"):
+                result_conversion = "openojNestedArrayJSON"
+        if "next_tree" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                func (reader *openojReaderType) nextTree() *NodeWithNext {{
+                    length := int(reader.uint32())
+                    type slot struct {{
+                        present bool
+                        value   {item_type}
+                    }}
+                    slots := make([]slot, length)
+                    for index := 0; index < length; index++ {{
+                        if reader.take(1)[0] == 1 {{
+                            slots[index] = slot{{present: true, value: {item_expression}}}
+                        }}
+                    }}
+                    if length == 0 || !slots[0].present {{ return nil }}
+                    root := &NodeWithNext{{Val: slots[0].value}}
+                    queue := []*NodeWithNext{{root}}
+                    index := 1
+                    for len(queue) > 0 && index < length {{
+                        node := queue[0]
+                        queue = queue[1:]
+                        if index < length {{
+                            if slots[index].present {{
+                                node.Left = &NodeWithNext{{Val: slots[index].value, Parent: node}}
+                                queue = append(queue, node.Left)
+                            }}
+                            index++
+                        }}
+                        if index < length {{
+                            if slots[index].present {{
+                                node.Right = &NodeWithNext{{Val: slots[index].value, Parent: node}}
+                                queue = append(queue, node.Right)
+                            }}
+                            index++
+                        }}
+                    }}
+                    return root
+                }}
+                // The next-connected wire result is a list of levels read
+                // purely through next pointers; the next level starts at the
+                // first non-nil child found scanning the current one.
+                func openojNextTreeJSON(root *NodeWithNext) []any {{
+                    // LC display wire: values with one null marker between
+                    // adjacent levels; the walk advances to the first child
+                    // found anywhere in the level (left, else right) so
+                    // imperfect trees serialize too. A nil root is the
+                    // empty wire [] like every other node serializer here.
+                    if root == nil {{ return []any{{}} }}
+                    var values []any
+                    level := root
+                    for level != nil {{
+                        var nextLevel *NodeWithNext
+                        for node := level; node != nil; node = node.Next {{
+                            values = append(values, node.Val)
+                            if nextLevel == nil {{
+                                if node.Left != nil {{
+                                    nextLevel = node.Left
+                                }} else if node.Right != nil {{
+                                    nextLevel = node.Right
+                                }}
+                            }}
+                        }}
+                        values = append(values, nil)
+                        level = nextLevel
+                    }}
+                    for len(values) > 0 && values[len(values)-1] == nil {{
+                        values = values[:len(values)-1]
+                    }}
+                    return values
+                }}
+                func openojNextTreeArrayJSON(roots []*NodeWithNext) []any {{
+                    return openojArrayOfMapped(roots, openojNextTreeJSON)
+                }}
+                """
+            )
+            if return_type.get("kind") == "next_tree":
+                result_conversion = "openojNextTreeJSON"
+            if (return_type.get("kind") == "array"
+                    and (return_type.get("items") or {}).get("kind") == "next_tree"):
+                result_conversion = "openojNextTreeArrayJSON"
+        if "circular_list" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                // A circular wire carries the ring's values; the decoder
+                // closes the ring (tail.Next = head) exactly like the
+                // harness languages, so solutions always see a real ring.
+                func (reader *openojReaderType) circularList() *ListNode {{
+                    length := int(reader.uint32())
+                    if length == 0 {{ return nil }}
+                    head := &ListNode{{Val: {item_expression}}}
+                    tail := head
+                    for index := 1; index < length; index++ {{
+                        tail.Next = &ListNode{{Val: {item_expression}}}
+                        tail = tail.Next
+                    }}
+                    tail.Next = head
+                    return head
+                }}
+                func openojCircularJSON(head *ListNode) []any {{
+                    if head == nil {{ return []any{{}} }}
+                    values := []any{{}}
+                    node := head
+                    for bound := 0; bound < 1<<20; bound++ {{
+                        values = append(values, node.Val)
+                        node = node.Next
+                        if node == head {{ return values }}
+                        if node == nil {{ panic("Circular list is not closed") }}
+                    }}
+                    panic("Circular list exceeds the walk bound")
+                }}
+                func openojCircularArrayJSON(heads []*ListNode) []any {{
+                    return openojArrayOfMapped(heads, openojCircularJSON)
+                }}
+                """
+            )
+            if return_type.get("kind") == "circular_list":
+                result_conversion = "openojCircularJSON"
+            if (return_type.get("kind") == "array"
+                    and (return_type.get("items") or {}).get("kind") == "circular_list"):
+                result_conversion = "openojCircularArrayJSON"
+        if "doubly_circular" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                // LC 426: left is prev, right is next; read the ring open
+                // and verify every back-link on the way out.
+                func (reader *openojReaderType) doublyCircular() *NodeWithNext {{
+                    length := int(reader.uint32())
+                    if length == 0 {{ return nil }}
+                    head := &NodeWithNext{{Val: {item_expression}}}
+                    tail := head
+                    for index := 1; index < length; index++ {{
+                        tail.Right = &NodeWithNext{{Val: {item_expression}, Left: tail}}
+                        tail = tail.Right
+                    }}
+                    return head
+                }}
+                func openojDoublyJSON(head *NodeWithNext) []any {{
+                    if head == nil {{ return []any{{}} }}
+                    values := []any{{}}
+                    var previous *NodeWithNext
+                    node := head
+                    for bound := 0; bound < 1<<20; bound++ {{
+                        // head's own back-link is the tail, verified when
+                        // the walk closes below.
+                        if previous != nil && node.Left != previous {{
+                            panic("Doubly linked list is not properly linked")
+                        }}
+                        values = append(values, node.Val)
+                        previous = node
+                        node = node.Right
+                        if node == head {{
+                            if head.Left != previous {{
+                                panic("Doubly linked list is not properly linked")
+                            }}
+                            return values
+                        }}
+                        if node == nil {{ panic("Doubly linked list is not closed") }}
+                    }}
+                    panic("Doubly linked list exceeds the walk bound")
+                }}
+                func openojDoublyArrayJSON(heads []*NodeWithNext) []any {{
+                    return openojArrayOfMapped(heads, openojDoublyJSON)
+                }}
+                """
+            )
+            if return_type.get("kind") == "doubly_circular":
+                result_conversion = "openojDoublyJSON"
+            if (return_type.get("kind") == "array"
+                    and (return_type.get("items") or {}).get("kind") == "doubly_circular"):
+                result_conversion = "openojDoublyArrayJSON"
+        if "multi_list" in structs:
+            struct_codecs += textwrap.dedent(
+                """
+                // One chain: u32 n, then per node the value, a child flag,
+                // and the flagged child's own chain. Every chain (top and
+                // nested) gets its prev links set.
+                func (reader *openojReaderType) multiList() *MultiListNode {
+                    length := int(reader.uint32())
+                    var head, tail *MultiListNode
+                    for index := 0; index < length; index++ {
+                        node := &MultiListNode{Val: reader.int32()}
+                        if tail == nil {
+                            head = node
+                        } else {
+                            tail.Next = node
+                            node.Prev = tail
+                        }
+                        tail = node
+                        if reader.take(1)[0] == 1 { node.Child = reader.multiList() }
+                    }
+                    return head
+                }
+                // A flattened result must be a clean doubly chain: every
+                // prev back-link set, no child left.
+                func openojMultiJSON(head *MultiListNode) []any {
+                    values := []any{}
+                    var previous *MultiListNode
+                    node := head
+                    for bound := 0; node != nil && bound < 1<<20; bound++ {
+                        if node.Prev != previous || node.Child != nil {
+                            panic("Flattened list is not properly linked")
+                        }
+                        values = append(values, node.Val)
+                        previous = node
+                        node = node.Next
+                    }
+                    if node != nil { panic("Flattened list exceeds the walk bound") }
+                    return values
+                }
+                func openojMultiArrayJSON(heads []*MultiListNode) []any {
+                    return openojArrayOfMapped(heads, openojMultiJSON)
+                }
+                """
+            )
+            if return_type.get("kind") == "multi_list":
+                result_conversion = "openojMultiJSON"
+            if (return_type.get("kind") == "array"
+                    and (return_type.get("items") or {}).get("kind") == "multi_list"):
+                result_conversion = "openojMultiArrayJSON"
+        if "graph" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                func openojSeenBefore[T comparable](queue []T, index int, node T) bool {{
+                    for _, earlier := range queue[:index] {{
+                        if earlier == node {{ return true }}
+                    }}
+                    return false
+                }}
+                func (reader *openojReaderType) graph() *{graph_class} {{
+                    count := int(reader.uint32())
+                    if count == 0 {{ return nil }}
+                    nodes := make([]*{graph_class}, count)
+                    for index := range nodes {{
+                        nodes[index] = &{graph_class}{{Val: {item_type}(index + 1)}}
+                    }}
+                    for index := 0; index < count; index++ {{
+                        degree := int(reader.uint32())
+                        for neighbor := 0; neighbor < degree; neighbor++ {{
+                            value := {item_expression} + 1
+                            if value < 1 || value > {item_type}(count) {{
+                                panic("Graph neighbor is out of range")
+                            }}
+                            nodes[index].Neighbors = append(nodes[index].Neighbors, nodes[value-1])
+                        }}
+                    }}
+                    return nodes[0]
+                }}
+                func openojCollectGraph(root *{graph_class}) {{
+                    if root == nil {{ return }}
+                    queue := []*{graph_class}{{root}}
+                    for index := 0; index < len(queue); index++ {{
+                        node := queue[index]
+                        if openojSeenBefore(queue, index, node) {{ continue }}
+                        openojInputNodes = append(openojInputNodes, node)
+                        queue = append(queue, node.Neighbors...)
                     }}
                 }}
-                fmt.Println(line)
-            }}
+                // Rows ordered by node value; neighbor order is normalized
+                // (sorted) since LC treats adjacency order as irrelevant.
+                func openojGraphJSON(root *{graph_class}) []any {{
+                    var visited []*{graph_class}
+                    if root != nil {{
+                        queue := []*{graph_class}{{root}}
+                        for index := 0; index < len(queue); index++ {{
+                            node := queue[index]
+                            if openojSeenBefore(queue, index, node) {{ continue }}
+                            visited = append(visited, node)
+                            queue = append(queue, node.Neighbors...)
+                        }}
+                    }}
+                    for _, node := range visited {{
+                        if openojRegisteredInput(node) {{
+                            panic("Returned graph shares nodes with the input graph")
+                        }}
+                    }}
+                    sort.Slice(visited, func(a, b int) bool {{ return visited[a].Val < visited[b].Val }})
+                    rows := []any{{}}
+                    for _, node := range visited {{
+                        neighbors := make([]int, len(node.Neighbors))
+                        for index, neighbor := range node.Neighbors {{
+                            neighbors[index] = neighbor.Val
+                        }}
+                        sort.Ints(neighbors)
+                        row := make([]any, len(neighbors))
+                        for index, neighbor := range neighbors {{ row[index] = neighbor }}
+                        rows = append(rows, row)
+                    }}
+                    return rows
+                }}
+                func openojGraphArrayJSON(roots []*{graph_class}) []any {{
+                    return openojArrayOfMapped(roots, openojGraphJSON)
+                }}
+                """
+            )
+            if return_type.get("kind") == "graph":
+                result_conversion = "openojGraphJSON"
+            if (return_type.get("kind") == "array"
+                    and (return_type.get("items") or {}).get("kind") == "graph"):
+                result_conversion = "openojGraphArrayJSON"
+        if "random_list" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                func (reader *openojReaderType) randomList() *{random_class} {{
+                    count := int(reader.uint32())
+                    if count == 0 {{ return nil }}
+                    nodes := make([]*{random_class}, count)
+                    targets := make([]uint32, count)
+                    // Each row carries [val, random] together.
+                    for index := 0; index < count; index++ {{
+                        nodes[index] = &{random_class}{{Val: {item_expression}}}
+                        targets[index] = reader.uint32()
+                    }}
+                    for index := 0; index+1 < count; index++ {{ nodes[index].Next = nodes[index+1] }}
+                    for index := 0; index < count; index++ {{
+                        if targets[index] == 0xFFFFFFFF {{ continue }}
+                        if int(targets[index]) >= count {{
+                            panic("Random pointer target is out of range")
+                        }}
+                        nodes[index].Random = nodes[targets[index]]
+                    }}
+                    return nodes[0]
+                }}
+                func openojCollectRandom(head *{random_class}) {{
+                    for node := head; node != nil; node = node.Next {{
+                        openojInputNodes = append(openojInputNodes, node)
+                    }}
+                }}
+                func openojRandomJSON(head *{random_class}) []any {{
+                    var nodes []*{random_class}
+                    for node := head; node != nil; node = node.Next {{
+                        for _, earlier := range nodes {{
+                            if earlier == node {{ panic("Random list has a cycle in next") }}
+                        }}
+                        nodes = append(nodes, node)
+                    }}
+                    for _, node := range nodes {{
+                        if openojRegisteredInput(node) {{
+                            panic("Returned list shares nodes with the input list")
+                        }}
+                    }}
+                    rows := []any{{}}
+                    for _, node := range nodes {{
+                        row := []any{{node.Val, nil}}
+                        if node.Random != nil {{
+                            target := -1
+                            for index, candidate := range nodes {{
+                                if candidate == node.Random {{
+                                    target = index
+                                    break
+                                }}
+                            }}
+                            if target < 0 {{ panic("Random pointer leaves the returned list") }}
+                            row[1] = target
+                        }}
+                        rows = append(rows, row)
+                    }}
+                    return rows
+                }}
+                func openojRandomArrayJSON(heads []*{random_class}) []any {{
+                    return openojArrayOfMapped(heads, openojRandomJSON)
+                }}
+                """
+            )
+            if return_type.get("kind") == "random_list":
+                result_conversion = "openojRandomJSON"
+            if (return_type.get("kind") == "array"
+                    and (return_type.get("items") or {}).get("kind") == "random_list"):
+                result_conversion = "openojRandomArrayJSON"
+        if "alias_list" in structs:
+            struct_codecs += textwrap.dedent(
+                """
+                // LC 160: the intersection is by identity — the result must
+                // be a node taken from the input lists, and the wire is the
+                // shared tail's values.
+                func openojAliasJSON(node *ListNode) []any {
+                    if node == nil { return []any{} }
+                    if !openojRegisteredInput(node) {
+                        panic("Returned node is not part of the input lists")
+                    }
+                    values := []any{}
+                    for walk := node; walk != nil; walk = walk.Next {
+                        values = append(values, walk.Val)
+                    }
+                    return values
+                }
+                func openojAliasArrayJSON(nodes []*ListNode) []any {
+                    return openojArrayOfMapped(nodes, openojAliasJSON)
+                }
+                """
+            )
+            if return_type.get("kind") == "alias_list":
+                result_conversion = "openojAliasJSON"
+            if (return_type.get("kind") == "array"
+                    and (return_type.get("items") or {}).get("kind") == "alias_list"):
+                result_conversion = "openojAliasArrayJSON"
+        for name, spec in sorted(struct_specs.items()):
+            reads = ", ".join(
+                _read_expression(field["value_type"], "reader")
+                for field in spec.get("fields") or []
+            )
+            struct_codecs += textwrap.dedent(
+                f"""
+                func (reader *openojReaderType) {name}() {name} {{
+                    return {name}{{{reads}}}
+                }}
+                """
+            )
 
-            func main() {{
-                response := openojExecute()
-                encoded, errorValue := json.Marshal(response)
-                if errorValue != nil {{ encoded, _ = json.Marshal(map[string]any{{"status": "runtime_error", "error": errorValue.Error()}}) }}
-                openojEmit("__OPENOJ_RESULT__" + string(encoded))
-            }}
-            """
-        ).lstrip()
+        # Alias splices need the aliased list's node addresses, and clone
+        # checks need every input node registered — read the parameters with
+        # that bookkeeping inline.
+        alias_sources = sorted(
+            {
+                spec["alias"]
+                for spec in parameters
+                if spec.get("kind") == "alias_list"
+            }
+        )
+        collectors = {
+            "linked_list": "openojCollectList",
+            "graph": "openojCollectGraph",
+            "random_list": "openojCollectRandom",
+        }
+
+        def declaration(index: int, spec: dict[str, Any]) -> str:
+            kind = spec.get("kind")
+            if kind == "alias_list":
+                # This block reads inline in openojExecute, where the
+                # reader variable is openojReader (not the receiver name).
+                main_item = _read_expression(struct_item_spec(invocation), "openojReader")
+                lines = [
+                    f"openojArg{index} := func() *ListNode {{",
+                    "    count := int(openojReader.uint32())",
+                    "    var head, tail *ListNode",
+                    "    var prefix []*ListNode",
+                    "    for step := 0; step < count; step++ {",
+                    f"        node := &ListNode{{Val: {main_item}}}",
+                    "        prefix = append(prefix, node)",
+                    "        if head == nil { head = node } else { tail.Next = node }",
+                    "        tail = node",
+                    "    }",
+                    "    spliceAt := int(openojReader.uint32())",
+                    f"    if spliceAt < len(openojArg{spec['alias']}Nodes) {{",
+                    "        if tail == nil {"
+                    f" head = openojArg{spec['alias']}Nodes[spliceAt]"
+                    f" }} else {{ tail.Next = openojArg{spec['alias']}Nodes[spliceAt] }}",
+                    "    }",
+                    "    for _, node := range prefix { openojInputNodes = append(openojInputNodes, node) }",
+                    "    return head",
+                    "}()",
+                ]
+                return _tabs("\n".join(lines))
+            lines = [f"openojArg{index} := {_read_expression(spec)}"]
+            if kind == "linked_list" and index in alias_sources:
+                lines.extend([
+                    f"var openojArg{index}Nodes []*ListNode",
+                    f"for node := openojArg{index}; node != nil; node = node.Next {{"
+                    f" openojArg{index}Nodes = append(openojArg{index}Nodes, node) }}",
+                ])
+            if kind in collectors:
+                lines.append(f"{collectors[kind]}(openojArg{index})")
+            return _tabs("\n".join(lines))
+
+        declarations = "\n".join(
+            declaration(index, spec) for index, spec in enumerate(parameters)
+        )
+        arguments = ", ".join(f"openojArg{index}" for index in range(len(parameters)))
+        code, merged_imports = _merge_imports(
+            code, extra=("sort",) if "graph" in structs else ()
+        )
+        source = (
+            f"package main\n\nimport (\n{merged_imports})\n\n"
+            + _tabs(
+                textwrap.dedent(
+                    f"""
+                    {struct_decls}{code}
+
+                    type openojReaderType struct {{
+                        data   []byte
+                        offset int
+                    }}
+
+                    func (reader *openojReaderType) take(count int) []byte {{
+                        if count < 0 || count > len(reader.data)-reader.offset {{ panic("truncated judge input") }}
+                        value := reader.data[reader.offset : reader.offset+count]
+                        reader.offset += count
+                        return value
+                    }}
+                    func (reader *openojReaderType) uint32() uint32 {{ return binary.BigEndian.Uint32(reader.take(4)) }}
+                    func (reader *openojReaderType) int32() int {{ return int(int32(reader.uint32())) }}
+                    func (reader *openojReaderType) int64() int64 {{ return int64(binary.BigEndian.Uint64(reader.take(8))) }}
+                    func (reader *openojReaderType) number() float64 {{ return math.Float64frombits(binary.BigEndian.Uint64(reader.take(8))) }}
+                    func (reader *openojReaderType) boolean() bool {{ value := reader.take(1)[0]; if value > 1 {{ panic("invalid boolean input") }}; return value == 1 }}
+                    func (reader *openojReaderType) text() string {{ return string(reader.take(int(reader.uint32()))) }}
+                    func (reader *openojReaderType) finished() {{ if reader.offset != len(reader.data) {{ panic("trailing judge input") }} }}
+                    func openojArray[T any](reader *openojReaderType, read func(*openojReaderType) T) []T {{
+                        length := int(reader.uint32())
+                        values := make([]T, length)
+                        for index := range values {{ values[index] = read(reader) }}
+                        return values
+                    }}
+                    func openojArrayOf[T any](values []T, convert func(T) any) []any {{
+                        result := make([]any, len(values))
+                        for index, value := range values {{ result[index] = convert(value) }}
+                        return result
+                    }}
+                    // The per-kind JSON codecs return []any, so array-of-node
+                    // results map through this two-parameter variant — Go
+                    // inference cannot assign func(T) R to func(T) any.
+                    func openojArrayOfMapped[T any, R any](values []T, convert func(T) R) []any {{
+                        result := make([]any, len(values))
+                        for index, value := range values {{ result[index] = convert(value) }}
+                        return result
+                    }}
+                    func openojIdentity(value any) any {{ return value }}
+                    // The registry of input-side node pointers backs the
+                    // clone/identity checks for graph, random_list, and
+                    // alias_list returns: the judge compares row data, so
+                    // only the wrapper can catch a solution that returns the
+                    // input structure itself.
+                    var openojInputNodes []any
+
+                    func openojRegisteredInput(node any) bool {{
+                        for _, input := range openojInputNodes {{
+                            if input == node {{ return true }}
+                        }}
+                        return false
+                    }}
+{struct_codecs}
+                    func openojExecute() (response map[string]any) {{
+                        defer func() {{
+                            if recovered := recover(); recovered != nil {{
+                                response = map[string]any{{"status": "runtime_error", "error": fmt.Sprint(recovered)}}
+                            }}
+                        }}()
+                        bytes, errorValue := io.ReadAll(os.Stdin)
+                        if errorValue != nil {{ panic(errorValue) }}
+                        openojReader := &openojReaderType{{data: bytes}}
+                    {declarations}
+                        openojReader.finished()
+                        openojRaw := {method}({arguments})
+                        openojActual := {result_conversion}(openojRaw)
+                        return map[string]any{{"status": "completed", "actual": openojActual}}
+                    }}
+
+                    func openojEmit(line string) {{
+                        // Judge protocol prefers the dedicated fd so submission code
+                        // cannot forge verdicts on stdout; stdout is the fallback.
+                        if channel := os.NewFile(63, "protocol"); channel != nil {{
+                            if _, errorValue := channel.WriteString(line + "\\n"); errorValue == nil {{
+                                return
+                            }}
+                        }}
+                        fmt.Println(line)
+                    }}
+
+                    func main() {{
+                        response := openojExecute()
+                        encoded, errorValue := json.Marshal(response)
+                        if errorValue != nil {{ encoded, _ = json.Marshal(map[string]any{{"status": "runtime_error", "error": errorValue.Error()}}) }}
+                        openojEmit("__OPENOJ_RESULT__" + string(encoded))
+                    }}
+                    """
+                )
+            )
+        )
         source_path = job_root / "main.go"
         executable = job_root / "solution"
         source_path.write_text(source, encoding="utf-8")

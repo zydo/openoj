@@ -72,6 +72,11 @@ RUN mkdir -p /runner/java-classes /runner/benchmarks \
         /runner/java/OpenOJJavaHarness.java \
         /runner/java/ListNode.java \
         /runner/java/TreeNode.java \
+        /runner/java/Node.java \
+        /runner/java/QuadNode.java \
+        /runner/java/NestedInteger.java \
+        /runner/java/NodeWithNext.java \
+        /runner/java/MultiListNode.java \
         && \
     g++ -std=c++20 -O2 \
         -o /runner/benchmarks/cpp /runner/benchmark-sources/benchmark.cpp \

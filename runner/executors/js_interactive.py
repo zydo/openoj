@@ -7,7 +7,11 @@ make the generic layer a plain reader; the problem-provided oracle
 (assembled source) is constructed from the generic values plus the
 budget, and auxiliary values pass through unconverted — JavaScript is
 untyped, and TypeScript's method signatures take the same runtime
-shapes. Void methods are judged by the oracle's verdict().
+shapes. A parameter may declare an out_buffer: the wrapper allocates the
+array the solution writes into (capacity taken from another parameter's
+already-decoded value), the case input for that position stays empty, and
+the emitted result becomes [count, entries...] — the filled prefix, the
+read4 wire. Void methods are judged by the oracle's verdict().
 """
 from __future__ import annotations
 
@@ -113,7 +117,7 @@ async function main() {
     }
     const reader = new OjReader(Buffer.concat(chunks));
 @VALUE_READS@
-    const budget = reader.value();
+    const budget = reader.value()@BUDGET_CAST@;
     const solution = new Solution();
     const oracle = new @ORACLE_CLASS@([@ORACLE_ARGS@], budget);
 @CALL_BLOCK@
@@ -141,6 +145,26 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         raise ExecutorError(f"Invalid {language} entry point")
     construct_keys = list(provided.get("construct", ()))
     auxiliary_keys = list(provided.get("auxiliary", ()))
+    parameters = invocation.get("parameters") or []
+    # An out_buffer parameter allocates a buffer in its declared position:
+    # it consumes no case input, and its capacity names the case key whose
+    # decoded value sizes the array (the read4 wire).
+    buffer_slots: dict[int, str] = {}
+    for index, parameter in enumerate(parameters):
+        if not isinstance(parameter, dict) or parameter.get("out_buffer") is None:
+            continue
+        out_buffer = parameter["out_buffer"]
+        if not isinstance(out_buffer, dict) or not isinstance(out_buffer.get("capacity_from"), str):
+            raise ExecutorError("An out_buffer parameter needs a 'capacity_from' case key")
+        buffer_slots[index] = out_buffer["capacity_from"]
+    parameter_keys = [
+        parameter.get("name")
+        for parameter in parameters
+        if isinstance(parameter, dict) and parameter.get("out_buffer") is None
+    ]
+    if parameter_keys != auxiliary_keys:
+        raise ExecutorError(
+            "Interactive parameters (excluding out_buffer ones) must match provided.oracle.auxiliary")
 
     value_reads = "\n".join(
         f"    const openojValue{index} = reader.value();"
@@ -153,29 +177,82 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         # parameter types govern at run time either way
         return f"{name} as any" if is_typescript else name
 
-    auxiliary_args = ", ".join(aux(index) for index in range(len(auxiliary_keys)))
+    def anycast(expression: str) -> str:
+        return f"({expression}) as any" if is_typescript else expression
+
+    # Case key -> an expression for its already-decoded value; an out_buffer
+    # capacity may name any decoded key.
+    capacity_sources = {
+        **{key: f"openojValue{index}" for index, key in enumerate(construct_keys)},
+        **{key: f"openojValue{len(construct_keys) + index}" for index, key in enumerate(auxiliary_keys)},
+    }
+    buffer_variables: dict[int, str] = {}
+    buffer_lines = []
+    for slot, capacity_key in buffer_slots.items():
+        capacity = capacity_sources.get(capacity_key)
+        if capacity is None:
+            raise ExecutorError(f"out_buffer capacity_from {capacity_key!r} is not a case key")
+        variable = f"openojBuffer{slot}"
+        buffer_lines.append(
+            f"    const {variable} = new Array(Math.max(0, Math.trunc({anycast(capacity)}))).fill(null);"
+        )
+        buffer_variables[slot] = variable
+
+    parameter_arguments = []
+    auxiliary_cursor = 0
+    buffer_slot = None
+    for index, parameter in enumerate(parameters):
+        if index in buffer_variables:
+            if buffer_slot is None:
+                buffer_slot = index
+            parameter_arguments.append(buffer_variables[index])
+            continue
+        if not isinstance(parameter, dict):
+            raise ExecutorError("Every interactive parameter must be an object")
+        name = parameter.get("name")
+        if name not in capacity_sources:
+            raise ExecutorError(f"Auxiliary key {name!r} has no case input")
+        parameter_arguments.append(aux(auxiliary_cursor))
+        auxiliary_cursor += 1
+
+    value_reads = "\n".join([value_reads, *buffer_lines])
+
     # A {"kind": "void"} return_type is a declared void, not a value: the
     # oracle's verdict() judges those (same rule as the python/java sides).
     has_return = bool(invocation.get("return_type")) and invocation["return_type"].get("kind") != "void"
     if has_return:
-        call_block = (
-            f"    const actual = solution.{method}(oracle{', ' + auxiliary_args if auxiliary_args else ''});\n"
-            '    openojEmit("__OPENOJ_RESULT__" + openojJSON({ status: "completed", actual: actual }));'
-        )
+        if buffer_slot is None:
+            call_block = (
+                f"    const actual = solution.{method}(oracle{', ' + ', '.join(parameter_arguments) if parameter_arguments else ''});\n"
+                '    openojEmit("__OPENOJ_RESULT__" + openojJSON({ status: "completed", actual: actual }));'
+            )
+        else:
+            buffer = buffer_variables[buffer_slot]
+            call_block = (
+                f"    const actual = solution.{method}(oracle{', ' + ', '.join(parameter_arguments) if parameter_arguments else ''});\n"
+                "    const openojCount = Math.trunc(actual);\n"
+                f"    let openojWritten = openojCount;\n"
+                f"    if (openojWritten < 0) openojWritten = 0;\n"
+                f"    if (openojWritten > {buffer}.length) openojWritten = {buffer}.length;\n"
+                '    openojEmit("__OPENOJ_RESULT__" + openojJSON({ status: "completed", actual: [openojCount, '
+                f"{buffer}.slice(0, openojWritten)] }}));"
+            )
     else:
         call_block = (
-            f"    await solution.{method}(oracle{', ' + auxiliary_args if auxiliary_args else ''});\n"
+            f"    await solution.{method}(oracle{', ' + ', '.join(parameter_arguments) if parameter_arguments else ''});\n"
             '    openojEmit("__OPENOJ_RESULT__" + openojJSON({ status: "completed", actual: oracle.verdict() }));'
         )
 
     provided_source = "".join(
         content + "\n"
         for part in ("common", "provided")
-        for _, content in sorted((assembly or {}).get(part, {}).items())
+        for name, content in sorted((assembly or {}).get(part, {}).items())
+        if name.endswith(".ts" if is_typescript else ".js")
     )
     main_source = (
         MAIN_TEMPLATE
         .replace("@VALUE_READS@", value_reads)
+        .replace("@BUDGET_CAST@", " as any" if is_typescript else "")
         .replace("@ORACLE_CLASS@", oracle_class)
         .replace("@ORACLE_ARGS@", oracle_args)
         .replace("@CALL_BLOCK@", call_block)

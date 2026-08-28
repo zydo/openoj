@@ -13,6 +13,29 @@ previously implicit assumption explicit; writing it down is the point.
 | `common/` shared types | the problems repo (`openoj-problems/common/`) | inside the sandbox, compiled/executed with every submission | **problem-set content** — trusted like `cases.json` |
 | `provided/<language>/` oracles & helpers | each problem bundle (`problems/<key>/provided/`) | inside the sandbox, beside the submission | **problem-set content** — same trust as the bundle's own cases |
 | the submission | a solver | inside the sandbox, unprivileged | **untrusted** |
+| output validators | the openoj repo (`api/app/validators.py`) | in the API process, after the run | **framework** — same tier as the judge itself |
+
+The validator row deserves its own sentence: a bundle can point at a
+validator by name, but it cannot SHIP one — the registry is judge code
+reviewed with this repo, running outside any sandbox on already-produced
+output. If validators were bundle-carried they would be problem-set
+content deciding correctness, which would let case data grade its own
+homework. Extending the registry is therefore an openoj-repo change, and
+`judge._compare` refuses unknown names loudly.
+
+Interactive oracles are the deliberate contrast: they must be
+problem-specific, so they ship with the bundle and run inside the
+sandbox at the same trust tier as its cases. What keeps an oracle from
+dominating a case is the same thing that keeps a submission in line —
+the query budget and the case's ordinary limits:
+
+- `invocation.query_limit` (default 1 000 000) is handed to the oracle's
+  constructor as the budget; enforcing it (decrementing per query,
+  raising when exhausted) is the oracle's own code, reviewed with the
+  bundle that benefits from it;
+- the case's time and memory limits cap the whole confined process —
+  oracle, submission, and their interaction — so even an oracle that
+  ignores its budget cannot run away.
 
 ## What "trusted like cases.json" means
 
@@ -62,3 +85,7 @@ Concretely, the existing protections all still apply:
   declares the common version it targets, and a bundle declaring
   anything newer than the set's `common/` is refused before a single
   source is assembled.
+- `api/app/judge.py` + `api/app/validators.py` — validator dispatch:
+  names only cross the boundary (a case's expected slot carries
+  `{"mode": "validator", "name": ...}`), never validator code; the
+  implementation always resolves from the app-side registry.

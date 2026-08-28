@@ -6,7 +6,12 @@ key, one per auxiliary method key, then the query budget. Go's
 interface{} makes the generic layer trivial; the problem-provided oracle
 (a `package main` source beside the wrapper) takes the construction
 values as []any plus the budget, and the wrapper converts auxiliary
-values to the method's typed parameters with generated converters.
+values to the method's typed parameters with generated converters. A
+parameter may declare an out_buffer: the wrapper allocates the slice the
+solution writes into (element type from the parameter's value_type, bytes
+by default; capacity taken from another parameter's already-decoded
+value), the case input for that position stays empty, and the emitted
+result becomes [count, entries...] — the filled prefix, the read4 wire.
 Void methods are judged by the oracle's Verdict() any.
 """
 from __future__ import annotations
@@ -122,6 +127,22 @@ func (r *ojReader) value() any {
 		panic("Unknown tagged value")
 	}
 }
+
+// openojInt reads an integer out of an already-decoded case value: an
+// out_buffer capacity names another parameter, decoded either as a typed
+// auxiliary (int/int64) or as a generic construct value (any).
+func openojInt(value any) int64 {
+	switch number := value.(type) {
+	case int:
+		return int64(number)
+	case int64:
+		return number
+	case float64:
+		return int64(number)
+	default:
+		panic("Expected an integer")
+	}
+}
 """
 
 MAIN_TEMPLATE = """\
@@ -199,6 +220,26 @@ def _convert(spec: dict[str, Any], source: str) -> str:
     raise ExecutorError(f"Interactive auxiliary type {kind} is not supported in Go")
 
 
+def _go_buffer_element(spec: Any) -> str:
+    """The slice type an out_buffer parameter allocates: bytes unless the
+    parameter declares its own array value_type."""
+    if spec is None:
+        return "byte"
+    spec = type_spec(spec, "out_buffer")
+    if spec["kind"] == "array":
+        return _go_type(spec["items"])
+    raise ExecutorError("An out_buffer parameter needs an array value_type (or none, for bytes)")
+
+
+def _go_entries(element: str, variable: str) -> tuple[str, str]:
+    """(entry slice type, per-entry expression) for a captured prefix.
+    Bytes serialize as 1-char strings — the char[] wire the java harness
+    emits; typed elements pass through natively."""
+    if element == "byte":
+        return "string", f"string(rune({variable}))"
+    return element, variable
+
+
 def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
                         invocation: dict[str, Any], assembly) -> PreparedProgram:
     provided = (invocation.get("provided") or {}).get("oracle")
@@ -216,34 +257,102 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         for parameter in parameters
         if isinstance(parameter, dict)
     }
+    # An out_buffer parameter allocates a buffer in its declared position:
+    # it consumes no case input, and its capacity names the case key whose
+    # decoded value sizes the slice (the read4 wire).
+    buffer_slots: dict[int, str] = {}
+    for index, parameter in enumerate(parameters):
+        if not isinstance(parameter, dict) or parameter.get("out_buffer") is None:
+            continue
+        out_buffer = parameter["out_buffer"]
+        if not isinstance(out_buffer, dict) or not isinstance(out_buffer.get("capacity_from"), str):
+            raise ExecutorError("An out_buffer parameter needs a 'capacity_from' case key")
+        buffer_slots[index] = out_buffer["capacity_from"]
+    parameter_keys = [
+        parameter.get("name")
+        for parameter in parameters
+        if isinstance(parameter, dict) and parameter.get("out_buffer") is None
+    ]
+    if parameter_keys != auxiliary_keys:
+        raise ExecutorError(
+            "Interactive parameters (excluding out_buffer ones) must match provided.oracle.auxiliary")
 
     value_reads = "\n".join(
         f"\topenojValue{index} := reader.value()" for index in range(len(construct_keys) + len(auxiliary_keys))
     )
     convert_lines = []
-    auxiliary_args = []
+    # Case key -> an expression for its already-decoded value; an out_buffer
+    # capacity may name any decoded key.
+    capacity_sources: dict[str, str] = {}
+    for index, key in enumerate(construct_keys):
+        capacity_sources[key] = f"openojInt(openojValue{index})"
+    auxiliary_variables: dict[str, str] = {}
     for index, key in enumerate(auxiliary_keys):
         spec = specs.get(key)
         if spec is None:
             raise ExecutorError(f"Auxiliary key {key!r} has no invocation parameter type")
         spec = type_spec(spec, key)
+        variable = f"openojAux{index}"
         convert_lines.append(
-            f"\topenojAux{index} := {_convert(spec, f'openojValue{len(construct_keys) + index}')}"
+            f"\t{variable} := {_convert(spec, f'openojValue{len(construct_keys) + index}')}"
         )
-        auxiliary_args.append(f"openojAux{index}")
+        auxiliary_variables[key] = variable
+        capacity_sources[key] = f"openojInt({variable})"
+
+    buffer_variables: dict[int, str] = {}
+    for slot, capacity_key in buffer_slots.items():
+        capacity = capacity_sources.get(capacity_key)
+        if capacity is None:
+            raise ExecutorError(f"out_buffer capacity_from {capacity_key!r} is not a case key")
+        element = _go_buffer_element(specs.get(parameters[slot].get("name")))
+        variable = f"openojBuffer{slot}"
+        convert_lines.append(
+            f"\t{variable}Capacity := {capacity}\n"
+            f"\tif {variable}Capacity < 0 {{\n\t\t{variable}Capacity = 0\n\t}}\n"
+            f"\t{variable} := make([]{element}, {variable}Capacity)"
+        )
+        buffer_variables[slot] = (variable, element)
+
+    parameter_arguments = []
+    buffer_slot = None
+    for index, parameter in enumerate(parameters):
+        if index in buffer_variables:
+            if buffer_slot is None:
+                buffer_slot = index
+            parameter_arguments.append(buffer_variables[index][0])
+        else:
+            if not isinstance(parameter, dict):
+                raise ExecutorError("Every interactive parameter must be an object")
+            parameter_arguments.append(auxiliary_variables[parameter.get("name")])
 
     oracle_args = ", ".join(
         [f"openojValue{index}" for index in range(len(construct_keys))]
     )
-    call_arguments = ", ".join(["oracle", *auxiliary_args])
+    call_arguments = ", ".join(["oracle", *parameter_arguments])
     # A {"kind": "void"} return_type is a declared void, not a value: the
     # oracle's Verdict() judges those (same rule as the python/java sides).
     has_return = bool(invocation.get("return_type")) and invocation["return_type"].get("kind") != "void"
     if has_return:
-        call_block = (
-            f"\tactual := solution.{method}({call_arguments})\n"
-            '\topenojEmit("__OPENOJ_RESULT__" + fmt.Sprintf(`{"status":"completed","actual":%s}`, openojJSON(actual)))'
-        )
+        if buffer_slot is None:
+            call_block = (
+                f"\tactual := solution.{method}({call_arguments})\n"
+                '\topenojEmit("__OPENOJ_RESULT__" + fmt.Sprintf(`{"status":"completed","actual":%s}`, openojJSON(actual)))'
+            )
+        else:
+            buffer, element = buffer_variables[buffer_slot]
+            entry_type, entry_expression = _go_entries(element, f"{buffer}[openojIndex]")
+            call_block = (
+                f"\tactual := solution.{method}({call_arguments})\n"
+                f"\topenojCount := openojInt(actual)\n"
+                f"\topenojWritten := openojCount\n"
+                f"\tif openojWritten < 0 {{\n\t\topenojWritten = 0\n\t}}\n"
+                f"\tif openojWritten > int64(len({buffer})) {{\n\t\topenojWritten = int64(len({buffer}))\n\t}}\n"
+                f"\topenojEntries := make([]{entry_type}, 0, openojWritten)\n"
+                f"\tfor openojIndex := int64(0); openojIndex < openojWritten; openojIndex++ {{\n"
+                f"\t\topenojEntries = append(openojEntries, {entry_expression})\n"
+                f"\t}}\n"
+                '\topenojEmit("__OPENOJ_RESULT__" + fmt.Sprintf(`{"status":"completed","actual":%s}`, openojJSON([]any{openojCount, openojEntries})))'
+            )
     else:
         call_block = (
             f"\tsolution.{method}({call_arguments})\n"

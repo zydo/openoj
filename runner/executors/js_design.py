@@ -93,6 +93,9 @@ function openojDecode(value, codec) {
     if (codec === "tree_node") {
         return openojTreeFromArray(value);
     }
+    if (codec === "nested") {
+        return openojNestedFromArray(value);
+    }
     return value;
 }
 
@@ -103,7 +106,38 @@ function openojEncode(value, codec) {
     if (codec === "tree_node") {
         return openojTreeToArray(value);
     }
+    if (codec === "nested") {
+        return openojNestedToArray(value);
+    }
     return value;
+}
+
+// Nested JSON ([1,[4,[6]]], bare integers as integer holds) ->
+// the assembled common NestedInteger, mirroring the harness decode.
+function openojNestedFromArray(value) {
+    if (typeof value === "number") {
+        return new NestedInteger(value);
+    }
+    const node = new NestedInteger();
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            node.add(openojNestedFromArray(item));
+        }
+    } else if (value !== null && value !== undefined) {
+        throw new Error("Expected a nested list");
+    }
+    return node;
+}
+
+// NestedInteger -> nested JSON, so results compare as plain JSON.
+function openojNestedToArray(node) {
+    if (node === null || node === undefined) {
+        return null;
+    }
+    if (node.isInteger()) {
+        return node.getInteger();
+    }
+    return node.getList().map(openojNestedToArray);
 }
 
 // Level-order array (nulls for absent children) -> TreeNode tree, two
@@ -254,7 +288,8 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
     provided_source = "".join(
         content + "\n"
         for part in ("common", "provided")
-        for _, content in sorted((assembly or {}).get(part, {}).items())
+        for name, content in sorted((assembly or {}).get(part, {}).items())
+        if name.endswith(".ts" if is_typescript else ".js")
     )
     main_source = (
         MAIN_TEMPLATE

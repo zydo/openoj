@@ -12,6 +12,7 @@ import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -141,6 +142,14 @@ public final class OpenOJJavaHarness {
             throw propagate(error.getTargetException());
         }
 
+        Map<String, List<Object>> parameterSpecs = new HashMap<>();
+        for (Object entry : asList(invocation.getOrDefault("methods", List.of()), "Methods must be a list")) {
+            Map<String, Object> methodSpec = asMap(entry, "Method spec must be an object");
+            parameterSpecs.put(
+                asString(methodSpec.get("name"), "Method spec needs a name"),
+                asList(methodSpec.getOrDefault("parameters", List.of()), "Method parameters must be a list"));
+        }
+
         List<Object> events = java.util.Collections.synchronizedList(new ArrayList<>());
         List<Throwable> failures = java.util.Collections.synchronizedList(new ArrayList<>());
         List<Thread> threads = new ArrayList<>();
@@ -154,7 +163,16 @@ public final class OpenOJJavaHarness {
             boolean records = Boolean.TRUE.equals(spec.get("records"));
             threads.add(new Thread(null, () -> {
                 try {
-                    if (emits != null) {
+                    List<Object> parameterList = parameterSpecs.get(call);
+                    List<Integer> callbackSlots = callbackSlotIndexes(parameterList);
+                    if (!callbackSlots.isEmpty()) {
+                        // The manifest's callback parameters sit at fixed
+                        // positions; the schedule's args fill the rest in
+                        // order, converted to the method's own types.
+                        invokeWithCallbacks(
+                            targetClass, instance, call, arguments, emits,
+                            parameterList, callbackSlots, events, records);
+                    } else if (emits != null) {
                         List<Object> callArguments = new ArrayList<>(arguments);
                         callArguments.add((Runnable) () -> events.add(emits));
                         InvocationPlan<Method> plan = findMethod(targetClass, call, callArguments);
@@ -192,6 +210,163 @@ public final class OpenOJJavaHarness {
         return new ArrayList<>(events);
     }
 
+    /** Positions in a method spec whose value_type declares a callback. */
+    private static List<Integer> callbackSlotIndexes(List<Object> parameterList) {
+        List<Integer> slots = new ArrayList<>();
+        if (parameterList == null) {
+            return slots;
+        }
+        for (int index = 0; index < parameterList.size(); index++) {
+            Object valueType = asMap(parameterList.get(index), "Parameter spec must be an object").get("value_type");
+            if (valueType instanceof Map && "callback".equals(((Map<?, ?>) valueType).get("kind"))) {
+                slots.add(index);
+            }
+        }
+        return slots;
+    }
+
+    private static Object invokeWithCallbacks(
+        Class<?> targetClass,
+        Object instance,
+        String call,
+        List<Object> arguments,
+        Object emits,
+        List<Object> parameterList,
+        List<Integer> callbackSlots,
+        List<Object> events,
+        boolean records
+    ) throws Exception {
+        int expected = Math.max(parameterList.size(), arguments.size());
+        Method target = null;
+        for (Method candidate : targetClass.getDeclaredMethods()) {
+            if (candidate.getName().equals(call) && candidate.getParameterCount() == expected) {
+                candidate.setAccessible(true);
+                target = candidate;
+                break;
+            }
+        }
+        if (target == null) {
+            throw new IllegalArgumentException("No method " + call + " with " + expected + " arguments");
+        }
+        Class<?>[] types = target.getParameterTypes();
+        Type[] genericTypes = target.getGenericParameterTypes();
+        java.util.Iterator<Object> supplied = arguments.iterator();
+        Object[] callArguments = new Object[expected];
+        for (int index = 0; index < expected; index++) {
+            if (callbackSlots.contains(index)) {
+                Map<String, Object> valueType = asMap(
+                    asMap(parameterList.get(index), "Parameter spec must be an object").get("value_type"),
+                    "value_type must be an object");
+                // Event templates reference the enclosing call's CONVERTED
+                // arguments, so "#i" sees the same values the method sees
+                // (ints as ints, not the raw JSON doubles).
+                callArguments[index] = newCallback(valueType, callArguments, emits, types[index], events);
+            } else {
+                callArguments[index] = convert(supplied.next(), types[index], genericTypes[index]);
+            }
+        }
+        try {
+            Object value = target.invoke(instance, callArguments);
+            if (records) {
+                events.add(value);
+            }
+            return value;
+        } catch (InvocationTargetException error) {
+            throw propagate(error.getTargetException());
+        }
+    }
+
+    /**
+     * Builds the callback a schedule call receives, per the manifest's
+     * value_type. Legacy {@code {"kind": "callback"}} records the schedule
+     * entry's emits token; "value" records the argument the solution passes;
+     * "event" composes the enclosing call's arguments (#i) with literal JSON
+     * values; "record": false is a silent no-op. The proxy implements
+     * whatever callback interface the solution declares.
+     */
+    private static Object newCallback(
+        Map<String, Object> spec,
+        Object[] callArguments,
+        Object emits,
+        Class<?> callbackType,
+        List<Object> events
+    ) {
+        if (!callbackType.isInterface()) {
+            throw new IllegalArgumentException(
+                "Callback parameter must be an interface type: " + callbackType.getName());
+        }
+        boolean silent = Boolean.FALSE.equals(spec.get("record"));
+        boolean recordValue = Boolean.TRUE.equals(spec.get("value"));
+        List<Object> template = spec.get("event") == null
+            ? null
+            : asList(spec.get("event"), "event must be a list");
+        java.lang.reflect.InvocationHandler handler = (proxy, method, methodArguments) -> {
+            if (method.getDeclaringClass() == Object.class) {
+                switch (method.getName()) {
+                    case "toString":
+                        return "OpenOJ callback (" + callbackType.getName() + ")";
+                    case "hashCode":
+                        return System.identityHashCode(proxy);
+                    case "equals":
+                        return proxy == (methodArguments != null && methodArguments.length > 0
+                            ? methodArguments[0]
+                            : null);
+                    default:
+                        return null;
+                }
+            }
+            if (!silent) {
+                if (recordValue) {
+                    events.add(methodArguments != null && methodArguments.length > 0 ? methodArguments[0] : null);
+                } else if (template != null) {
+                    List<Object> composed = new ArrayList<>();
+                    for (Object token : template) {
+                        if (token instanceof String text && text.startsWith("#")) {
+                            composed.add(callArguments[Integer.parseInt(text.substring(1))]);
+                        } else {
+                            composed.add(token);
+                        }
+                    }
+                    events.add(composed);
+                } else {
+                    events.add(emits);
+                }
+            }
+            return defaultValue(method.getReturnType());
+        };
+        return java.lang.reflect.Proxy.newProxyInstance(
+            callbackType.getClassLoader(), new Class<?>[] {callbackType}, handler);
+    }
+
+    /** The value a callback's declared return type implies when ignored. */
+    private static Object defaultValue(Class<?> type) {
+        if (!type.isPrimitive() || type == void.class) {
+            return null;
+        }
+        if (type == boolean.class) {
+            return false;
+        }
+        if (type == char.class) {
+            return (char) 0;
+        }
+        if (type == byte.class) {
+            return (byte) 0;
+        }
+        if (type == short.class) {
+            return (short) 0;
+        }
+        if (type == int.class) {
+            return 0;
+        }
+        if (type == long.class) {
+            return 0L;
+        }
+        if (type == float.class) {
+            return 0f;
+        }
+        return 0.0d;
+    }
+
     private static Object invokeInteractive(
         Class<?> targetClass,
         Map<String, Object> invocation,
@@ -208,12 +383,14 @@ public final class OpenOJJavaHarness {
             // Bundle-carried oracle: the class ships in the problem's
             // provided/ sources and compiled with the submission; the
             // manifest names it, the case keys that build it, and the
-            // keys that ride as extra method arguments (converted to the
-            // method's own parameter types). The judge core holds no
-            // per-oracle knowledge on this path.
+            // method parameters (an out_buffer parameter is allocated by
+            // the harness; the rest resolve from case keys by name,
+            // converted to the method's own parameter types). The judge
+            // core holds no per-oracle knowledge on this path.
             String providedClass = asString(providedOracle.get("class"), "Provided oracle class must be a string");
             List<String> constructKeys = stringList(providedOracle.get("construct"), "provided.construct");
-            List<String> auxiliaryKeys = stringList(providedOracle.get("auxiliary"), "provided.auxiliary");
+            List<Object> parameterSpecs = asList(
+                invocation.getOrDefault("parameters", List.of()), "Parameters must be a list");
             Class<?> oracleClass = Class.forName(providedClass);
             Constructor<?> chosen = null;
             for (Constructor<?> candidateCtor : oracleClass.getDeclaredConstructors()) {
@@ -250,19 +427,31 @@ public final class OpenOJJavaHarness {
                 }
                 candidate.setAccessible(true);
                 Class<?>[] methodParameters = candidate.getParameterTypes();
-                if (methodParameters.length != 1 + auxiliaryKeys.size()) {
+                if (methodParameters.length != 1 + parameterSpecs.size()) {
                     continue;
                 }
                 Object[] callArguments = new Object[methodParameters.length];
                 callArguments[0] = oracleInstance;
-                for (int index = 0; index < auxiliaryKeys.size(); index++) {
+                int bufferSlot = -1;
+                for (int index = 0; index < parameterSpecs.size(); index++) {
+                    Map<String, Object> spec = asMap(parameterSpecs.get(index), "Parameter spec must be an object");
+                    Object outBuffer = spec.get("out_buffer");
+                    if (outBuffer instanceof Map) {
+                        // The read4 wire: the harness allocates the buffer
+                        // the solution writes into, capacity named by
+                        // another case key.
+                        Object capacityKey = ((Map<?, ?>) outBuffer).get("capacity_from");
+                        Object capacityValue = state.get(asString(capacityKey, "out_buffer needs capacity_from"));
+                        int capacity = numberValue(capacityValue).intValue();
+                        callArguments[1 + index] = new char[Math.max(capacity, 0)];
+                        bufferSlot = index;
+                        continue;
+                    }
+                    String name = asString(spec.get("name"), "Parameter spec needs a name");
                     callArguments[1 + index] = convert(
-                        state.get(auxiliaryKeys.get(index)),
-                        methodParameters[1 + index],
-                        methodParameters[1 + index]
-                    );
+                        state.get(name), methodParameters[1 + index], methodParameters[1 + index]);
                 }
-                return finishInteractive(candidate, instance, callArguments, oracleInstance);
+                return finishInteractive(candidate, instance, callArguments, oracleInstance, bufferSlot);
             }
             throw new IllegalArgumentException("Method not found on solution class: " + method);
         }
@@ -272,7 +461,8 @@ public final class OpenOJJavaHarness {
         Method method,
         Object instance,
         Object[] callArguments,
-        Object oracleInstance
+        Object oracleInstance,
+        int bufferSlot
     ) throws Exception {
         Object result = method.invoke(instance, callArguments);
         // Void-method oracles are judged by their own final state —
@@ -286,6 +476,19 @@ public final class OpenOJJavaHarness {
             } catch (NoSuchMethodException noVerdict) {
                 return null;
             }
+        }
+        if (bufferSlot >= 0) {
+            // The read4 wire: report [return_value, buffer[:return_value]].
+            int count = ((Number) result).intValue();
+            char[] buffer = (char[]) callArguments[1 + bufferSlot];
+            List<Object> written = new ArrayList<>();
+            for (int index = 0; index < Math.min(Math.max(count, 0), buffer.length); index++) {
+                written.add(String.valueOf(buffer[index]));
+            }
+            List<Object> output = new ArrayList<>();
+            output.add(count);
+            output.add(written);
+            return output;
         }
         return result;
     }
@@ -323,27 +526,86 @@ public final class OpenOJJavaHarness {
         if (parameterSpecs.size() != rawArguments.size()) {
             throw new IllegalArgumentException("Input argument count does not match the problem manifest");
         }
-        for (int index = 0; index < parameterSpecs.size(); index++) {
-            Map<String, Object> spec = asMap(parameterSpecs.get(index), "Parameter spec must be an object");
-            String codec = spec.getOrDefault("codec", "json").toString();
-            rawArguments.set(index, decodeCodec(rawArguments.get(index), codec));
-        }
-
+        // Struct values construct their provided class; an alias_list
+        // parameter splices onto the aliased list decoded earlier. The
+        // context lists carry the input-side nodes the result-time clone
+        // checks compare against.
         Constructor<?> constructor = targetClass.getDeclaredConstructor();
         constructor.setAccessible(true);
         Object instance = constructor.newInstance();
         String methodName = asString(invocation.get("method"), "Invocation method must be a string");
-        InvocationPlan<Method> plan = findMethod(targetClass, methodName, rawArguments);
-        Object result;
-        try {
+        // Java is compile-typed: graph and random_list values are built
+        // reflectively, so they must be constructed as the very class the
+        // submission declares — the problem's provided class, which shadows
+        // any mirror on the runtime classpath.
+        List<Object> arguments = new ArrayList<>();
+        List<Object> listHeads = new ArrayList<>();
+        List<Object> graphNodes = new ArrayList<>();
+        List<Object> randomNodes = new ArrayList<>();
+        for (int index = 0; index < parameterSpecs.size(); index++) {
+            Map<String, Object> spec = asMap(parameterSpecs.get(index), "Parameter spec must be an object");
+            Object valueType = spec.get("value_type");
+            if (specHasStruct(valueType)) {
+                arguments.add(decodeStruct(rawArguments.get(index), valueType));
+                continue;
+            }
+            String codec = spec.getOrDefault("codec", "json").toString();
+            if ("alias_list".equals(codec)) {
+                Object aliasValue = spec.get("alias");
+                if (!(aliasValue instanceof Number alias) || alias.intValue() < 0
+                    || alias.intValue() >= arguments.size()) {
+                    throw new IllegalArgumentException("alias_list requires an earlier aliased parameter");
+                }
+                arguments.add(decodeAliasList(rawArguments.get(index), arguments.get(alias.intValue())));
+                continue;
+            }
+            Object decoded;
+            if ("graph".equals(codec)) {
+                decoded = decodeGraph(
+                    rawArguments.get(index),
+                    declaredNodeClass(targetClass, methodName, rawArguments.size(), index, "val", "neighbors"));
+            } else if ("random_list".equals(codec)) {
+                decoded = decodeRandomList(
+                    rawArguments.get(index),
+                    declaredNodeClass(targetClass, methodName, rawArguments.size(), index, "val", "next", "random"));
+            } else {
+                decoded = decodeCodec(rawArguments.get(index), codec);
+            }
+            if ("list_node".equals(codec)) {
+                listHeads.add(decoded);
+            } else if ("graph".equals(codec)) {
+                collectGraphNodes(decoded, graphNodes);
+            } else if ("random_list".equals(codec)) {
+                collectChainNodes(decoded, randomNodes);
+            }
+            arguments.add(decoded);
+        }
+
+        InvocationPlan<Method> plan = findMethod(targetClass, methodName, arguments);
+        Object result;        try {
             result = plan.executable().invoke(instance, plan.arguments());
         } catch (InvocationTargetException error) {
             throw propagate(error.getTargetException());
         }
-        return encodeCodec(result, invocation.getOrDefault("return_codec", "json").toString());
+        String returnCodec = invocation.getOrDefault("return_codec", "json").toString();
+        if ("alias_list".equals(returnCodec)) {
+            Object aliasValue = invocation.get("return_alias");
+            if (!(aliasValue instanceof Number alias) || alias.intValue() < 0
+                || alias.intValue() >= listHeads.size()) {
+                throw new IllegalArgumentException("alias_list return requires return_alias");
+            }
+            return serializeAliasList(result, listHeads.get(alias.intValue()));
+        }
+        if ("graph".equals(returnCodec)) {
+            return serializeGraph(result, graphNodes);
+        }
+        if ("random_list".equals(returnCodec)) {
+            return serializeRandomList(result, randomNodes);
+        }
+        return encodeCodec(result, returnCodec);
     }
 
-    private static Object decodeCodec(Object value, String codec) {
+    private static Object decodeCodec(Object value, String codec) throws Exception {
         if ("json".equals(codec)) {
             return value;
         }
@@ -409,12 +671,114 @@ public final class OpenOJJavaHarness {
             }
             return nodes;
         }
+        if ("nary_tree".equals(codec)) {
+            if (value == null) {
+                return null;
+            }
+            List<Object> values = asList(value, "nary_tree input must be an array");
+            if (values.isEmpty()) {
+                return null;
+            }
+            Node root = new Node(numberValue(values.get(0)).intValue(), new ArrayList<>());
+            List<Node> pending = new ArrayList<>();
+            pending.add(root);
+            int readIndex = 2;
+            int writeIndex = 0;
+            while (writeIndex < pending.size() && readIndex < values.size()) {
+                Node parent = pending.get(writeIndex++);
+                while (readIndex < values.size() && values.get(readIndex) != null) {
+                    Node child = new Node(numberValue(values.get(readIndex)).intValue(), new ArrayList<>());
+                    parent.children.add(child);
+                    pending.add(child);
+                    readIndex++;
+                }
+                readIndex++;
+            }
+            return root;
+        }
+        if ("quad_tree".equals(codec)) {
+            return decodeQuadTree(value);
+        }
+        if ("nested".equals(codec)) {
+            return decodeNested(value);
+        }
+        if ("next_tree".equals(codec)) {
+            if (value == null) {
+                return null;
+            }
+            List<Object> values = asList(value, "next_tree input must be a level-order array");
+            if (values.isEmpty() || values.get(0) == null) {
+                return null;
+            }
+            NodeWithNext root = new NodeWithNext(numberValue(values.get(0)).intValue());
+            List<NodeWithNext> pending = new ArrayList<>();
+            pending.add(root);
+            int readIndex = 1;
+            int writeIndex = 0;
+            while (writeIndex < pending.size() && readIndex < values.size()) {
+                NodeWithNext node = pending.get(writeIndex++);
+                if (readIndex < values.size()) {
+                    if (values.get(readIndex) != null) {
+                        node.left = new NodeWithNext(numberValue(values.get(readIndex)).intValue());
+                        node.left.parent = node;
+                        pending.add(node.left);
+                    }
+                    readIndex++;
+                }
+                if (readIndex < values.size()) {
+                    if (values.get(readIndex) != null) {
+                        node.right = new NodeWithNext(numberValue(values.get(readIndex)).intValue());
+                        node.right.parent = node;
+                        pending.add(node.right);
+                    }
+                    readIndex++;
+                }
+            }
+            return root;
+        }
+        if ("circular_list".equals(codec)) {
+            if (value == null) {
+                return null;
+            }
+            List<Object> values = asList(value, "circular_list input must be an array");
+            ListNode head = null;
+            ListNode current = null;
+            for (Object item : values) {
+                ListNode node = new ListNode(numberValue(item).intValue());
+                if (current == null) {
+                    head = node;
+                } else {
+                    current.next = node;
+                }
+                current = node;
+            }
+            if (current != null) {
+                current.next = head;
+            }
+            return head;
+        }
+        if ("multi_list".equals(codec)) {
+            return decodeMultiList(value);
+        }
+        // graph / random_list are decoded in invokeFunction only: their
+        // reflective construction needs the solution's declared node class.
         throw new IllegalArgumentException("Java executor does not support codec: " + codec);
     }
 
     private static Object encodeCodec(Object value, String codec) {
         if ("json".equals(codec)) {
             return value;
+        }
+        if ("quad_tree".equals(codec)) {
+            // A missing quad tree serializes as null, unlike the list/tree
+            // wire where a missing head or root is [].
+            if (value == null) {
+                return null;
+            }
+            if (!(value instanceof QuadNode node)) {
+                throw new IllegalArgumentException("quad_tree return value must be a QuadNode");
+            }
+            return encodeQuadTree(node);
         }
         if (value == null) {
             // Every other executor serializes a missing head or root as [].
@@ -454,7 +818,8 @@ public final class OpenOJJavaHarness {
             }
             return values;
         }
-        if ("list_node_array".equals(codec) || "tree_node_array".equals(codec)) {
+        if ("list_node_array".equals(codec) || "tree_node_array".equals(codec)
+                || "circular_list_array".equals(codec)) {
             List<?> items = asList(value, codec + " return value must be an array");
             List<Object> values = new ArrayList<>();
             for (Object item : items) {
@@ -462,7 +827,652 @@ public final class OpenOJJavaHarness {
             }
             return values;
         }
+        if ("nary_tree".equals(codec)) {
+            if (!(value instanceof Node root)) {
+                throw new IllegalArgumentException("nary_tree return value must be a Node");
+            }
+            List<Object> output = new ArrayList<>();
+            if (root != null) {
+                output.add(root.val);
+                output.add(null);
+                List<Node> queue = new ArrayList<>();
+                queue.add(root);
+                int index = 0;
+                while (index < queue.size()) {
+                    Node parent = queue.get(index++);
+                    for (Node child : parent.children) {
+                        output.add(child.val);
+                        queue.add(child);
+                    }
+                    output.add(null);
+                }
+                while (!output.isEmpty() && output.get(output.size() - 1) == null) {
+                    output.remove(output.size() - 1);
+                }
+            }
+            return output;
+        }
+        if ("nested".equals(codec)) {
+            if (!(value instanceof NestedInteger node)) {
+                throw new IllegalArgumentException("nested return value must be a NestedInteger");
+            }
+            return encodeNested(node);
+        }
+        if ("next_tree".equals(codec)) {
+            if (!(value instanceof NodeWithNext root)) {
+                throw new IllegalArgumentException("next_tree return value must be a NodeWithNext");
+            }
+            // LC display wire: values with a null marker between adjacent
+            // levels, trailing markers trimmed. Each level is read through
+            // the solution-populated next chain; the next level starts at
+            // the first child found anywhere in this level (left or right
+            // — the level's first node need not have a left child).
+            List<Object> output = new ArrayList<>();
+            NodeWithNext level = root;
+            while (level != null) {
+                NodeWithNext nextLevel = null;
+                NodeWithNext node = level;
+                while (node != null) {
+                    output.add(node.val);
+                    if (nextLevel == null) {
+                        nextLevel = node.left != null ? node.left : node.right;
+                    }
+                    node = node.next;
+                }
+                output.add(null);
+                level = nextLevel;
+            }
+            while (!output.isEmpty() && output.get(output.size() - 1) == null) {
+                output.remove(output.size() - 1);
+            }
+            return output;
+        }
+        if ("circular_list".equals(codec)) {
+            if (!(value instanceof ListNode head)) {
+                throw new IllegalArgumentException("circular_list return value must be a ListNode");
+            }
+            List<Object> output = new ArrayList<>();
+            if (head != null) {
+                output.add(head.val);
+                ListNode current = head.next;
+                for (int i = 0; i < (1 << 20); i++) {
+                    if (current == null) {
+                        throw new IllegalArgumentException("Circular list is not closed");
+                    }
+                    if (current == head) {
+                        return output;
+                    }
+                    output.add(current.val);
+                    current = current.next;
+                }
+                throw new IllegalArgumentException("Circular list exceeds the walk bound");
+            }
+            return output;
+        }
+        if ("doubly_circular".equals(codec)) {
+            if (!(value instanceof NodeWithNext head)) {
+                throw new IllegalArgumentException("doubly_circular return value must be a NodeWithNext");
+            }
+            return serializeDoublyCircular(head);
+        }
+        if ("multi_list".equals(codec)) {
+            if (!(value instanceof MultiListNode head)) {
+                throw new IllegalArgumentException("multi_list return value must be a MultiListNode");
+            }
+            return serializeMultiList(head);
+        }
         throw new IllegalArgumentException("Java executor does not support codec: " + codec);
+    }
+
+    private static List<Object> encodeQuadTree(QuadNode node) {
+        // LC display wire: a flat preorder of [isLeaf, val] pairs. A
+        // non-leaf's val is the solution's to choose, so both sides
+        // normalize it to 0 — the wire never carries an arbitrary
+        // internal val.
+        if (node == null) {
+            return null;
+        }
+        List<Object> output = new ArrayList<>();
+        appendQuadTree(node, output);
+        return output;
+    }
+
+    private static void appendQuadTree(QuadNode node, List<Object> output) {
+        if (node.isLeaf) {
+            output.add(List.of(1, node.val ? 1 : 0));
+            return;
+        }
+        output.add(List.of(0, 0));
+        appendQuadTree(node.topLeft, output);
+        appendQuadTree(node.topRight, output);
+        appendQuadTree(node.bottomLeft, output);
+        appendQuadTree(node.bottomRight, output);
+    }
+
+    private static Object decodeQuadTree(Object value) {
+        if (value == null) {
+            return null;
+        }
+        List<Object> data = asList(value, "quad_tree input must be a display array");
+        int[] cursor = {0};
+        QuadNode root = parseQuadNode(data, cursor);
+        if (cursor[0] != data.size()) {
+            throw new IllegalArgumentException("quad_tree wire has trailing entries");
+        }
+        return root;
+    }
+
+    private static QuadNode parseQuadNode(List<Object> data, int[] cursor) {
+        if (cursor[0] >= data.size()) {
+            throw new IllegalArgumentException("quad_tree wire ended without a node");
+        }
+        List<Object> pair = asList(data.get(cursor[0]++), "quad_tree node must be an [isLeaf, val] pair");
+        if (pair.size() != 2) {
+            throw new IllegalArgumentException("quad_tree node must be an [isLeaf, val] pair");
+        }
+        boolean isLeaf = quadFlag(pair.get(0), "isLeaf");
+        boolean val = quadFlag(pair.get(1), "val");
+        QuadNode node = new QuadNode(val, isLeaf);
+        if (!isLeaf) {
+            node.topLeft = parseQuadNode(data, cursor);
+            node.topRight = parseQuadNode(data, cursor);
+            node.bottomLeft = parseQuadNode(data, cursor);
+            node.bottomRight = parseQuadNode(data, cursor);
+        }
+        return node;
+    }
+
+    private static boolean quadFlag(Object value, String field) {
+        if (value instanceof Boolean flag) {
+            return flag;
+        }
+        if (value instanceof Number number && (number.intValue() == 0 || number.intValue() == 1)) {
+            return number.intValue() == 1;
+        }
+        throw new IllegalArgumentException("quad_tree " + field + " must be 0 or 1");
+    }
+
+    private static Object decodeNested(Object value) {
+        if (value instanceof Boolean || !(value instanceof Number)) {
+            if (!(value instanceof List<?>)) {
+                throw new IllegalArgumentException("nested input must be an int or nested arrays");
+            }
+            NestedInteger node = new NestedInteger();
+            for (Object item : (List<?>) value) {
+                node.add((NestedInteger) decodeNested(item));
+            }
+            return node;
+        }
+        return new NestedInteger(((Number) value).intValue());
+    }
+
+    private static Object encodeNested(NestedInteger node) {
+        // Natural nested-arrays JSON: an integer hold is the integer
+        // itself, a list hold the array of its encoded children.
+        if (node.isInteger()) {
+            return node.getInteger();
+        }
+        List<Object> output = new ArrayList<>();
+        for (NestedInteger item : node.getList()) {
+            output.add(encodeNested(item));
+        }
+        return output;
+    }
+
+    private static Object decodeMultiList(Object value) throws Exception {
+        if (!(value instanceof Map)) {
+            throw new IllegalArgumentException("multi_list input must carry values and children");
+        }
+        Map<?, ?> chain = (Map<?, ?>) value;
+        Object rawValues = chain.get("values");
+        Object rawChildren = chain.get("children");
+        if (rawValues == null || rawChildren == null) {
+            throw new IllegalArgumentException("multi_list input must carry values and children");
+        }
+        List<Object> values = asList(rawValues, "multi_list values must be an array");
+        List<Object> children = asList(rawChildren, "multi_list children must be an array");
+        if (values.size() != children.size()) {
+            throw new IllegalArgumentException("multi_list children must match values slot for slot");
+        }
+        List<MultiListNode> nodes = new ArrayList<>();
+        for (int index = 0; index < values.size(); index++) {
+            MultiListNode node = new MultiListNode(numberValue(values.get(index)).intValue());
+            Object child = children.get(index);
+            if (child != null) {
+                node.child = (MultiListNode) decodeMultiList(child);
+            }
+            nodes.add(node);
+        }
+        for (int index = 1; index < nodes.size(); index++) {
+            nodes.get(index - 1).next = nodes.get(index);
+            nodes.get(index).prev = nodes.get(index - 1);
+        }
+        return nodes.isEmpty() ? null : nodes.get(0);
+    }
+
+    private static List<Object> serializeMultiList(MultiListNode head) {
+        List<Object> output = new ArrayList<>();
+        MultiListNode node = head;
+        MultiListNode previous = null;
+        for (int i = 0; i < (1 << 20) && node != null; i++) {
+            if (node.prev != previous || node.child != null) {
+                throw new IllegalArgumentException("Flattened list is not properly linked");
+            }
+            output.add(node.val);
+            previous = node;
+            node = node.next;
+        }
+        if (node != null) {
+            throw new IllegalArgumentException("Flattened list exceeds the walk bound");
+        }
+        return output;
+    }
+
+    private static List<Object> serializeDoublyCircular(NodeWithNext head) {
+        // LC 426 wire (left = prev, right = next): read the ring through
+        // right and require every back-link along the way.
+        List<Object> output = new ArrayList<>();
+        if (head == null) {
+            return output;
+        }
+        output.add(head.val);
+        NodeWithNext previous = head;
+        NodeWithNext current = head.right;
+        for (int i = 0; i < (1 << 20); i++) {
+            if (current == null || current.left != previous) {
+                throw new IllegalArgumentException("Doubly linked list is not properly linked");
+            }
+            if (current == head) {
+                if (head.left != previous) {
+                    throw new IllegalArgumentException("Doubly linked list is not properly linked");
+                }
+                return output;
+            }
+            output.add(current.val);
+            previous = current;
+            current = current.right;
+        }
+        throw new IllegalArgumentException("Doubly linked list exceeds the walk bound");
+    }
+
+    /**
+     * The solution's declared class for a reflectively decoded parameter:
+     * the first overload of this name and arity whose parameter at
+     * {@code parameterIndex} carries the named public fields.
+     */
+    private static Class<?> declaredNodeClass(
+        Class<?> targetClass,
+        String methodName,
+        int argumentCount,
+        int parameterIndex,
+        String... fields
+    ) {
+        for (Method candidate : targetClass.getDeclaredMethods()) {
+            if (!candidate.getName().equals(methodName) || candidate.getParameterCount() != argumentCount) {
+                continue;
+            }
+            Class<?> type = candidate.getParameterTypes()[parameterIndex];
+            boolean matches = true;
+            for (String field : fields) {
+                try {
+                    type.getField(field);
+                } catch (NoSuchFieldException missing) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) {
+                return type;
+            }
+        }
+        throw new IllegalArgumentException(
+            "Method " + methodName + " must declare a node parameter with field(s) " + String.join(", ", fields));
+    }
+
+    private static Object decodeGraph(Object value, Class<?> nodeClass) throws Exception {
+        List<Object> rows = asList(value, "graph input must be an adjacency array");
+        if (rows.isEmpty()) {
+            return null;
+        }
+        java.lang.reflect.Constructor<?> ctor;
+        try {
+            ctor = nodeClass.getDeclaredConstructor(int.class);
+        } catch (NoSuchMethodException noScalarCtor) {
+            ctor = nodeClass.getDeclaredConstructor();
+        }
+        ctor.setAccessible(true);
+        Object[] nodes = new Object[rows.size()];
+        for (int index = 0; index < rows.size(); index++) {
+            nodes[index] = ctor.getParameterCount() == 1
+                ? ctor.newInstance(index + 1)
+                : ctor.newInstance();
+            java.lang.reflect.Field val = nodeClass.getField("val");
+            val.set(nodes[index], index + 1);
+        }
+        java.lang.reflect.Field neighbors = nodeClass.getField("neighbors");
+        for (int index = 0; index < rows.size(); index++) {
+            List<Object> row = asList(rows.get(index), "graph rows must be neighbor arrays");
+            List<Object> linked = new ArrayList<>();
+            for (Object item : row) {
+                int neighbor = numberValue(item).intValue();
+                if (neighbor < 1 || neighbor > nodes.length) {
+                    throw new IllegalArgumentException("Graph neighbor " + neighbor + " is out of range");
+                }
+                linked.add(nodes[neighbor - 1]);
+            }
+            neighbors.set(nodes[index], linked);
+        }
+        return nodes[0];
+    }
+
+    private static void collectGraphNodes(Object head, List<Object> into) throws Exception {
+        if (head == null) {
+            return;
+        }
+        Class<?> nodeClass = head.getClass();
+        java.lang.reflect.Field neighbors = nodeClass.getField("neighbors");
+        List<Object> queue = new ArrayList<>();
+        queue.add(head);
+        List<Object> seen = new ArrayList<>();
+        int index = 0;
+        while (index < queue.size()) {
+            Object node = queue.get(index++);
+            if (seen.contains(node)) {
+                continue;
+            }
+            seen.add(node);
+            into.add(node);
+            for (Object neighbor : (List<?>) neighbors.get(node)) {
+                queue.add(neighbor);
+            }
+        }
+    }
+
+    private static List<Object> serializeGraph(Object result, List<Object> inputNodes) throws Exception {
+        if (result == null) {
+            return List.of();
+        }
+        Class<?> nodeClass = result.getClass();
+        java.lang.reflect.Field valField = nodeClass.getField("val");
+        java.lang.reflect.Field neighbors = nodeClass.getField("neighbors");
+        List<Object> queue = new ArrayList<>();
+        queue.add(result);
+        List<Object> visited = new ArrayList<>();
+        int index = 0;
+        while (index < queue.size()) {
+            Object node = queue.get(index++);
+            if (visited.contains(node)) {
+                continue;
+            }
+            visited.add(node);
+            queue.addAll((List<?>) neighbors.get(node));
+        }
+        visited.sort(java.util.Comparator.comparingInt(node -> {
+            try {
+                return valField.getInt(node);
+            } catch (ReflectiveOperationException error) {
+                throw propagate(error);
+            }
+        }));
+        if (!inputNodes.isEmpty()) {
+            for (Object node : visited) {
+                if (inputNodes.contains(node)) {
+                    throw new IllegalArgumentException("Returned graph shares nodes with the input graph");
+                }
+            }
+        }
+        List<Object> rows = new ArrayList<>();
+        for (Object node : visited) {
+            List<Object> row = new ArrayList<>();
+            for (Object neighbor : (List<?>) neighbors.get(node)) {
+                row.add(valField.getInt(neighbor));
+            }
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private static Object decodeRandomList(Object value, Class<?> nodeClass) throws Exception {
+        List<Object> pairs = asList(value, "random_list input must be an array of [val, random] pairs");
+        if (pairs.isEmpty()) {
+            return null;
+        }
+        java.lang.reflect.Constructor<?> ctor;
+        try {
+            ctor = nodeClass.getDeclaredConstructor(int.class);
+        } catch (NoSuchMethodException noScalarCtor) {
+            ctor = nodeClass.getDeclaredConstructor();
+        }
+        ctor.setAccessible(true);
+        Object[] nodes = new Object[pairs.size()];
+        for (int index = 0; index < pairs.size(); index++) {
+            List<Object> pair = asList(pairs.get(index), "random_list pairs must be [val, random]");
+            nodes[index] = ctor.getParameterCount() == 1
+                ? ctor.newInstance(numberValue(pair.get(0)).intValue())
+                : ctor.newInstance();
+            nodeClass.getField("val").set(nodes[index], numberValue(pair.get(0)).intValue());
+        }
+        java.lang.reflect.Field next = nodeClass.getField("next");
+        java.lang.reflect.Field random = nodeClass.getField("random");
+        for (int index = 0; index < pairs.size(); index++) {
+            List<Object> pair = asList(pairs.get(index), "random_list pairs must be [val, random]");
+            if (index + 1 < nodes.length) {
+                next.set(nodes[index], nodes[index + 1]);
+            }
+            Object target = pair.get(1);
+            if (target != null) {
+                int targetIndex = numberValue(target).intValue();
+                if (targetIndex < 0 || targetIndex >= nodes.length) {
+                    throw new IllegalArgumentException("Random pointer target is out of range");
+                }
+                random.set(nodes[index], nodes[targetIndex]);
+            }
+        }
+        return nodes[0];
+    }
+
+    private static void collectChainNodes(Object head, List<Object> into) throws Exception {
+        if (head == null) {
+            return;
+        }
+        Class<?> nodeClass = head.getClass();
+        java.lang.reflect.Field next = nodeClass.getField("next");
+        for (Object node = head; node != null; node = next.get(node)) {
+            into.add(node);
+        }
+    }
+
+    private static List<Object> serializeRandomList(Object result, List<Object> inputNodes) throws Exception {
+        if (result == null) {
+            return List.of();
+        }
+        Class<?> nodeClass = result.getClass();
+        java.lang.reflect.Field valField = nodeClass.getField("val");
+        java.lang.reflect.Field next = nodeClass.getField("next");
+        java.lang.reflect.Field random = nodeClass.getField("random");
+        List<Object> nodes = new ArrayList<>();
+        for (Object node = result; node != null; node = next.get(node)) {
+            if (nodes.contains(node)) {
+                throw new IllegalArgumentException("Random list has a cycle in next");
+            }
+            nodes.add(node);
+        }
+        if (!inputNodes.isEmpty()) {
+            for (Object node : nodes) {
+                if (inputNodes.contains(node)) {
+                    throw new IllegalArgumentException("Returned list shares nodes with the input list");
+                }
+            }
+        }
+        List<Object> output = new ArrayList<>();
+        for (Object node : nodes) {
+            Object target = random.get(node);
+            Integer targetIndex = null;
+            for (int index = 0; index < nodes.size(); index++) {
+                if (nodes.get(index) == target) {
+                    targetIndex = index;
+                    break;
+                }
+            }
+            List<Object> pair = new ArrayList<>();
+            pair.add(valField.getInt(node));
+            pair.add(targetIndex);
+            output.add(pair);
+        }
+        return output;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean specHasStruct(Object spec) {
+        if (!(spec instanceof Map)) {
+            return false;
+        }
+        Object kind = ((Map<String, Object>) spec).get("kind");
+        if ("struct".equals(kind)) {
+            return true;
+        }
+        if ("array".equals(kind)) {
+            return specHasStruct(((Map<String, Object>) spec).get("items"));
+        }
+        return false;
+    }
+
+    private static Object decodeStruct(Object value, Object specValue) throws Exception {
+        Map<String, Object> spec = asMap(specValue, "Struct spec must be an object");
+        String kind = asString(spec.get("kind"), "Struct spec needs a kind");
+        if ("struct".equals(kind)) {
+            Class<?> cls = Class.forName(asString(spec.get("class"), "Struct spec needs a class"));
+            List<Object> fields = asList(spec.getOrDefault("fields", List.of()), "Struct fields must be a list");
+            List<Object> values = asList(value, "Struct values must be an array");
+            if (values.size() != fields.size()) {
+                throw new IllegalArgumentException("Expected " + fields.size() + " struct fields");
+            }
+            Class<?>[] ctorTypes = new Class<?>[fields.size()];
+            for (int index = 0; index < fields.size(); index++) {
+                Map<String, Object> field = asMap(fields.get(index), "Struct field must be an object");
+                ctorTypes[index] = javaTypeOf(field.get("value_type"));
+            }
+            java.lang.reflect.Constructor<?> ctor;
+            try {
+                ctor = cls.getDeclaredConstructor(ctorTypes);
+            } catch (NoSuchMethodException noExactCtor) {
+                throw new IllegalArgumentException(
+                    "Provided class " + cls.getName() + " needs a constructor matching its declared fields");
+            }
+            ctor.setAccessible(true);
+            Object[] args = new Object[fields.size()];
+            for (int index = 0; index < fields.size(); index++) {
+                Map<String, Object> field = asMap(fields.get(index), "Struct field must be an object");
+                args[index] = decodeStruct(values.get(index), field.get("value_type"));
+            }
+            return ctor.newInstance(args);
+        }
+        if ("array".equals(kind)) {
+            List<Object> items = asList(value, "Struct array values must be an array");
+            List<Object> decoded = new ArrayList<>();
+            for (Object item : items) {
+                decoded.add(decodeStruct(item, spec.get("items")));
+            }
+            return decoded;
+        }
+        // Leaf fields: the harness JSON parser hands back Long/Double/String,
+        // while the provided class declares primitives — convert per kind.
+        if ("integer".equals(kind)) {
+            return numberValue(value).intValue();
+        }
+        if ("number".equals(kind)) {
+            return numberValue(value).doubleValue();
+        }
+        if ("boolean".equals(kind)) {
+            if (!(value instanceof Boolean flag)) {
+                throw new IllegalArgumentException("Struct boolean field must be true or false");
+            }
+            return flag;
+        }
+        if ("string".equals(kind)) {
+            if (!(value instanceof String text)) {
+                throw new IllegalArgumentException("Struct string field must be a string");
+            }
+            return text;
+        }
+        throw new IllegalArgumentException("Struct field kind not supported: " + kind);
+    }
+
+    private static Class<?> javaTypeOf(Object specValue) {
+        Map<String, Object> spec = asMap(specValue, "Field type must be an object");
+        String kind = asString(spec.get("kind"), "Field type needs a kind");
+        switch (kind) {
+            case "integer":
+                return int.class;
+            case "number":
+                return double.class;
+            case "boolean":
+                return boolean.class;
+            case "string":
+                return String.class;
+            case "array":
+                return java.util.List.class;
+            default:
+                throw new IllegalArgumentException("Struct field kind not supported: " + kind);
+        }
+    }
+
+    private static Object decodeAliasList(Object value, Object aliasedHead) {
+        if (!(value instanceof Map)) {
+            throw new IllegalArgumentException("alias_list input must carry values and splice_at");
+        }
+        Map<?, ?> spec = (Map<?, ?>) value;
+        Object rawValues = spec.get("values");
+        Object rawSplice = spec.get("splice_at");
+        if (rawValues == null || !(rawSplice instanceof Number)) {
+            throw new IllegalArgumentException("alias_list input must carry values and splice_at");
+        }
+        int spliceAt = ((Number) rawSplice).intValue();
+        if (spliceAt < 0) {
+            throw new IllegalArgumentException("alias_list splice_at must be non-negative");
+        }
+        ListNode target = (ListNode) aliasedHead;
+        for (int index = 0; index < spliceAt; index++) {
+            if (target == null) {
+                throw new IllegalArgumentException("alias_list splice_at is past the aliased list");
+            }
+            target = target.next;
+        }
+        if (rawValues == null || (rawValues instanceof List<?> && ((List<?>) rawValues).isEmpty())) {
+            return target;
+        }
+        List<Object> values = asList(rawValues, "alias_list values must be an array");
+        ListNode head = null;
+        ListNode current = null;
+        for (Object item : values) {
+            ListNode node = new ListNode(numberValue(item).intValue());
+            if (current == null) {
+                head = node;
+            } else {
+                current.next = node;
+            }
+            current = node;
+        }
+        current.next = target;
+        return head;
+    }
+
+    private static List<Object> serializeAliasList(Object node, Object aliasedHead) {
+        // A null return is the LC 160 no-intersection verdict.
+        if (node == null) {
+            return List.of();
+        }
+        ListNode head = (ListNode) aliasedHead;
+        for (ListNode current = head; current != null; current = current.next) {
+            if (current == node) {
+                List<Object> values = new ArrayList<>();
+                for (ListNode walk = (ListNode) node; walk != null; walk = walk.next) {
+                    values.add(walk.val);
+                }
+                return values;
+            }
+        }
+        throw new IllegalArgumentException("Returned node is not part of the aliased list");
     }
 
     private static Number numberValue(Object value) {

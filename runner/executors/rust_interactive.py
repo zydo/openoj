@@ -169,6 +169,23 @@ fn openoj_json_f64(value: f64) -> String {
 }
 fn openoj_json_str(value: &str) -> String { openoj_json(&OjValue::Str(value.to_string())) }
 fn openoj_json_bool(value: bool) -> String { value.to_string() }
+
+// Builds the common NestedInteger from a JSON-shaped OjValue: an integer
+// hold, or a list hold whose children recurse. Module-level item, so it
+// resolves NestedInteger from the assembled common regardless of order.
+fn openoj_nested_build(value: &OjValue) -> Result<NestedInteger, String> {
+    match value {
+        OjValue::Int(v) => i32::try_from(*v).map(NestedInteger::with_integer).map_err(|_| "Integer out of range".to_string()),
+        OjValue::Array(items) => {
+            let mut node = NestedInteger::new();
+            for item in items {
+                node.add(openoj_nested_build(item)?);
+            }
+            Ok(node)
+        }
+        _ => Err("Expected a nested list".to_string()),
+    }
+}
 """
 
 MAIN_TEMPLATE = """\
@@ -233,7 +250,59 @@ def _convert(spec: dict[str, Any], source: str) -> str:
             f"for item in items {{ out.push({inner}); }} out }}, "
             f"_ => return Err(\"Expected an array\".to_string()) }})"
         )
+    if kind == "nested":
+        return f"openoj_nested_build({source})?"
     raise ExecutorError(f"Interactive auxiliary type {kind} is not supported in Rust")
+
+
+def _serialize(spec: dict[str, Any], source: str) -> str:
+    """A Rust expression producing the tagged-JSON text for a return value
+    of the spec's type. `source` must denote a &-borrow of the value (the
+    generated code passes `&actual`), so items borrow through `.iter()` at
+    any depth and the scalar leaves deref one level."""
+    kind = spec["kind"]
+    if kind == "integer":
+        return f"openoj_json_i32(*{source})" if spec.get("bits", 32) == 32 else f"openoj_json_i64(*{source})"
+    if kind == "number":
+        return f"openoj_json_f64(*{source})"
+    if kind == "boolean":
+        return f"openoj_json_bool(*{source})"
+    if kind == "string":
+        return f"openoj_json_str({source})"
+    if kind == "array":
+        inner = _serialize(spec["items"], "openoj_item")
+        return (
+            f'(format!("[{{}}]", {{ let mut openoj_parts: Vec<String> = Vec::with_capacity(({source}).len()); '
+            f"for openoj_item in ({source}).iter() {{ openoj_parts.push({inner}); }} "
+            f'openoj_parts.join(",") }}))'
+        )
+    raise ExecutorError(f"Interactive return type {kind} is not supported in Rust")
+
+
+def _rust_buffer_element(spec: dict[str, Any] | None) -> str:
+    """The Vec element an out_buffer parameter allocates: bytes unless the
+    parameter declares its own array value_type (mirrors go)."""
+    if spec is None:
+        return "u8"
+    spec = type_spec(spec, "out_buffer")
+    if spec["kind"] == "array":
+        return _rust_type(spec["items"])
+    raise ExecutorError("An out_buffer parameter needs an array value_type (or none, for bytes)")
+
+
+def _buffer_value_expression(element: str, source: str) -> str:
+    """A Rust expression wrapping one buffer entry into an OjValue."""
+    if element == "String":
+        return f"OjValue::Str({source}.clone())"
+    if element == "u8":
+        return f"OjValue::Int(i64::from(*{source}))"
+    if element == "i64":
+        return f"OjValue::Int(*{source})"
+    if element == "bool":
+        return f"OjValue::Bool(*{source})"
+    if element == "f64":
+        return f"OjValue::Double(*{source})"
+    return f"OjValue::Int(i64::from(*{source}))"
 
 
 def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
@@ -248,10 +317,34 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
     construct_keys = list(provided.get("construct", ()))
     auxiliary_keys = list(provided.get("auxiliary", ()))
     parameters = invocation.get("parameters") or []
+    # An out_buffer parameter allocates a buffer in its declared position:
+    # it consumes no case input, and its capacity names the case key whose
+    # decoded value sizes it (the read4 wire).
+    buffer_slots: dict[int, str] = {}
+    for index, parameter in enumerate(parameters):
+        if not isinstance(parameter, dict) or parameter.get("out_buffer") is None:
+            continue
+        out_buffer = parameter["out_buffer"]
+        if not isinstance(out_buffer, dict) or not isinstance(out_buffer.get("capacity_from"), str):
+            raise ExecutorError("An out_buffer parameter needs a 'capacity_from' case key")
+        buffer_slots[index] = out_buffer["capacity_from"]
+    parameter_keys = [
+        parameter.get("name")
+        for parameter in parameters
+        if isinstance(parameter, dict) and parameter.get("out_buffer") is None
+    ]
+    if parameter_keys != auxiliary_keys:
+        raise ExecutorError(
+            "Interactive parameters (excluding out_buffer ones) must match provided.oracle.auxiliary")
     specs = {
         parameter.get("name"): parameter.get("value_type")
         for parameter in parameters
         if isinstance(parameter, dict)
+    }
+    # Case key -> the raw decoded value holding its out_buffer capacity.
+    capacity_sources = {
+        **{key: index for index, key in enumerate(construct_keys)},
+        **{key: len(construct_keys) + index for index, key in enumerate(auxiliary_keys)},
     }
 
     value_reads = "\n".join(
@@ -269,18 +362,64 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         )
         auxiliary_args.append(f"openoj_aux_{index}")
 
+    buffer_variables: dict[int, tuple[str, str]] = {}
+    for slot, capacity_key in buffer_slots.items():
+        raw_index = capacity_sources.get(capacity_key)
+        if raw_index is None:
+            raise ExecutorError(f"out_buffer capacity_from {capacity_key!r} is not a case key")
+        element = _rust_buffer_element(specs.get(parameters[slot].get("name")))
+        default = {"String": "String::new()", "bool": "false", "f64": "0.0"}.get(element, "0")
+        variable = f"openoj_buffer_{slot}"
+        convert_lines.append(
+            f"    let openoj_capacity_{slot}: i64 = match &openoj_value_{raw_index} {{ OjValue::Int(v) => *v, "
+            f"_ => return Err(\"Buffer capacity must be an integer\".to_string()) }};\n"
+            f"    let mut {variable}: Vec<{element}> = vec![{default}; openoj_capacity_{slot}.max(0) as usize];"
+        )
+        buffer_variables[slot] = (variable, element)
+
+    parameter_arguments = []
+    buffer_slot = None
+    for index, parameter in enumerate(parameters):
+        if index in buffer_variables:
+            if buffer_slot is None:
+                buffer_slot = index
+            parameter_arguments.append(f"&mut {buffer_variables[index][0]}")
+            continue
+        if not isinstance(parameter, dict):
+            raise ExecutorError("Every interactive parameter must be an object")
+        name = parameter.get("name")
+        if name not in capacity_sources:
+            raise ExecutorError(f"Auxiliary key {name!r} has no case input")
+        parameter_arguments.append(auxiliary_args.pop(0))
+
     oracle_args = ", ".join(
         f"openoj_value_{index}.clone()" for index in range(len(construct_keys))
     )
-    call_arguments = ", ".join(["&mut oracle", *auxiliary_args])
+    call_arguments = ", ".join(["&mut oracle", *parameter_arguments])
     # A {"kind": "void"} return_type is a declared void, not a value: the
     # oracle's verdict() judges those (same rule as the python/java sides).
     has_return = bool(invocation.get("return_type")) and invocation["return_type"].get("kind") != "void"
     if has_return:
-        call_block = (
-            f"    let actual = Solution::{method}({call_arguments});\n"
-            '    Ok(openoj_json_i32(actual))'
-        )
+        # Serialize against the DECLARED return type — the wire mirrors the
+        # other interactive wrappers' tagged-JSON, and hard-coding i32 here
+        # broke every non-i32 return at compile time.
+        return_spec = type_spec(invocation["return_type"], "Return value")
+        if buffer_slot is None:
+            call_block = (
+                f"    let actual = Solution::{method}({call_arguments});\n"
+                f"    Ok({_serialize(return_spec, '&actual')})"
+            )
+        else:
+            buffer, element = buffer_variables[buffer_slot]
+            call_block = (
+                f"    let actual = Solution::{method}({call_arguments});\n"
+                "    let openoj_count = i64::from(actual);\n"
+                f"    let openoj_written = openoj_count.clamp(0, {buffer}.len() as i64) as usize;\n"
+                f"    let openoj_entries: Vec<OjValue> = {buffer}.iter().take(openoj_written)\n"
+                f"        .map(|openoj_item| {_buffer_value_expression(element, 'openoj_item')})\n"
+                "        .collect();\n"
+                "    Ok(openoj_json(&OjValue::Array(vec![OjValue::Int(openoj_count), OjValue::Array(openoj_entries)])))"
+            )
     else:
         call_block = (
             f"    Solution::{method}({call_arguments});\n"

@@ -14,12 +14,24 @@ from typing import Any
 sys.path.insert(0, "/runner")
 
 from leetcode_types import (
+    GraphNode,
     ListNode,
+    MultiListNode,
+    NestedInteger,
     Node,
+    NodeWithNext,
+    QuadNode,
+    RandomListNode,
     TreeNode,
+    chain_nodes,
     decode,
     emit_protocol,
     encode,
+    graph_nodes,
+    parse_alias_list,
+    serialize_alias_list,
+    serialize_graph,
+    serialize_random_list,
 )
 
 
@@ -66,10 +78,90 @@ def _load_solution(solution_path: Path, assembly_paths: list[Path] | None = None
                 "ListNode": ListNode,
                 "TreeNode": TreeNode,
                 "Node": Node,
+                "QuadNode": QuadNode,
+                "NestedInteger": NestedInteger,
+                "NodeWithNext": NodeWithNext,
+                "MultiListNode": MultiListNode,
+                "GraphNode": GraphNode,
+                "RandomListNode": RandomListNode,
             }
         )
     spec.loader.exec_module(module)
     return module
+
+
+def _decode_struct(value: Any, spec: dict[str, Any], module: Any) -> Any:
+    """Build the provided class for a struct value_type (constructor args in
+    declared field order); array fields recurse."""
+    if spec.get("kind") == "struct":
+        cls = getattr(module, spec["class"])
+        fields = spec.get("fields", [])
+        if not isinstance(value, list) or len(value) != len(fields):
+            raise ValueError(f"Expected {len(fields)} struct fields")
+        return cls(
+            *[_decode_struct(item, field["value_type"], module) for item, field in zip(value, fields)]
+        )
+    if spec.get("kind") == "array":
+        return [_decode_struct(item, spec["items"], module) for item in value]
+    return value
+
+
+def _spec_has_struct(spec: Any) -> bool:
+    if not isinstance(spec, dict):
+        return False
+    if spec.get("kind") == "struct":
+        return True
+    if spec.get("kind") == "array":
+        return _spec_has_struct(spec.get("items"))
+    return False
+
+
+def _decode_function_arguments(
+    module: Any, raw_input: Any, parameters: list[dict[str, Any]]
+) -> tuple[list[Any], dict[str, Any]]:
+    """Decode the positional arguments. Struct values construct their
+    provided class; an alias_list parameter splices onto the aliased list
+    decoded earlier. The context carries the input-side node lists the
+    result-time clone checks compare against."""
+    arguments: list[Any] = []
+    context: dict[str, Any] = {}
+    for index, (value, parameter) in enumerate(zip(raw_input, parameters)):
+        value_type = parameter.get("value_type")
+        if _spec_has_struct(value_type):
+            arguments.append(_decode_struct(value, value_type, module))
+            continue
+        codec = parameter.get("codec", "json")
+        if codec == "alias_list":
+            alias = parameter.get("alias")
+            if alias is None or not 0 <= int(alias) < index:
+                raise ValueError("alias_list requires an earlier aliased parameter")
+            arguments.append(parse_alias_list(value, arguments[int(alias)]))
+            continue
+        decoded = decode(value, codec)
+        if codec == "list_node":
+            context.setdefault("list_heads", []).append(decoded)
+        elif codec == "graph":
+            context.setdefault("graph_nodes", []).extend(graph_nodes(decoded))
+        elif codec == "random_list":
+            context.setdefault("random_nodes", []).extend(chain_nodes(decoded))
+        arguments.append(decoded)
+    return arguments, context
+
+
+def _encode_function_result(
+    actual: Any, codec: str, invocation: dict[str, Any], context: dict[str, Any]
+) -> Any:
+    if codec == "alias_list":
+        alias = invocation.get("return_alias")
+        heads = context.get("list_heads", [])
+        if alias is None or not 0 <= int(alias) < len(heads):
+            raise ValueError("alias_list return requires return_alias")
+        return serialize_alias_list(actual, heads[int(alias)])
+    if codec == "graph":
+        return serialize_graph(actual, context.get("graph_nodes", []))
+    if codec == "random_list":
+        return serialize_random_list(actual, context.get("random_nodes", []))
+    return encode(actual, codec)
 
 
 def _invoke_function(module, invocation: dict[str, Any], raw_input: Any) -> Any:
@@ -80,13 +172,10 @@ def _invoke_function(module, invocation: dict[str, Any], raw_input: Any) -> Any:
         raise ValueError(
             f"Expected {len(parameters)} arguments, received {len(raw_input)}"
         )
-    arguments = [
-        decode(value, parameter.get("codec", "json"))
-        for value, parameter in zip(raw_input, parameters)
-    ]
+    arguments, context = _decode_function_arguments(module, raw_input, parameters)
     instance = getattr(module, invocation["class_name"])()
     actual = getattr(instance, invocation["method"])(*arguments)
-    return encode(actual, invocation.get("return_codec", "json"))
+    return _encode_function_result(actual, invocation.get("return_codec", "json"), invocation, context)
 
 
 def _canonical_key(value: Any) -> str:
@@ -187,18 +276,33 @@ def _invoke_interactive(module, invocation: dict[str, Any], raw_input: Any) -> A
     oracle = getattr(module, provided["class"])(
         *(raw_input[key] for key in provided.get("construct", ())), budget
     )
-    auxiliary_keys = provided.get("auxiliary", ())
     instance = getattr(module, invocation["class_name"])()
-    arguments = [oracle]
-    for key in auxiliary_keys:
-        if key not in raw_input:
-            raise ValueError(f"Interactive input needs {key!r}")
-        arguments.append(raw_input[key])
+    # A parameter may declare an out_buffer: the harness allocates the
+    # buffer the solution writes into (capacity named by another case key),
+    # then reports [return_value, buffer[:return_value]] — the read4 wire.
+    arguments: list[Any] = [oracle]
+    for parameter in invocation.get("parameters", []):
+        out_buffer = parameter.get("out_buffer")
+        if out_buffer:
+            capacity = int(raw_input[out_buffer["capacity_from"]])
+            arguments.append([None] * max(capacity, 0))
+            continue
+        name = parameter["name"]
+        if name not in raw_input:
+            raise ValueError(f"Interactive input needs {name!r}")
+        arguments.append(raw_input[name])
     result = getattr(instance, invocation["method"])(*arguments)
     # Void-method oracles are judged by their own final state — e.g. the
     # robot's exact set of cleaned cells.
     if result is None and hasattr(oracle, "verdict"):
         return oracle.verdict()
+    buffers = [
+        argument
+        for argument, parameter in zip(arguments[1:], invocation.get("parameters", []))
+        if parameter.get("out_buffer")
+    ]
+    if buffers:
+        return [result, buffers[0][: max(result, 0)]]
     return result
 
 
@@ -246,11 +350,70 @@ def _invoke_concurrent(module, invocation: dict[str, Any], raw_input: Any) -> An
         with lock:
             events.append(value)
 
+    def build_callback(spec: dict[str, Any], call_arguments: list[Any], emits: Any):
+        """The callback a schedule call receives, per the manifest's
+        value_type. Legacy ``{"kind": "callback"}`` records the schedule
+        entry's emits token; ``value`` records the argument the solution
+        passes; ``event`` composes the enclosing call's arguments (#i) with
+        literal JSON values; ``record: false`` is a silent no-op. The
+        solution invokes a NAMED method on the callback (launch(), pass(n),
+        accept(x), run()), so the object records through whatever attribute
+        the solution touches — or a bare call, for the Runnable legacy."""
+        def invoke(*args: Any) -> None:
+            if spec.get("record") is False:
+                return
+            if spec.get("value"):
+                record(args[0] if args else None)
+                return
+            template = spec.get("event")
+            if template is not None:
+                record([
+                    call_arguments[int(token[1:])]
+                    if isinstance(token, str) and token.startswith("#")
+                    else token
+                    for token in template
+                ])
+                return
+            record(emits)
+
+        class callback:
+            def __getattr__(self, _name):
+                return invoke
+
+            def __call__(self, *args: Any) -> None:
+                invoke(*args)
+
+        return callback()
+
+    methods = {
+        method["name"]: method for method in invocation.get("methods", [])
+    }
+
     def runner(call: str, arguments: list[Any], emits: Any, records: bool):
         def run() -> None:
             try:
                 method = getattr(instance, call)
-                if emits is not None:
+                parameters = methods.get(call, {}).get("parameters", [])
+                callback_slots = {
+                    index
+                    for index, parameter in enumerate(parameters)
+                    if isinstance(parameter.get("value_type"), dict)
+                    and parameter["value_type"].get("kind") == "callback"
+                }
+                if callback_slots:
+                    # The manifest's callback parameters sit at fixed
+                    # positions; the schedule's args fill the rest in order.
+                    supplied = iter(arguments)
+                    assembled = [
+                        build_callback(parameters[index]["value_type"], arguments, emits)
+                        if index in callback_slots
+                        else next(supplied)
+                        for index in range(max(len(parameters), len(arguments)))
+                    ]
+                    value = method(*assembled)
+                    if records:
+                        record(value)
+                elif emits is not None:
                     method(*arguments, lambda: record(emits))
                 elif records:
                     record(method(*arguments))

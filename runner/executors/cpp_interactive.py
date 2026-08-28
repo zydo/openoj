@@ -7,7 +7,12 @@ converts the auxiliary values to the method's typed parameters with
 generated converters (specs known at generation time), constructs the
 problem-provided oracle class — compiled alongside via assembly; its
 constructor takes the OjValues then the budget — and calls the solution
-method. Void methods are judged by the oracle's verdict() OjValue.
+method. A parameter may declare an out_buffer: the wrapper allocates the
+array the solution writes into (element type from the parameter's
+value_type, chars by default; capacity taken from another parameter's
+already-decoded value), the case input for that position stays empty, and
+the emitted result becomes [count, entries...] — the filled prefix, the
+read4 wire. Void methods are judged by the oracle's verdict() OjValue.
 """
 from __future__ import annotations
 
@@ -210,6 +215,8 @@ def _cpp_type(spec: dict[str, Any]) -> str:
         return "std::string"
     if kind == "array":
         return f"std::vector<{_cpp_type(spec['items'])}>"
+    if kind == "nested":
+        return "NestedInteger"
     raise ExecutorError(f"Interactive auxiliary type {kind} is not supported in C++")
 
 
@@ -232,7 +239,38 @@ def _convert(spec: dict[str, Any], source: str) -> str:
             f"std::vector<{_cpp_type(spec['items'])}> out; out.reserve(v.items.size()); "
             f"for (const auto& item : v.items) out.push_back({inner}); return out; }}({source})"
         )
+    if kind == "nested":
+        # Self-passing generic lambda: runtime recursion over the nested
+        # JSON without a generation-time recursive _convert call. Emitted
+        # in main, after the assembled common declares NestedInteger.
+        return (
+            f"[&](const OjValue& v) {{ auto openoj_build = [&](auto&& openoj_build, const OjValue& v) -> NestedInteger {{ "
+            f"if (v.kind == OjValue::Int) return NestedInteger((long long)v.integer); "
+            f"if (v.kind != OjValue::Array) throw std::runtime_error(\"Expected a nested list\"); "
+            f"NestedInteger node; for (const auto& item : v.items) node.add(openoj_build(openoj_build, item)); return node; }}; "
+            f"return openoj_build(openoj_build, v); }}({source})"
+        )
     raise ExecutorError(f"Interactive auxiliary type {kind} is not supported in C++")
+
+
+def _cpp_buffer_element(spec: Any) -> str:
+    """The array type an out_buffer parameter allocates: chars unless the
+    parameter declares its own array value_type."""
+    if spec is None:
+        return "char"
+    spec = type_spec(spec, "out_buffer")
+    if spec["kind"] == "array":
+        return _cpp_type(spec["items"])
+    raise ExecutorError("An out_buffer parameter needs an array value_type (or none, for chars)")
+
+
+def _cpp_entry_json(element: str, variable: str) -> str:
+    """A JSON expression for one captured buffer entry. Chars serialize as
+    1-char strings (java's String.valueOf(char)); the integral overloads of
+    openoj_json would otherwise swallow the char as a number."""
+    if element == "char":
+        return f"openoj_json(std::string(1, {variable}))"
+    return f"openoj_json({variable})"
 
 
 def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
@@ -252,33 +290,104 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         for parameter in parameters
         if isinstance(parameter, dict)
     }
+    # An out_buffer parameter allocates a buffer in its declared position:
+    # it consumes no case input, and its capacity names the case key whose
+    # decoded value sizes the array (the read4 wire).
+    buffer_slots: dict[int, str] = {}
+    for index, parameter in enumerate(parameters):
+        if not isinstance(parameter, dict) or parameter.get("out_buffer") is None:
+            continue
+        out_buffer = parameter["out_buffer"]
+        if not isinstance(out_buffer, dict) or not isinstance(out_buffer.get("capacity_from"), str):
+            raise ExecutorError("An out_buffer parameter needs a 'capacity_from' case key")
+        buffer_slots[index] = out_buffer["capacity_from"]
+    parameter_keys = [
+        parameter.get("name")
+        for parameter in parameters
+        if isinstance(parameter, dict) and parameter.get("out_buffer") is None
+    ]
+    if parameter_keys != auxiliary_keys:
+        raise ExecutorError(
+            "Interactive parameters (excluding out_buffer ones) must match provided.oracle.auxiliary")
 
     value_reads = []
     for index in range(len(construct_keys) + len(auxiliary_keys)):
         value_reads.append(f"        OjValue openoj_value_{index} = tagged.value();")
     convert_lines = []
-    auxiliary_args = []
+    # Case key -> a long long expression for its already-decoded value; an
+    # out_buffer capacity may name any decoded key.
+    capacity_sources: dict[str, str] = {}
+    for index, key in enumerate(construct_keys):
+        capacity_sources[key] = (
+            "[&](const OjValue& v) { if (v.kind != OjValue::Int) "
+            "throw std::runtime_error(\"Expected an integer\"); return v.integer; }"
+            f"(openoj_value_{index})"
+        )
+    auxiliary_variables: dict[str, str] = {}
     for index, key in enumerate(auxiliary_keys):
         spec = specs.get(key)
         if spec is None:
             raise ExecutorError(f"Auxiliary key {key!r} has no invocation parameter type")
         spec = type_spec(spec, key)
+        variable = f"openoj_aux_{index}"
         convert_lines.append(
-            f"        {_cpp_type(spec)} openoj_aux_{index} = {_convert(spec, f'openoj_value_{len(construct_keys) + index}')};"
+            f"        {_cpp_type(spec)} {variable} = {_convert(spec, f'openoj_value_{len(construct_keys) + index}')};"
         )
-        auxiliary_args.append(f"openoj_aux_{index}")
+        auxiliary_variables[key] = variable
+        capacity_sources[key] = f"static_cast<long long>({variable})"
+
+    buffer_variables: dict[int, str] = {}
+    buffer_elements: dict[int, str] = {}
+    for slot, capacity_key in buffer_slots.items():
+        capacity = capacity_sources.get(capacity_key)
+        if capacity is None:
+            raise ExecutorError(f"out_buffer capacity_from {capacity_key!r} is not a case key")
+        element = _cpp_buffer_element(specs.get(parameters[slot].get("name")))
+        variable = f"openoj_buffer_{slot}"
+        convert_lines.append(
+            f"        std::vector<{element}> {variable}(static_cast<size_t>(std::max({capacity}, 0LL)));"
+        )
+        buffer_variables[slot] = variable
+        buffer_elements[slot] = element
+
+    parameter_arguments = []
+    buffer_slot = None
+    for index, parameter in enumerate(parameters):
+        if index in buffer_variables:
+            if buffer_slot is None:
+                buffer_slot = index
+            parameter_arguments.append(buffer_variables[index])
+        else:
+            if not isinstance(parameter, dict):
+                raise ExecutorError("Every interactive parameter must be an object")
+            parameter_arguments.append(auxiliary_variables[parameter.get("name")])
 
     oracle_args = ", ".join(
         [f"openoj_value_{index}" for index in range(len(construct_keys))] + ["openoj_budget"]
     )
-    call_arguments = ", ".join(["openoj_oracle", *auxiliary_args])
+    call_arguments = ", ".join(["openoj_oracle", *parameter_arguments])
     # A {"kind": "void"} return_type is a declared void, not a value: the
     # oracle's verdict() judges those (same rule as the python/java sides).
     if invocation.get("return_type") and invocation["return_type"].get("kind") != "void":
-        call_block = (
-            f"auto openoj_actual = openoj_solution.{method}({call_arguments});\n"
-            '        openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"completed\\",\\"actual\\":" + openoj_json(openoj_actual) + "}" + "");'
-        )
+        if buffer_slot is None:
+            call_block = (
+                f"auto openoj_actual = openoj_solution.{method}({call_arguments});\n"
+                '        openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"completed\\",\\"actual\\":" + openoj_json(openoj_actual) + "}" + "");'
+            )
+        else:
+            buffer = buffer_variables[buffer_slot]
+            call_block = (
+                f"auto openoj_actual = openoj_solution.{method}({call_arguments});\n"
+                "        long long openoj_count = static_cast<long long>(openoj_actual);\n"
+                f"        long long openoj_written = std::max(0LL, std::min(openoj_count, static_cast<long long>({buffer}.size())));\n"
+                '        std::string openoj_entries = "[";\n'
+                "        for (long long openoj_index = 0; openoj_index < openoj_written; ++openoj_index) {\n"
+                "            if (openoj_index != 0) openoj_entries += \",\";\n"
+                f"            openoj_entries += {_cpp_entry_json(buffer_elements[buffer_slot], f'{buffer}[openoj_index]')};\n"
+                "        }\n"
+                '        openoj_entries += "]";\n'
+                '        openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"completed\\",\\"actual\\":[" + openoj_json(openoj_count) + "," + openoj_entries + "]}");'
+            )
     else:
         call_block = (
             f"openoj_solution.{method}({call_arguments});\n"

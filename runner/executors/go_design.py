@@ -296,6 +296,17 @@ def _convert(spec: dict[str, Any], source: str) -> str:
         return f'(func() string {{ v, ok := {source}.(string); if !ok {{ panic("Expected a string") }}; return v }})()'
     if kind == "binary_tree":
         return f"openojDesignTree({source})"
+    if kind == "nested":
+        # Self-recursive closure over the JSON shape. The assembled common
+        # NestedInteger is pointer-based with unexported fields; this code
+        # is concatenated into the same package, so an integer hold is
+        # built directly as NestedInteger{integer: &held}.
+        return (
+            f'(func() NestedInteger {{ var openojBuild func(v any) NestedInteger; openojBuild = func(v any) NestedInteger {{ '
+            f'switch t := v.(type) {{ case int64: held := int(t); return NestedInteger{{integer: &held}}; case []any: '
+            f'var node NestedInteger; for _, item := range t {{ node.Add(openojBuild(item)) }}; return node; '
+            f'default: panic("Expected a nested list") }} }}; return openojBuild({source}) }})()'
+        )
     if kind == "array":
         inner = _convert(spec["items"], "item")
         return (

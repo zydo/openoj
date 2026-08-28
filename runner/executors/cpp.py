@@ -8,6 +8,7 @@ from .typed import (
     cpp_type,
     encode_case,
     function_signature,
+    provided_node_class,
     struct_item_spec,
     uses_struct_kinds,
 )
@@ -45,16 +46,37 @@ class CppExecutor(CompiledExecutor):
 
         structs = uses_struct_kinds(invocation)
         item_spec = struct_item_spec(invocation)
+        # Graph and random-list nodes come from the problem's provided/
+        # sources (the class name rides on value_type.class); pre-assembly
+        # jobs fall back to the generic Node emission below.
+        graph_class = provided_node_class(invocation, "graph")
+        random_class = provided_node_class(invocation, "random_list")
+        # Struct classes arrive as source (the bank's common library or the
+        # problem's provided/); pre-assembly jobs fall back to generated
+        # equivalents below.
+        struct_specs: dict[str, dict[str, Any]] = {}
+
+        def collect_structs(spec: Any) -> None:
+            if not isinstance(spec, dict):
+                return
+            if spec.get("kind") == "struct":
+                struct_specs.setdefault(spec["class"], spec)
+            elif spec.get("kind") == "array":
+                collect_structs(spec.get("items"))
+
+        for spec in parameters:
+            collect_structs(spec)
         # With the assembled common library the types arrive as source;
         # without it (pre-assembly jobs) the per-invocation emission below
         # still applies.
         assembly_decls = "".join(
             content
             for part in ("common", "provided")
-            for _, content in sorted((assembly or {}).get(part, {}).items())
+            for name, content in sorted((assembly or {}).get(part, {}).items())
+            if name.endswith((".hpp", ".h", ".cpp"))
         )
         struct_decls = ""
-        if not assembly_decls and "list" in structs:
+        if not assembly_decls and ("list" in structs or "circular_list" in structs):
             struct_decls += (
                 "struct ListNode { "
                 f"{cpp_type(item_spec)} val; ListNode *next; "
@@ -66,9 +88,106 @@ class CppExecutor(CompiledExecutor):
                 f"{cpp_type(item_spec)} val; TreeNode *left; TreeNode *right; "
                 f"explicit TreeNode({cpp_type(item_spec)} x) : val(x), left(nullptr), right(nullptr) {{}} }};\n"
             )
+        if not assembly_decls and "nary_tree" in structs:
+            struct_decls += (
+                "struct Node { "
+                f"{cpp_type(item_spec)} val; std::vector<Node*> children; "
+                f"explicit Node({cpp_type(item_spec)} x) : val(x) {{}} "
+                f"Node({cpp_type(item_spec)} x, std::vector<Node*> c) : val(x), children(std::move(c)) {{}} }};\n"
+            )
+        if not assembly_decls and "quad_tree" in structs:
+            struct_decls += (
+                "struct QuadNode { bool val; bool isLeaf; "
+                "QuadNode *topLeft, *topRight, *bottomLeft, *bottomRight; "
+                "QuadNode(bool v, bool l) : val(v), isLeaf(l), topLeft(nullptr), topRight(nullptr), "
+                "bottomLeft(nullptr), bottomRight(nullptr) {} "
+                "QuadNode(bool v, bool l, QuadNode* tl, QuadNode* tr, QuadNode* bl, QuadNode* br) : "
+                "val(v), isLeaf(l), topLeft(tl), topRight(tr), bottomLeft(bl), bottomRight(br) {} };\n"
+            )
+        if not assembly_decls and "nested" in structs:
+            struct_decls += (
+                "class NestedInteger { "
+                "bool held; long long integer; std::vector<NestedInteger> list; "
+                "public: NestedInteger() : held(false), integer(0) {} "
+                "NestedInteger(long long value) : held(true), integer(value) {} "
+                "bool isInteger() const { return held; } "
+                "long long getInteger() const { return integer; } "
+                "void setInteger(long long value) { held = true; integer = value; list.clear(); } "
+                "void add(const NestedInteger& item) { held = false; list.push_back(item); } "
+                "const std::vector<NestedInteger>& getList() const { return list; } };\n"
+            )
+        if not assembly_decls and "next_tree" in structs:
+            struct_decls += (
+                "struct NodeWithNext { "
+                f"{cpp_type(item_spec)} val; NodeWithNext *left, *right, *next, *parent; "
+                f"explicit NodeWithNext({cpp_type(item_spec)} x) : val(x), left(nullptr), right(nullptr), "
+                "next(nullptr), parent(nullptr) {} };\n"
+            )
+        if not assembly_decls and "doubly_circular" in structs:
+            # Same shape as the next-connected node (left is prev there,
+            # right is next; here left is prev and right is next).
+            struct_decls += (
+                "struct NodeWithNext { "
+                f"{cpp_type(item_spec)} val; NodeWithNext *left, *right, *next, *parent; "
+                f"explicit NodeWithNext({cpp_type(item_spec)} x) : val(x), left(nullptr), right(nullptr), "
+                "next(nullptr), parent(nullptr) {} };\n"
+            )
+        if not assembly_decls and "multi_list" in structs:
+            struct_decls += (
+                "struct MultiListNode { "
+                f"{cpp_type(item_spec)} val; MultiListNode *prev, *next, *child; "
+                f"explicit MultiListNode({cpp_type(item_spec)} x) : val(x), prev(nullptr), next(nullptr), "
+                "child(nullptr) {} };\n"
+            )
+        if not assembly_decls and "graph" in structs:
+            struct_decls += (
+                "struct Node { "
+                f"{cpp_type(item_spec)} val; std::vector<Node*> neighbors; "
+                f"Node() : val(0), neighbors() {{}} "
+                f"explicit Node({cpp_type(item_spec)} x) : val(x), neighbors() {{}} "
+                f"Node({cpp_type(item_spec)} x, std::vector<Node*> n) : val(x), neighbors(std::move(n)) {{}} }};\n"
+            ).replace("Node", graph_class)
+        if not assembly_decls and "random_list" in structs:
+            struct_decls += (
+                "struct Node { "
+                f"{cpp_type(item_spec)} val; Node *next, *random; "
+                f"Node() : val(0), next(nullptr), random(nullptr) {{}} "
+                f"explicit Node({cpp_type(item_spec)} x) : val(x), next(nullptr), random(nullptr) {{}} "
+                f"Node({cpp_type(item_spec)} x, Node* n, Node* r) : val(x), next(n), random(r) {{}} }};\n"
+            ).replace("Node", random_class)
+        if not assembly_decls and struct_specs:
+            for name, spec in struct_specs.items():
+                fields = spec.get("fields") or []
+                members = " ".join(
+                    f"{cpp_type(field['value_type'])} {field['name']};"
+                    for field in fields
+                )
+                ctor_params = ", ".join(
+                    f"{cpp_type(field['value_type'])} {field['name']}_"
+                    for field in fields
+                )
+                ctor_init = ", ".join(
+                    f"{field['name']}({field['name']}_)" for field in fields
+                )
+                struct_decls += (
+                    f"struct {name} {{ "
+                    f"{members} "
+                    f"{name}() = default; "
+                    f"{name}({ctor_params}) : {ctor_init} {{}} }};\n"
+                )
 
         struct_codecs = ""
+        # The registry of input-side node pointers backs the clone/identity
+        # checks for graph, random_list, and alias_list returns: the judge
+        # compares row data, so only the wrapper can catch a solution that
+        # returns the input structure itself.
+        struct_codecs += "static std::vector<const void*> openoj_input_nodes;\n"
         if "list" in structs:
+            struct_codecs += (
+                "static void openojCollectInput(const ListNode* head) {\n"
+                "    for (const ListNode* node = head; node; node = node->next) openoj_input_nodes.push_back(node);\n"
+                "}\n"
+            )
             struct_codecs += textwrap.dedent(
                 f"""
                 template <> struct OpenOJDecoder<ListNode*> {{
@@ -96,6 +215,523 @@ class CppExecutor(CompiledExecutor):
                 }}
                 """
             )
+        if "nary_tree" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                template <> struct OpenOJDecoder<Node*> {{
+                    static Node* read(OpenOJReader& reader) {{
+                        uint32_t length = reader.u32();
+                        std::vector<std::pair<bool, {cpp_type(item_spec)}>> slots;
+                        slots.reserve(length);
+                        for (uint32_t index = 0; index < length; ++index) {{
+                            if (reader.byte() == 1) slots.emplace_back(true, OpenOJDecoder<{cpp_type(item_spec)}>::read(reader));
+                            else slots.emplace_back(false, {cpp_type(item_spec)}());
+                        }}
+                        if (length == 0 || !slots[0].first) return nullptr;
+                        Node* root = new Node(slots[0].second);
+                        std::deque<Node*> queue{{root}};
+                        // Display wire: slot 1 closes the root group, then
+                        // every node's children run until that node's own
+                        // separator slot. Tolerate the marker's absence for
+                        // hand-written inputs.
+                        size_t index = (length > 1 && slots[1].first) ? 1 : 2;
+                        while (!queue.empty() && index < slots.size()) {{
+                            Node* node = queue.front();
+                            queue.pop_front();
+                            while (index < slots.size() && slots[index].first) {{
+                                Node* child = new Node(slots[index].second);
+                                node->children.push_back(child);
+                                queue.push_back(child);
+                                ++index;
+                            }}
+                            if (index < slots.size()) ++index;  // group separator
+                        }}
+                        return root;
+                    }}
+                }};
+                // Display wire: root value, the marker closing the root
+                // group, then each node's children followed by its own
+                // marker; trailing markers are trimmed.
+                static std::string openoj_json(const Node* root) {{
+                    if (root == nullptr) return "[]";
+                    std::string output = "[" + openoj_json(root->val) + ",null";
+                    std::deque<const Node*> queue{{root}};
+                    while (!queue.empty()) {{
+                        const Node* node = queue.front();
+                        queue.pop_front();
+                        for (const Node* child : node->children) {{
+                            output += ',' + openoj_json(child->val);
+                            queue.push_back(child);
+                        }}
+                        output += ",null";
+                    }}
+                    while (output.size() > 5 && output.compare(output.size() - 5, 5, ",null") == 0) {{
+                        output.erase(output.size() - 5);
+                    }}
+                    return output + "]";
+                }}
+                static std::string openoj_result(Node* root) {{ return openoj_json(root); }}
+                """
+            )
+        if "quad_tree" in structs:
+            struct_codecs += textwrap.dedent(
+                """
+                template <> struct OpenOJDecoder<QuadNode*> {
+                    static QuadNode* read(OpenOJReader& reader) {
+                        if (reader.byte() == 0) return nullptr;
+                        bool isLeaf = reader.byte() == 1;
+                        bool val = reader.byte() == 1;
+                        QuadNode* node = new QuadNode(val, isLeaf);
+                        if (!isLeaf) {
+                            node->topLeft = read(reader);
+                            node->topRight = read(reader);
+                            node->bottomLeft = read(reader);
+                            node->bottomRight = read(reader);
+                        }
+                        return node;
+                    }
+                };
+                // LC display wire: a flat preorder of [isLeaf, val] pairs
+                // inside one enclosing array; a non-leaf's val normalizes
+                // to 0 on both sides.
+                static void openojAppendQuad(std::string& output, const QuadNode* node) {
+                    if (node == nullptr) { output += "null"; return; }
+                    if (node->isLeaf) { output += node->val ? "[1,1]" : "[1,0]"; return; }
+                    output += "[0,0]";
+                    const QuadNode* sides[4] = {node->topLeft, node->topRight, node->bottomLeft, node->bottomRight};
+                    for (const QuadNode* side : sides) {
+                        output += ',';
+                        openojAppendQuad(output, side);
+                    }
+                }
+                static std::string openoj_result(QuadNode* node) {
+                    if (node == nullptr) return "null";
+                    std::string output = "[";
+                    openojAppendQuad(output, node);
+                    return output + "]";
+                }
+                """
+            )
+        if "nested" in structs:
+            struct_codecs += textwrap.dedent(
+                """
+                template <> struct OpenOJDecoder<NestedInteger> {
+                    static NestedInteger read(OpenOJReader& reader) {
+                        unsigned char tag = reader.byte();
+                        if (tag == 1) return NestedInteger(static_cast<long long>(static_cast<int32_t>(reader.u32())));
+                        if (tag != 2) throw std::runtime_error("Invalid nested tag");
+                        uint32_t length = reader.u32();
+                        NestedInteger value;
+                        for (uint32_t index = 0; index < length; ++index) value.add(read(reader));
+                        return value;
+                    }
+                };
+                static std::string openoj_json(const NestedInteger& value) {
+                    if (value.isInteger()) return std::to_string(value.getInteger());
+                    std::string output = "[";
+                    const auto& list = value.getList();
+                    for (size_t index = 0; index < list.size(); ++index) {
+                        if (index) output += ',';
+                        output += openoj_json(list[index]);
+                    }
+                    return output + "]";
+                }
+                """
+            )
+        if "next_tree" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                template <> struct OpenOJDecoder<NodeWithNext*> {{
+                    static NodeWithNext* read(OpenOJReader& reader) {{
+                        uint32_t length = reader.u32();
+                        std::vector<std::pair<bool, {cpp_type(item_spec)}>> slots;
+                        slots.reserve(length);
+                        for (uint32_t index = 0; index < length; ++index) {{
+                            if (reader.byte() == 1) slots.emplace_back(true, OpenOJDecoder<{cpp_type(item_spec)}>::read(reader));
+                            else slots.emplace_back(false, {cpp_type(item_spec)}());
+                        }}
+                        if (length == 0 || !slots[0].first) return nullptr;
+                        NodeWithNext* root = new NodeWithNext(slots[0].second);
+                        std::deque<NodeWithNext*> queue{{root}};
+                        size_t index = 1;
+                        while (!queue.empty() && index < slots.size()) {{
+                            NodeWithNext* node = queue.front();
+                            queue.pop_front();
+                            // every dequeued node consumes two slots — a
+                            // null child still takes its slot (binary_tree
+                            // decoder convention) — and each child's
+                            // parent back-link is wired (the LC 510 wire)
+                            if (index < slots.size()) {{
+                                if (slots[index].first) {{
+                                    node->left = new NodeWithNext(slots[index].second);
+                                    node->left->parent = node;
+                                    queue.push_back(node->left);
+                                }}
+                                ++index;
+                            }}
+                            if (index < slots.size()) {{
+                                if (slots[index].first) {{
+                                    node->right = new NodeWithNext(slots[index].second);
+                                    node->right->parent = node;
+                                    queue.push_back(node->right);
+                                }}
+                                ++index;
+                            }}
+                        }}
+                        return root;
+                    }}
+                }};
+                // LC display wire: values with a null marker between
+                // adjacent levels, trailing markers trimmed. Each level is
+                // read through the solution-populated next chain; the next
+                // level starts at the first child found anywhere in this
+                // level (left or right — the level's first node need not
+                // have a left child).
+                static std::string openoj_result(NodeWithNext* root) {{
+                    std::vector<std::string> parts;
+                    for (const NodeWithNext* level = root; level; ) {{
+                        const NodeWithNext* nextLevel = nullptr;
+                        for (const NodeWithNext* node = level; node; node = node->next) {{
+                            parts.push_back(openoj_json(node->val));
+                            if (nextLevel == nullptr) {{
+                                if (node->left != nullptr) nextLevel = node->left;
+                                else if (node->right != nullptr) nextLevel = node->right;
+                            }}
+                        }}
+                        parts.push_back("null");
+                        level = nextLevel;
+                    }}
+                    while (!parts.empty() && parts.back() == "null") parts.pop_back();
+                    std::string output = "[";
+                    for (size_t index = 0; index < parts.size(); ++index) {{
+                        if (index) output += ',';
+                        output += parts[index];
+                    }}
+                    return output + "]";
+                }}
+                """
+            )
+        if "circular_list" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                // A circular wire carries the ring's values; the decoder
+                // closes the ring (tail->next = head) exactly like the
+                // harness languages, so solutions see a genuine ring.
+                // Reuses the ListNode decoder slot — a bundle uses one
+                // list kind.
+                template <> struct OpenOJDecoder<ListNode*> {{
+                    static ListNode* read(OpenOJReader& reader) {{
+                        uint32_t length = reader.u32();
+                        if (length == 0) return nullptr;
+                        ListNode* head = new ListNode(OpenOJDecoder<{cpp_type(item_spec)}>::read(reader));
+                        ListNode* tail = head;
+                        for (uint32_t index = 1; index < length; ++index) {{
+                            tail->next = new ListNode(OpenOJDecoder<{cpp_type(item_spec)}>::read(reader));
+                            tail = tail->next;
+                        }}
+                        tail->next = head;
+                        return head;
+                    }}
+                }};
+                static std::string openoj_result(ListNode* head) {{
+                    if (head == nullptr) return "[]";
+                    std::string output = "[";
+                    const ListNode* node = head;
+                    for (size_t bound = 0; bound < (1u << 20); ++bound) {{
+                        if (node != head) output += ',';
+                        output += openoj_json(node->val);
+                        node = node->next;
+                        if (node == head) return output + "]";
+                        if (node == nullptr) throw std::runtime_error("Circular list is not closed");
+                    }}
+                    throw std::runtime_error("Circular list exceeds the walk bound");
+                }}
+                // Array-of-rings returns (LC 2674): an exact non-template
+                // match, so the vector element serializes through the ring
+                // walk above instead of decaying openoj_json(bool).
+                static std::string openoj_result(const std::vector<ListNode*>& heads) {{
+                    std::string output = "[";
+                    for (size_t index = 0; index < heads.size(); ++index) {{
+                        if (index) output += ',';
+                        output += openoj_result(heads[index]);
+                    }}
+                    return output + "]";
+                }}
+                """
+            )
+        if "doubly_circular" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                // LC 426: left is prev, right is next; read the ring open
+                // and verify every back-link on the way out. Reuses the
+                // NodeWithNext decoder slot — a bundle uses one such kind.
+                template <> struct OpenOJDecoder<NodeWithNext*> {{
+                    static NodeWithNext* read(OpenOJReader& reader) {{
+                        uint32_t length = reader.u32();
+                        if (length == 0) return nullptr;
+                        NodeWithNext* head = new NodeWithNext(OpenOJDecoder<{cpp_type(item_spec)}>::read(reader));
+                        NodeWithNext* tail = head;
+                        for (uint32_t index = 1; index < length; ++index) {{
+                            tail->right = new NodeWithNext(OpenOJDecoder<{cpp_type(item_spec)}>::read(reader));
+                            tail->right->left = tail;
+                            tail = tail->right;
+                        }}
+                        return head;
+                    }}
+                }};
+                static std::string openoj_result(NodeWithNext* head) {{
+                    if (head == nullptr) return "[]";
+                    std::string output = "[";
+                    const NodeWithNext* previous = nullptr;
+                    const NodeWithNext* node = head;
+                    for (size_t bound = 0; bound < (1u << 20); ++bound) {{
+                        // head's own back-link is the tail, verified when
+                        // the walk closes below.
+                        if (previous != nullptr && node->left != previous) {{
+                            throw std::runtime_error("Doubly linked list is not properly linked");
+                        }}
+                        output += openoj_json(node->val);
+                        previous = node;
+                        node = node->right;
+                        if (node == head) {{
+                            if (head->left != previous) throw std::runtime_error("Doubly linked list is not properly linked");
+                            return output + "]";
+                        }}
+                        if (node == nullptr) throw std::runtime_error("Doubly linked list is not closed");
+                        output += ',';
+                    }}
+                    throw std::runtime_error("Doubly linked list exceeds the walk bound");
+                }}
+                """
+            )
+        if "multi_list" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                template <> struct OpenOJDecoder<MultiListNode*> {{
+                    static MultiListNode* read(OpenOJReader& reader) {{ return readChain(reader); }}
+                    // One chain: u32 n, then per node the value, a child
+                    // flag, and the flagged child's own chain. Every chain
+                    // (top and nested) gets its prev links set.
+                    static MultiListNode* readChain(OpenOJReader& reader) {{
+                        uint32_t length = reader.u32();
+                        MultiListNode* head = nullptr;
+                        MultiListNode* tail = nullptr;
+                        for (uint32_t index = 0; index < length; ++index) {{
+                            MultiListNode* node = new MultiListNode(static_cast<int32_t>(reader.u32()));
+                            if (tail != nullptr) {{
+                                tail->next = node;
+                                node->prev = tail;
+                            }} else head = node;
+                            tail = node;
+                            if (reader.byte() == 1) node->child = readChain(reader);
+                        }}
+                        return head;
+                    }}
+                }};
+                // A flattened result must be a clean doubly chain: every
+                // prev back-link set, no child left.
+                static std::string openoj_result(MultiListNode* head) {{
+                    std::string output = "[";
+                    const MultiListNode* node = head;
+                    const MultiListNode* previous = nullptr;
+                    for (size_t bound = 0; node != nullptr && bound < (1u << 20); ++bound) {{
+                        if (node->prev != previous || node->child != nullptr) {{
+                            throw std::runtime_error("Flattened list is not properly linked");
+                        }}
+                        if (node != head) output += ',';
+                        output += openoj_json(node->val);
+                        previous = node;
+                        node = node->next;
+                    }}
+                    if (node != nullptr) throw std::runtime_error("Flattened list exceeds the walk bound");
+                    return output + "]";
+                }}
+                """
+            )
+        if "graph" in structs:
+            struct_codecs += textwrap.dedent(
+                """
+                template <> struct OpenOJDecoder<Node*> {
+                    static Node* read(OpenOJReader& reader) {
+                        uint32_t count = reader.u32();
+                        if (count == 0) return nullptr;
+                        std::vector<Node*> nodes;
+                        nodes.reserve(count);
+                        for (uint32_t index = 0; index < count; ++index) {
+                            nodes.push_back(new Node(static_cast<int>(index) + 1));
+                        }
+                        for (uint32_t index = 0; index < count; ++index) {
+                            uint32_t degree = reader.u32();
+                            for (uint32_t neighbor = 0; neighbor < degree; ++neighbor) {
+                                int value = static_cast<int32_t>(reader.u32()) + 1;
+                                if (value < 1 || static_cast<uint32_t>(value) > count) {
+                                    throw std::runtime_error("Graph neighbor is out of range");
+                                }
+                                nodes[index]->neighbors.push_back(nodes[static_cast<size_t>(value) - 1]);
+                            }
+                        }
+                        return nodes[0];
+                    }
+                };
+                static void openojCollectInput(const Node* root) {
+                    if (root == nullptr) return;
+                    std::vector<const Node*> queue{root};
+                    for (size_t index = 0; index < queue.size(); ++index) {
+                        const Node* node = queue[index];
+                        if (std::find(queue.begin(), queue.begin() + index, node) != queue.begin() + index) continue;
+                        openoj_input_nodes.push_back(node);
+                        for (const Node* neighbor : node->neighbors) queue.push_back(neighbor);
+                    }
+                }
+                // Rows ordered by node value; neighbor order is normalized
+                // (sorted) since LC treats adjacency order as irrelevant.
+                static std::string openoj_result(Node* root) {
+                    std::vector<const Node*> visited;
+                    if (root != nullptr) {
+                        std::vector<const Node*> queue{root};
+                        for (size_t index = 0; index < queue.size(); ++index) {
+                            const Node* node = queue[index];
+                            if (std::find(queue.begin(), queue.begin() + index, node) != queue.begin() + index) continue;
+                            visited.push_back(node);
+                            for (const Node* neighbor : node->neighbors) queue.push_back(neighbor);
+                        }
+                    }
+                    for (const Node* node : visited) {
+                        if (std::find(openoj_input_nodes.begin(), openoj_input_nodes.end(), static_cast<const void*>(node)) != openoj_input_nodes.end()) {
+                            throw std::runtime_error("Returned graph shares nodes with the input graph");
+                        }
+                    }
+                    std::sort(visited.begin(), visited.end(), [](const Node* a, const Node* b) { return a->val < b->val; });
+                    std::string output = "[";
+                    for (size_t index = 0; index < visited.size(); ++index) {
+                        if (index) output += ',';
+                        std::vector<long long> neighbors;
+                        for (const Node* neighbor : visited[index]->neighbors) {
+                            neighbors.push_back(static_cast<long long>(neighbor->val));
+                        }
+                        std::sort(neighbors.begin(), neighbors.end());
+                        output += '[';
+                        for (size_t neighbor = 0; neighbor < neighbors.size(); ++neighbor) {
+                            if (neighbor) output += ',';
+                            output += std::to_string(neighbors[neighbor]);
+                        }
+                        output += ']';
+                    }
+                    return output + "]";
+                }
+                """
+            ).replace("Node", graph_class)
+        if "random_list" in structs:
+            struct_codecs += textwrap.dedent(
+                """
+                template <> struct OpenOJDecoder<Node*> {
+                    static Node* read(OpenOJReader& reader) {
+                        uint32_t count = reader.u32();
+                        if (count == 0) return nullptr;
+                        std::vector<Node*> nodes;
+                        std::vector<uint32_t> targets;
+                        nodes.reserve(count);
+                        // Each row carries [val, random] together.
+                        for (uint32_t index = 0; index < count; ++index) {
+                            nodes.push_back(new Node(static_cast<int32_t>(reader.u32())));
+                            targets.push_back(reader.u32());
+                        }
+                        for (uint32_t index = 0; index + 1 < count; ++index) {
+                            nodes[index]->next = nodes[index + 1];
+                        }
+                        for (uint32_t index = 0; index < count; ++index) {
+                            if (targets[index] == 0xFFFFFFFFu) continue;
+                            if (targets[index] >= count) throw std::runtime_error("Random pointer target is out of range");
+                            nodes[index]->random = nodes[targets[index]];
+                        }
+                        return nodes[0];
+                    }
+                };
+                static void openojCollectInput(const Node* head) {
+                    for (const Node* node = head; node; node = node->next) openoj_input_nodes.push_back(node);
+                }
+                static std::string openoj_result(Node* head) {
+                    std::vector<const Node*> nodes;
+                    for (const Node* node = head; node; node = node->next) {
+                        if (std::find(nodes.begin(), nodes.end(), node) != nodes.end()) {
+                            throw std::runtime_error("Random list has a cycle in next");
+                        }
+                        nodes.push_back(node);
+                    }
+                    for (const Node* node : nodes) {
+                        if (std::find(openoj_input_nodes.begin(), openoj_input_nodes.end(), static_cast<const void*>(node)) != openoj_input_nodes.end()) {
+                            throw std::runtime_error("Returned list shares nodes with the input list");
+                        }
+                    }
+                    std::string output = "[";
+                    for (size_t index = 0; index < nodes.size(); ++index) {
+                        if (index) output += ',';
+                        output += '[';
+                        output += openoj_json(nodes[index]->val);
+                        output += ',';
+                        if (nodes[index]->random == nullptr) output += "null";
+                        else {
+                            auto target = std::find(nodes.begin(), nodes.end(), nodes[index]->random);
+                            if (target == nodes.end()) {
+                                throw std::runtime_error("Random pointer leaves the returned list");
+                            }
+                            output += std::to_string(static_cast<long long>(target - nodes.begin()));
+                        }
+                        output += ']';
+                    }
+                    return output + "]";
+                }
+                """
+            ).replace("Node", random_class)
+        if "alias_list" in structs:
+            struct_codecs += textwrap.dedent(
+                """
+                // LC 160: the intersection is by identity — the result
+                // must be a node taken from the input lists, and the wire
+                // is the shared tail's values.
+                static std::string openoj_result(ListNode* node) {
+                    if (node == nullptr) return "[]";
+                    if (std::find(openoj_input_nodes.begin(), openoj_input_nodes.end(), static_cast<const void*>(node)) == openoj_input_nodes.end()) {
+                        throw std::runtime_error("Returned node is not part of the input lists");
+                    }
+                    std::string output = "[";
+                    bool first = true;
+                    for (const ListNode* walk = node; walk; walk = walk->next) {
+                        if (!first) output += ',';
+                        first = false;
+                        output += openoj_json(walk->val);
+                    }
+                    return output + "]";
+                }
+                """
+            )
+        pending_specs = dict(struct_specs)
+        while pending_specs:
+            for name, spec in sorted(pending_specs.items()):
+                fields = spec.get("fields") or []
+                if any(
+                    isinstance(field.get("value_type"), dict)
+                    and field["value_type"].get("kind") == "struct"
+                    and field["value_type"].get("class") in pending_specs
+                    for field in fields
+                ):
+                    continue  # emit referenced structs first
+                reads = ", ".join(
+                    f"OpenOJDecoder<{cpp_type(field['value_type'])}>::read(reader)"
+                    for field in fields
+                )
+                struct_codecs += textwrap.dedent(
+                    f"""
+                    template <> struct OpenOJDecoder<{name}> {{
+                        static {name} read(OpenOJReader& reader) {{
+                            return {name}({reads});
+                        }}
+                    }};
+                    """
+                )
+                del pending_specs[name]
+                break
+
         if "tree" in structs:
             struct_codecs += textwrap.dedent(
                 f"""
@@ -159,9 +795,52 @@ class CppExecutor(CompiledExecutor):
                 """
             )
 
+        # Alias splices need the aliased list's node addresses, and clone
+        # checks need every input node registered — read the parameters with
+        # that bookkeeping inline.
+        alias_sources = sorted(
+            {
+                spec["alias"]
+                for spec in parameters
+                if spec.get("kind") == "alias_list"
+            }
+        )
+
+        def declaration(index: int, spec: dict[str, Any]) -> str:
+            kind = spec.get("kind")
+            if kind == "alias_list":
+                lines = [
+                    f"auto openoj_arg_{index} = [&]() -> ListNode* {{",
+                    "            uint32_t count = openoj_reader.u32();",
+                    "            ListNode* head = nullptr;",
+                    "            ListNode** cursor = &head;",
+                    "            std::vector<ListNode*> prefix;",
+                    "            for (uint32_t step = 0; step < count; ++step) {",
+                    f"                *cursor = new ListNode(OpenOJDecoder<{cpp_type(item_spec)}>::read(openoj_reader));",
+                    "                prefix.push_back(*cursor);",
+                    "                cursor = &((*cursor)->next);",
+                    "            }",
+                    "            uint32_t splice_at = openoj_reader.u32();",
+                    f"            if (splice_at < openoj_arg_{spec['alias']}_nodes.size()) {{",
+                    f"                *cursor = openoj_arg_{spec['alias']}_nodes[splice_at];",
+                    "            }",
+                    "            for (const ListNode* node : prefix) openoj_input_nodes.push_back(node);",
+                    "            return head;",
+                    "        }();",
+                ]
+                return "\n".join(" " * 20 + line for line in lines)
+            lines = [f"auto openoj_arg_{index} = OpenOJDecoder<{cpp_type(spec)}>::read(openoj_reader);"]
+            if kind == "linked_list" and index in alias_sources:
+                lines.append(
+                    f"std::vector<ListNode*> openoj_arg_{index}_nodes;"
+                    f" for (ListNode* node = openoj_arg_{index}; node; node = node->next) openoj_arg_{index}_nodes.push_back(node);"
+                )
+            if kind in {"linked_list", "graph", "random_list"}:
+                lines.append(f"openojCollectInput(openoj_arg_{index});")
+            return "\n".join(" " * 20 + line for line in lines)
+
         declarations = "\n".join(
-            f"        auto openoj_arg_{index} = OpenOJDecoder<{cpp_type(spec)}>::read(openoj_reader);"
-            for index, spec in enumerate(parameters)
+            declaration(index, spec) for index, spec in enumerate(parameters)
         )
         arguments = ", ".join(f"openoj_arg_{index}" for index in range(len(parameters)))
         wrapper = textwrap.dedent(
@@ -280,17 +959,21 @@ class CppExecutor(CompiledExecutor):
                 return output + "]";
             }}
 {struct_codecs}
+            template <typename T> static std::string openoj_result(const T& value) {{
+                return openoj_json(value);
+            }}
+
             int main() {{
                 try {{
                     std::vector<unsigned char> bytes{{
                         std::istreambuf_iterator<char>(std::cin), std::istreambuf_iterator<char>()
                     }};
                     OpenOJReader openoj_reader(std::move(bytes));
-            {declarations}
+{declarations}
                     openoj_reader.finished();
                     {class_name} openoj_solution;
                     auto openoj_actual = openoj_solution.{method}({arguments});
-                    openojEmit("__OPENOJ_RESULT__{{\\\"status\\\":\\\"completed\\\",\\\"actual\\\":\" + openoj_json(openoj_actual) + \"}}\");
+                    openojEmit("__OPENOJ_RESULT__{{\\\"status\\\":\\\"completed\\\",\\\"actual\\\":\" + openoj_result(openoj_actual) + \"}}\");
                 }} catch (const std::exception& error) {{
                     openojEmit("__OPENOJ_RESULT__{{\\\"status\\\":\\\"runtime_error\\\",\\\"error\\\":\" + openoj_json(std::string(error.what())) + \"}}\");
                 }} catch (...) {{

@@ -49,17 +49,62 @@ their legacy hundreds bucket: `problems-extend/<shard>/<id>_<slug>/`.
   in your part's `blocked.md` (CORPUS-FLAGS entry format), refill.
   Check the blocked classes below FIRST.
 
-## Blocked classes (do not spend an agent; evidence in CORPUS-FLAGS.md)
+## Wire classes unblocked by the 2026-08-26 infra wave
 
-1. Pointer-wired nodes (parent/next/child/circular wiring in or out).
-2. n-ary/quad/graph `Node` types (children/neighbors lists, 4-child
-   quads). Edge-list/parent-array graphs ARE fine.
-3. Recursive NestedInteger unions, both directions.
-4. Random-output problems ("return any random ...").
-5. Out-buffer / shared-structure APIs (read4-style buffers, two lists
-   sharing a tail).
+Every class in the old blocked list is now judged end-to-end. The judge
+contracts live in `openoj/docs/CODECS.md` (wire law) and
+`openoj-problems/FORMAT.md` (bundle grammar); executable references for
+every mechanism — judged green across all 7 languages — are the probe
+bundles under `openoj/.localonly/probank/9000-9099/`:
 
-Scan each crawl title/skeleton for these shapes before briefing.
+| Class | Probe (exemplar bundle) |
+|---|---|
+| n-ary tree | `9010_probe-nary` |
+| quad tree | `9011_probe-quad` |
+| NestedInteger in/out | `9012_probe-nested-in`, `9013_probe-nested-out` |
+| parent/next tree | `9014_probe-next` |
+| doubly ring from tree | `9015_probe-doubly` |
+| circular list | `9016_probe-circular` |
+| aliased lists (LC 160) | `9017_probe-alias` |
+| graph / random list (provided class) | `9018_probe-graph`, `9019_probe-random` |
+| struct array input | `9020_probe-struct` |
+| validator-judged output | `9021_probe-validator`, `9022_probe-flip` |
+| interactive oracle + out-buffer | `9024_probe-read4` |
+| LC 430 multi-list | `9026_probe-multilist` |
+
+Per-class laws that most often bite (details in CODECS.md):
+
+- Bundles using any common-v2 node kind declare `"common_version": 2`
+  (everything else in extend stays 1).
+- Go's assembled `NestedInteger` is pointer-based (`GetList()
+  []*NestedInteger`); walk `*NestedInteger` items.
+- A missing list/tree/ring return serializes as `[]`; `alias_list` null
+  return is `[]` too (LC 160's "no intersection"); quad null is `null`.
+- `multi_list` (LC 430) returns must be fully flattened, child spliced
+  immediately after its parent; serialization raises otherwise.
+- `graph` returns normalize (rows in value order, neighbors sorted) and
+  are clone-checked — never return an input node.
+- graph/random_list/struct need per-bundle `provided/<language>/`
+  classes for ALL typed languages (go/ts/js/rust included); rust
+  provided sources use fully-qualified paths, no `use` lines.
+- Any-valid-output problems: name a judge-side validator
+  (`{"mode": "validator", "name": ...}`) from the
+  `api/app/validators.py` registry — validators are judge code, never
+  bundle code. Randomized design methods use `repeat` +
+  `{"mode": "distribution", ...}` instead.
+- Interactive oracles ship in `provided/<language>/` for every offered
+  language; the per-language constructor table (flattened vs wrapped,
+  budget type) is in CODECS.md. Out-buffer params consume no case
+  input; the judged result is `[result, buffer[:result]]`;
+  `capacity_from` names an integer-valued case key (add a dedicated
+  `capacity` key when the natural source is an array, LC 158).
+- Design constructors take the full value-type vocabulary — a `nested`
+  ctor parameter (LC 341) decodes in all 7 languages; array-of-rings
+  returns (LC 2674) declare `return_codec: "circular_list_array"`.
+- Design submissions are plain classes in every language except C++
+  (full class definition, no `Solution;` declaration) and Rust
+  (`pub struct X;` + `impl X`, entrypoints snake-cased) and Go
+  (`type X struct{}` + `NewX` constructor).
 
 ## Brief essentials (one self-contained prompt per agent)
 

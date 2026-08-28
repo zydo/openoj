@@ -85,7 +85,7 @@ def _wrap_go(code: str) -> tuple[str, bool]:
     the package supplied by the executor's wrapper -- and gofmt parses whole
     files only, so without this every Go source fails to format.
     """
-    if _GO_PACKAGE.match(code):
+    if _GO_PACKAGE.search(code):
         return code, False
     return _GO_PREAMBLE + code, True
 

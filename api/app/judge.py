@@ -7,6 +7,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from . import validators
+
 
 QUEUE_DIR = Path(os.environ.get("OPENOJ_QUEUE_DIR", ".queue"))
 RUNNER_TIMEOUT = float(os.environ.get("OPENOJ_RUNNER_TIMEOUT_SECONDS", "20"))
@@ -102,18 +104,25 @@ def _grouped_ok(actual: Any, spec: dict[str, Any]) -> bool:
     return True
 
 
-def _compare(actual: Any, expected: Any, comparison: Any) -> bool:
+def _compare(actual: Any, expected: Any, comparison: Any, case_input: Any = None) -> bool:
     # Design outputs are per-action lists; a statistical action's expected
     # element is a distribution spec compared against the harness frequency
-    # table while every other element stays exact.
+    # table while every other element stays exact. Validator specs accept any
+    # output meeting the named semantic predicate (case input is threaded so
+    # the validator can judge "any valid answer" contracts).
     if isinstance(expected, list) and any(
-        isinstance(element, dict) and element.get("mode") in {"distribution", "any_of", "opaque"}
+        isinstance(element, dict)
+        and element.get("mode") in {"distribution", "any_of", "opaque", "grouped", "validator"}
         for element in expected
     ):
         return (
             isinstance(actual, list)
             and len(actual) == len(expected)
-            and all(_compare(a, e, "exact") for a, e in zip(actual, expected))
+            and all(_compare(a, e, "exact", case_input) for a, e in zip(actual, expected))
+        )
+    if isinstance(expected, dict) and expected.get("mode") == "validator":
+        return validators.validate(
+            expected.get("name"), actual, expected.get("params"), case_input, expected
         )
     if isinstance(expected, dict) and expected.get("mode") == "distribution":
         return _distribution_ok(actual, expected)
@@ -241,7 +250,9 @@ def execute(
     for index, (case, raw) in enumerate(zip(cases, raw_results)):
         visible = index < public_count
         status = raw["status"]
-        passed = status == "completed" and _compare(raw.get("actual"), case["expected"], comparison)
+        passed = status == "completed" and _compare(
+            raw.get("actual"), case["expected"], comparison, case.get("input")
+        )
         result = {
             "index": index,
             "name": case.get("name", f"Case {index + 1}") if visible else f"Hidden case {index - public_count + 1}",

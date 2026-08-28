@@ -29,6 +29,90 @@ class Node:
         self.children = children if children is not None else []
 
 
+class QuadNode:
+    """The LC 427/558 quad-tree node."""
+
+    def __init__(self, val=False, isLeaf=False, topLeft=None, topRight=None,
+                 bottomLeft=None, bottomRight=None):
+        self.val = val
+        self.isLeaf = isLeaf
+        self.topLeft = topLeft
+        self.topRight = topRight
+        self.bottomLeft = bottomLeft
+        self.bottomRight = bottomRight
+
+
+class NestedInteger:
+    """The LC 339/341/364/385 nested-list API: an integer or a list of
+    NestedInteger."""
+
+    def __init__(self, value=None):
+        self._integer = None
+        self._list = []
+        if isinstance(value, int) and not isinstance(value, bool):
+            self.setInteger(value)
+
+    def isInteger(self):
+        return self._integer is not None
+
+    def getInteger(self):
+        return self._integer
+
+    def setInteger(self, value):
+        self._integer = value
+        self._list = []
+
+    def add(self, item):
+        self._integer = None
+        self._list.append(item)
+
+    def getList(self):
+        return self._list
+
+
+class NodeWithNext:
+    """A binary-tree node carrying the LC 116/117 ``next`` wire (with a
+    ``parent`` back-pointer for the LC 510 wire)."""
+
+    def __init__(self, val=0, left=None, right=None, next=None, parent=None):
+        self.val = val
+        self.left = left
+        self.right = right
+        self.next = next
+        self.parent = parent
+
+
+class MultiListNode:
+    """The LC 430 node: a doubly linked list whose nodes may carry a child
+    list."""
+
+    def __init__(self, val=0, prev=None, next=None, child=None):
+        self.val = val
+        self.prev = prev
+        self.next = next
+        self.child = child
+
+
+class GraphNode:
+    """The LC 133 node shape (each graph problem re-declares ``Node`` in its
+    provided/ sources; the harness decodes into this duck-compatible
+    class)."""
+
+    def __init__(self, val=0, neighbors=None):
+        self.val = val
+        self.neighbors = neighbors if neighbors is not None else []
+
+
+class RandomListNode:
+    """The LC 138 node shape (per-problem provided/ re-declares ``Node``;
+    the harness decodes into this duck-compatible class)."""
+
+    def __init__(self, val=0, next=None, random=None):
+        self.val = val
+        self.next = next
+        self.random = random
+
+
 class HtmlParser:
     def __init__(self, url_to_urls):
         self._map = url_to_urls
@@ -126,6 +210,330 @@ def _serialize_nary_tree(root):
     return output
 
 
+def _parse_quad_tree(data):
+    """LC display wire: a flat preorder of [isLeaf, val] pairs."""
+    if data is None:
+        return None
+    if not isinstance(data, list):
+        raise ValueError("quad_tree input must be a display array")
+    cursor = 0
+
+    def parse_node():
+        nonlocal cursor
+        if cursor >= len(data):
+            raise ValueError("quad_tree wire ended without a node")
+        pair = data[cursor]
+        cursor += 1
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise ValueError("quad_tree node must be an [isLeaf, val] pair")
+        node = QuadNode(bool(pair[1]), bool(pair[0]))
+        if not node.isLeaf:
+            node.topLeft = parse_node()
+            node.topRight = parse_node()
+            node.bottomLeft = parse_node()
+            node.bottomRight = parse_node()
+        return node
+
+    root = parse_node()
+    if cursor != len(data):
+        raise ValueError("quad_tree wire has trailing entries")
+    return root
+
+
+def _serialize_quad_tree(node):
+    # A non-leaf's val is the solution's to choose, so both sides normalize
+    # it to 0 — the wire never carries an arbitrary internal val.
+    if node is None:
+        return None
+    if node.isLeaf:
+        return [[1, 1 if node.val else 0]]
+    return [
+        [0, 0],
+        *_serialize_quad_tree(node.topLeft),
+        *_serialize_quad_tree(node.topRight),
+        *_serialize_quad_tree(node.bottomLeft),
+        *_serialize_quad_tree(node.bottomRight),
+    ]
+
+
+def _parse_nested(data):
+    if isinstance(data, int) and not isinstance(data, bool):
+        return NestedInteger(data)
+    node = NestedInteger()
+    for item in data:
+        node.add(_parse_nested(item))
+    return node
+
+
+def _serialize_nested(node):
+    if node.isInteger():
+        return node.getInteger()
+    return [_serialize_nested(item) for item in node.getList()]
+
+
+def _parse_next_tree(data):
+    # Binary-tree level order into NodeWithNext; parents are wired as a
+    # courtesy to the LC 510 wire (116/117 solutions ignore them).
+    if not data:
+        return None
+    root = NodeWithNext(data[0])
+    queue = deque([root])
+    index = 1
+    while queue and index < len(data):
+        node = queue.popleft()
+        if index < len(data) and data[index] is not None:
+            node.left = NodeWithNext(data[index], parent=node)
+            queue.append(node.left)
+        index += 1
+        if index < len(data) and data[index] is not None:
+            node.right = NodeWithNext(data[index], parent=node)
+            queue.append(node.right)
+        index += 1
+    return root
+
+
+def _serialize_next_tree(root):
+    # LC display wire: values with a null marker between adjacent levels,
+    # trailing markers trimmed. Each level is read through the
+    # solution-populated next chain; the next level starts at the first
+    # child found anywhere in this level (left or right — the level's
+    # first node need not have a left child).
+    output = []
+    level = root
+    while level is not None:
+        next_level = None
+        node = level
+        while node is not None:
+            output.append(node.val)
+            if next_level is None:
+                if node.left is not None:
+                    next_level = node.left
+                else:
+                    next_level = node.right
+            node = node.next
+        output.append(None)
+        level = next_level
+    while output and output[-1] is None:
+        output.pop()
+    return output
+
+
+def _parse_circular_list(data):
+    head = _parse_list_node(data)
+    if head is not None:
+        tail = head
+        while tail.next is not None:
+            tail = tail.next
+        tail.next = head
+    return head
+
+
+def _serialize_circular_list(head):
+    if head is None:
+        return []
+    values = [head.val]
+    current = head.next
+    for _ in range(1 << 20):
+        if current is None:
+            raise ValueError("Circular list is not closed")
+        if current is head:
+            return values
+        values.append(current.val)
+        current = current.next
+    raise ValueError("Circular list exceeds the walk bound")
+
+
+def _serialize_doubly_circular(head):
+    # LC 426 wire (left = prev, right = next): read the ring through right
+    # and require every back-link along the way.
+    if head is None:
+        return []
+    values = [head.val]
+    previous = head
+    current = head.right
+    for _ in range(1 << 20):
+        if current is None or current.left is not previous:
+            raise ValueError("Doubly linked list is not properly linked")
+        if current is head:
+            break
+        values.append(current.val)
+        previous = current
+        current = current.right
+    else:
+        raise ValueError("Doubly linked list exceeds the walk bound")
+    if head.left is not previous:
+        raise ValueError("Doubly linked list is not properly linked")
+    return values
+
+
+def _parse_multi_list(value):
+    # A recursive chain object {"values": [...], "children": [null | chain
+    # per slot]}: each child chain hangs off exactly one slot, so the LC 430
+    # multilevel structure is unambiguous.
+    if not isinstance(value, dict) or set(value) != {"values", "children"}:
+        raise ValueError("multi_list input must carry values and children")
+    values, children = value["values"], value["children"]
+    if len(children) != len(values):
+        raise ValueError("multi_list children must match values slot for slot")
+    nodes = []
+    for index, val in enumerate(values):
+        node = MultiListNode(val)
+        child = children[index]
+        if child is not None:
+            node.child = _parse_multi_list(child)
+        nodes.append(node)
+    for left, right in zip(nodes, nodes[1:]):
+        left.next = right
+        right.prev = left
+    return nodes[0] if nodes else None
+
+
+def _serialize_multi_list(head):
+    values = []
+    node = head
+    previous = None
+    for _ in range(1 << 20):
+        if node is None:
+            return values
+        if node.prev is not previous or node.child is not None:
+            raise ValueError("Flattened list is not properly linked")
+        values.append(node.val)
+        previous = node
+        node = node.next
+    raise ValueError("Flattened list exceeds the walk bound")
+
+
+def parse_alias_list(value, head):
+    """Decode a prefix chain whose tail continues at the aliased list's node
+    ``value['splice_at']`` — genuine shared references (the LC 160 wire: the
+    prefix is list B's own part, the splice index is where it meets A)."""
+    if not isinstance(value, dict) or set(value) != {"values", "splice_at"}:
+        raise ValueError("alias_list input must carry values and splice_at")
+    values, splice_at = value["values"], value["splice_at"]
+    if not isinstance(values, list):
+        raise ValueError("alias_list values must be an array")
+    if isinstance(splice_at, bool) or not isinstance(splice_at, int) or splice_at < 0:
+        raise ValueError("alias_list splice_at must be a non-negative integer")
+    node = _parse_list_node(values) if values else None
+    if node is None:
+        return _alias_head(head, splice_at)
+    target = _alias_head(head, splice_at)
+    tail = node
+    while tail.next is not None:
+        tail = tail.next
+    tail.next = target
+    return node
+
+
+def _alias_head(head, splice_at):
+    target = head
+    for _ in range(splice_at):
+        if target is None:
+            raise ValueError("alias_list splice_at is past the aliased list")
+        target = target.next
+    return target
+
+
+def serialize_alias_list(node, head):
+    """The returned node must be a node of the aliased chain (identity); the
+    wire form is the values from it to the end. A null return is the LC 160
+    no-intersection verdict and serializes as an empty list."""
+    if node is None:
+        return []
+    current = head
+    while current is not None:
+        if current is node:
+            return _serialize_list_node(node)
+        current = current.next
+    raise ValueError("Returned node is not part of the aliased list")
+
+
+def _parse_graph(rows):
+    nodes = [GraphNode(index + 1) for index in range(len(rows))]
+    for node, neighbors in zip(nodes, rows):
+        for value in neighbors:
+            if not 1 <= value <= len(nodes):
+                raise ValueError(f"Graph neighbor {value} is out of range")
+            node.neighbors.append(nodes[value - 1])
+    return nodes[0] if nodes else None
+
+
+def serialize_graph(result, input_nodes=()):
+    # BFS from the returned node, rows in val order, neighbor order kept;
+    # a returned node that IS an input node means the graph was not cloned.
+    if result is None:
+        return []
+    visited = []
+    marks = set()
+    queue = [result]
+    while queue:
+        node = queue.pop(0)
+        if id(node) in marks:
+            continue
+        marks.add(id(node))
+        visited.append(node)
+        queue.extend(node.neighbors)
+    visited.sort(key=lambda node: node.val)
+    shared = {id(node) for node in input_nodes}
+    if shared and any(id(node) in shared for node in visited):
+        raise ValueError("Returned graph shares nodes with the input graph")
+    return [[neighbor.val for neighbor in node.neighbors] for node in visited]
+
+
+def _parse_random_list(pairs):
+    nodes = [RandomListNode(pair[0]) for pair in pairs]
+    for node, pair in zip(nodes, pairs):
+        index = pair[1]
+        if index is not None:
+            if not 0 <= index < len(nodes):
+                raise ValueError("Random pointer target is out of range")
+            node.random = nodes[index]
+    for left, right in zip(nodes, nodes[1:]):
+        left.next = right
+    return nodes[0] if nodes else None
+
+
+def serialize_random_list(result, input_nodes=()):
+    nodes = []
+    marks = set()
+    node = result
+    while node is not None:
+        if id(node) in marks:
+            raise ValueError("Random list has a cycle in next")
+        marks.add(id(node))
+        nodes.append(node)
+        node = node.next
+    if any(id(node) in marks for node in input_nodes):
+        raise ValueError("Returned list shares nodes with the input list")
+    index_of = {id(node): index for index, node in enumerate(nodes)}
+    return [[node.val, index_of.get(id(node.random))] for node in nodes]
+
+
+def graph_nodes(head):
+    """Every node reachable from a decoded graph head (the input side of the
+    clone check)."""
+    visited = []
+    marks = set()
+    queue = [head]
+    while queue:
+        node = queue.pop(0)
+        if node is None or id(node) in marks:
+            continue
+        marks.add(id(node))
+        visited.append(node)
+        queue.extend(node.neighbors)
+    return visited
+
+
+def chain_nodes(head):
+    """The nodes of a decoded list chain."""
+    nodes = []
+    while head is not None:
+        nodes.append(head)
+        head = head.next
+    return nodes
+
+
 def decode(value: Any, codec: str) -> Any:
     if codec == "json":
         return value
@@ -139,6 +547,20 @@ def decode(value: Any, codec: str) -> Any:
         return [_parse_tree_node(item) for item in value]
     if codec == "nary_tree":
         return _parse_nary_tree(value)
+    if codec == "quad_tree":
+        return _parse_quad_tree(value)
+    if codec == "nested":
+        return _parse_nested(value)
+    if codec == "next_tree":
+        return _parse_next_tree(value)
+    if codec == "circular_list":
+        return _parse_circular_list(value)
+    if codec == "multi_list":
+        return _parse_multi_list(value)
+    if codec == "graph":
+        return _parse_graph(value)
+    if codec == "random_list":
+        return _parse_random_list(value)
     if codec == "html_parser":
         urls = value["urls"]
         mapping = {url: [] for url in urls}
@@ -161,6 +583,20 @@ def encode(value: Any, codec: str) -> Any:
         return [_serialize_tree_node(item) for item in value]
     if codec == "nary_tree":
         return _serialize_nary_tree(value)
+    if codec == "quad_tree":
+        return _serialize_quad_tree(value)
+    if codec == "nested":
+        return _serialize_nested(value)
+    if codec == "next_tree":
+        return _serialize_next_tree(value)
+    if codec == "circular_list":
+        return _serialize_circular_list(value)
+    if codec == "circular_list_array":
+        return [_serialize_circular_list(item) for item in value]
+    if codec == "doubly_circular":
+        return _serialize_doubly_circular(value)
+    if codec == "multi_list":
+        return _serialize_multi_list(value)
     raise ValueError(f"Unsupported output codec: {codec}")
 
 

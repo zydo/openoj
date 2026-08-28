@@ -5,37 +5,88 @@ from typing import Any
 
 from .base import PreparedProgram
 from .compiled import CompiledExecutor
-from .typed import encode_case, function_signature, struct_item_spec, uses_struct_kinds
+from .typed import (
+    encode_case,
+    function_signature,
+    provided_node_class,
+    struct_item_spec,
+    typescript_type,
+    uses_struct_kinds,
+)
 
 
-def _read_expression(spec: dict[str, Any]) -> str:
+def _read_expression(spec: dict[str, Any], receiver: str = "openojReader") -> str:
     kind = spec["kind"]
     if kind == "integer":
         return (
-            "openojReader.int32()"
+            f"{receiver}.int32()"
             if spec.get("bits", 32) == 32
-            else "openojReader.int64()"
+            else f"{receiver}.int64()"
         )
     if kind == "number":
-        return "openojReader.number()"
+        return f"{receiver}.number()"
     if kind == "boolean":
-        return "openojReader.boolean()"
+        return f"{receiver}.boolean()"
     if kind == "string":
-        return "openojReader.string()"
+        return f"{receiver}.string()"
     if kind == "linked_list":
-        return "openojReader.linkedList()"
+        return f"{receiver}.linkedList()"
     if kind == "binary_tree":
-        return "openojReader.tree()"
-    return f"openojReader.array(() => {_read_expression(spec['items'])})"
+        return f"{receiver}.tree()"
+    if kind == "nary_tree":
+        return f"{receiver}.naryTree()"
+    if kind == "quad_tree":
+        return f"{receiver}.quadTree()"
+    if kind == "nested":
+        return f"{receiver}.nested()"
+    if kind == "next_tree":
+        return f"{receiver}.nextTree()"
+    if kind == "circular_list":
+        return f"{receiver}.circularList()"
+    if kind == "doubly_circular":
+        return f"{receiver}.doublyCircular()"
+    if kind == "multi_list":
+        return f"{receiver}.multiList()"
+    if kind == "graph":
+        return f"{receiver}.graph()"
+    if kind == "random_list":
+        return f"{receiver}.randomList()"
+    if kind == "struct":
+        return f"{receiver}.read{spec['class']}()"
+    return f"{receiver}.array(() => {_read_expression(spec['items'], receiver)})"
+
+
+def _collect_structs(spec: Any, found: dict[str, dict[str, Any]]) -> None:
+    if not isinstance(spec, dict):
+        return
+    if spec.get("kind") == "struct":
+        found.setdefault(spec["class"], spec)
+    elif spec.get("kind") == "array":
+        _collect_structs(spec.get("items"), found)
 
 
 def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
     """Return (prelude classes, reader codecs) for struct kinds."""
     structs = uses_struct_kinds(invocation)
+    # Graph and random_list nodes are the using problem's provided/ class
+    # (LC 133/138 ship their own); the classes and codecs below render
+    # around that name via the placeholders replaced at the end.
+    graph_class = provided_node_class(invocation, "graph")
+    random_class = provided_node_class(invocation, "random_list")
     item_read = "this.int64()" if struct_item_spec(invocation).get("bits", 32) == 64 else "this.int32()"
+    struct_specs: dict[str, dict[str, Any]] = {}
+    for spec in invocation.get("parameters", []):
+        value_type = spec.get("value_type") if isinstance(spec, dict) else None
+        _collect_structs(value_type, struct_specs)
     prelude = ""
-    codecs = ""
-    if "list" in structs:
+    codecs = (
+        "    // Registry of input-side node references backing the clone/identity\n"
+        "    // checks for graph, random_list, and alias_list returns: the judge\n"
+        "    // compares row data, so only the wrapper can catch a solution that\n"
+        "    // returns the input structure itself.\n"
+        "    static inputNodes = new Set<unknown>();\n"
+    )
+    if "list" in structs or "circular_list" in structs:
         prelude += (
             "class ListNode {\n"
             "    val: number;\n"
@@ -43,6 +94,7 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "    constructor(val?: number, next?: ListNode | null) { this.val = val ?? 0; this.next = next ?? null; }\n"
             "}\n\n"
         )
+    if "list" in structs:
         codecs += (
             "    linkedList(): ListNode | null {\n"
             "        if (this.data[this.offset++] === 0) return null;\n"
@@ -59,6 +111,39 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "        const values: number[] = [];\n"
             "        for (let node = head; node; node = node.next) values.push(node.val);\n"
             "        return values;\n"
+            "    }\n"
+            "    static collectList(head: ListNode | null): void {\n"
+            "        for (let node = head; node; node = node.next) OpenOJReader.inputNodes.add(node);\n"
+            "    }\n"
+        )
+    if "circular_list" in structs:
+        codecs += (
+            "    circularList(): ListNode | null {\n"
+            "        // A circular wire carries the ring's values; the decoder\n"
+            "        // closes the ring (tail.next = head) exactly like the\n"
+            "        // harness languages, so solutions always see a real ring.\n"
+            "        const length = this.uint32();\n"
+            "        if (length === 0) return null;\n"
+            "        const head = new ListNode(" + item_read + ");\n"
+            "        let tail: ListNode = head;\n"
+            "        for (let index = 1; index < length; index++) {\n"
+            "            tail.next = new ListNode(" + item_read + ");\n"
+            "            tail = tail.next;\n"
+            "        }\n"
+            "        tail.next = head;\n"
+            "        return head;\n"
+            "    }\n"
+            "    static circularListJSON(head: ListNode | null): number[] {\n"
+            "        if (head === null) return [];\n"
+            "        const values: number[] = [];\n"
+            "        let node: ListNode | null = head;\n"
+            "        for (let bound = 0; bound < (1 << 20); bound++) {\n"
+            "            values.push(node.val);\n"
+            "            node = node.next;\n"
+            "            if (node === head) return values;\n"
+            "            if (node === null) throw new Error(\"Circular list is not closed\");\n"
+            "        }\n"
+            "        throw new Error(\"Circular list exceeds the walk bound\");\n"
             "    }\n"
         )
     if "tree" in structs:
@@ -110,6 +195,447 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "        return values;\n"
             "    }\n"
         )
+    if "nary_tree" in structs:
+        # The DOM lib declares a global `Node`; the module marker at the top
+        # of the assembled file shadows it for the whole compilation unit.
+        prelude += (
+            "class Node {\n"
+            "    val: number;\n"
+            "    children: Node[];\n"
+            "    constructor(val?: number, children?: Node[]) { this.val = val ?? 0; this.children = children ?? []; }\n"
+            "}\n\n"
+        )
+        codecs += (
+            "    naryTree(): Node | null {\n"
+            "        const length = this.uint32();\n"
+            "        const slots: Array<number | null> = [];\n"
+            "        for (let index = 0; index < length; index++) {\n"
+            "            slots.push(this.data[this.offset++] === 1 ? " + item_read + " : null);\n"
+            "        }\n"
+            "        if (length === 0 || slots[0] === null) return null;\n"
+            "        const root = new Node(slots[0]!);\n"
+            "        const queue: Node[] = [root];\n"
+            "        // Display wire: slot 1 closes the root group, then every\n"
+            "        // node's children run until that node's own separator slot.\n"
+            "        // Tolerate the marker's absence for hand-written inputs.\n"
+            "        let index = length > 1 && slots[1] !== null ? 1 : 2;\n"
+            "        while (queue.length > 0 && index < slots.length) {\n"
+            "            const node = queue.shift()!;\n"
+            "            while (index < slots.length && slots[index] !== null) {\n"
+            "                const child = new Node(slots[index]!);\n"
+            "                node.children.push(child);\n"
+            "                queue.push(child);\n"
+            "                index++;\n"
+            "            }\n"
+            "            if (index < slots.length) index++;  // group separator\n"
+            "        }\n"
+            "        return root;\n"
+            "    }\n"
+            "    static naryTreeJSON(root: Node | null): Array<number | null> {\n"
+            "        // Display wire: root value, the marker closing the root\n"
+            "        // group, then each node's children followed by its own\n"
+            "        // marker; trailing markers are trimmed.\n"
+            "        if (root === null) return [];\n"
+            "        const values: Array<number | null> = [root.val, null];\n"
+            "        const queue: Node[] = [root];\n"
+            "        while (queue.length > 0) {\n"
+            "            const node = queue.shift()!;\n"
+            "            for (const child of node.children) {\n"
+            "                values.push(child.val);\n"
+            "                queue.push(child);\n"
+            "            }\n"
+            "            values.push(null);\n"
+            "        }\n"
+            "        while (values.length > 0 && values[values.length - 1] === null) values.pop();\n"
+            "        return values;\n"
+            "    }\n"
+        )
+    if "quad_tree" in structs:
+        prelude += (
+            "class QuadNode {\n"
+            "    val: boolean;\n"
+            "    isLeaf: boolean;\n"
+            "    topLeft: QuadNode | null;\n"
+            "    topRight: QuadNode | null;\n"
+            "    bottomLeft: QuadNode | null;\n"
+            "    bottomRight: QuadNode | null;\n"
+            "    constructor(val?: boolean, isLeaf?: boolean, topLeft?: QuadNode | null, topRight?: QuadNode | null,\n"
+            "                bottomLeft?: QuadNode | null, bottomRight?: QuadNode | null) {\n"
+            "        this.val = val ?? false; this.isLeaf = isLeaf ?? false;\n"
+            "        this.topLeft = topLeft ?? null; this.topRight = topRight ?? null;\n"
+            "        this.bottomLeft = bottomLeft ?? null; this.bottomRight = bottomRight ?? null;\n"
+            "    }\n"
+            "}\n\n"
+        )
+        codecs += (
+            "    quadTree(): QuadNode | null {\n"
+            "        this.need(1);\n"
+            "        if (this.data[this.offset++] === 0) return null;\n"
+            "        this.need(1);\n"
+            "        const isLeaf = this.data[this.offset++] === 1;\n"
+            "        this.need(1);\n"
+            "        const val = this.data[this.offset++] === 1;\n"
+            "        const node = new QuadNode(val, isLeaf);\n"
+            "        if (!isLeaf) {\n"
+            "            node.topLeft = this.quadTree();\n"
+            "            node.topRight = this.quadTree();\n"
+            "            node.bottomLeft = this.quadTree();\n"
+            "            node.bottomRight = this.quadTree();\n"
+            "        }\n"
+            "        return node;\n"
+            "    }\n"
+            "    static quadTreeJSON(node: QuadNode | null): any {\n"
+            "        // LC display wire: one flat preorder list of [isLeaf,\n"
+            "        // val] pairs; a non-leaf's val normalizes to 0.\n"
+            "        if (node === null) return null;\n"
+            "        const rows: any[] = [];\n"
+            "        const walk = (node: QuadNode | null): void => {\n"
+            "            if (node === null) { rows.push(null); return; }\n"
+            "            if (node.isLeaf) { rows.push([1, node.val ? 1 : 0]); return; }\n"
+            "            rows.push([0, 0]);\n"
+            "            walk(node.topLeft);\n"
+            "            walk(node.topRight);\n"
+            "            walk(node.bottomLeft);\n"
+            "            walk(node.bottomRight);\n"
+            "        };\n"
+            "        walk(node);\n"
+            "        return rows;\n"
+            "    }\n"
+        )
+    if "nested" in structs:
+        prelude += (
+            "class NestedInteger {\n"
+            "    private held = false;\n"
+            "    private integer = 0;\n"
+            "    private list: NestedInteger[] = [];\n"
+            "    constructor(value?: number) { if (value !== undefined) { this.held = true; this.integer = value; } }\n"
+            "    isInteger(): boolean { return this.held; }\n"
+            "    getInteger(): number { return this.integer; }\n"
+            "    setInteger(value: number): void { this.held = true; this.integer = value; this.list = []; }\n"
+            "    add(item: NestedInteger): void { this.held = false; this.list.push(item); }\n"
+            "    getList(): NestedInteger[] { return this.list; }\n"
+            "}\n\n"
+        )
+        codecs += (
+            "    nested(): NestedInteger {\n"
+            "        this.need(1);\n"
+            "        const tag = this.data[this.offset++];\n"
+            "        if (tag === 1) return new NestedInteger(this.int32());\n"
+            "        if (tag !== 2) throw new Error(\"Invalid nested tag\");\n"
+            "        const length = this.uint32();\n"
+            "        const value = new NestedInteger();\n"
+            "        for (let index = 0; index < length; index++) value.add(this.nested());\n"
+            "        return value;\n"
+            "    }\n"
+            "    static nestedJSON(value: NestedInteger): any {\n"
+            "        if (value.isInteger()) return value.getInteger();\n"
+            "        return value.getList().map(OpenOJReader.nestedJSON);\n"
+            "    }\n"
+        )
+    if "next_tree" in structs or "doubly_circular" in structs:
+        prelude += (
+            "class NodeWithNext {\n"
+            "    val: number;\n"
+            "    left: NodeWithNext | null;\n"
+            "    right: NodeWithNext | null;\n"
+            "    next: NodeWithNext | null;\n"
+            "    parent: NodeWithNext | null;\n"
+            "    constructor(val?: number, left?: NodeWithNext | null, right?: NodeWithNext | null, next?: NodeWithNext | null) {\n"
+            "        this.val = val ?? 0; this.left = left ?? null; this.right = right ?? null; this.next = next ?? null; this.parent = null;\n"
+            "    }\n"
+            "}\n\n"
+        )
+    if "next_tree" in structs:
+        codecs += (
+            "    nextTree(): NodeWithNext | null {\n"
+            "        const length = this.uint32();\n"
+            "        const slots: Array<number | null> = [];\n"
+            "        for (let index = 0; index < length; index++) {\n"
+            "            slots.push(this.data[this.offset++] === 1 ? " + item_read + " : null);\n"
+            "        }\n"
+            "        if (length === 0 || slots[0] === null) return null;\n"
+            "        const root = new NodeWithNext(slots[0]!);\n"
+            "        const queue: NodeWithNext[] = [root];\n"
+            "        let index = 1;\n"
+            "        while (queue.length > 0 && index < slots.length) {\n"
+            "            const node = queue.shift()!;\n"
+            "            if (index < slots.length) {\n"
+            "                if (slots[index] !== null) { node.left = new NodeWithNext(slots[index]!); node.left.parent = node; queue.push(node.left); }\n"
+            "                index++;\n"
+            "            }\n"
+            "            if (index < slots.length) {\n"
+            "                if (slots[index] !== null) { node.right = new NodeWithNext(slots[index]!); node.right.parent = node; queue.push(node.right); }\n"
+            "                index++;\n"
+            "            }\n"
+            "        }\n"
+            "        return root;\n"
+            "    }\n"
+            "    static nextTreeJSON(root: NodeWithNext | null): Array<number | null> {\n"
+            "        // LC display wire: values with one null marker between\n"
+            "        // adjacent levels; the walk advances to the first child\n"
+            "        // found anywhere in the level (left, else right) so\n"
+            "        // imperfect trees serialize too.\n"
+            "        const values: Array<number | null> = [];\n"
+            "        let level = root;\n"
+            "        while (level !== null) {\n"
+            "            let nextLevel: NodeWithNext | null = null;\n"
+            "            for (let node = level; node; node = node.next) {\n"
+            "                values.push(node.val);\n"
+            "                if (nextLevel === null) {\n"
+            "                    if (node.left) nextLevel = node.left;\n"
+            "                    else if (node.right) nextLevel = node.right;\n"
+            "                }\n"
+            "            }\n"
+            "            values.push(null);\n"
+            "            level = nextLevel;\n"
+            "        }\n"
+            "        while (values.length > 0 && values[values.length - 1] === null) values.pop();\n"
+            "        return values;\n"
+            "    }\n"
+        )
+    if "doubly_circular" in structs:
+        codecs += (
+            "    doublyCircular(): NodeWithNext | null {\n"
+            "        // LC 426: left is prev, right is next; read the ring open\n"
+            "        // and verify every back-link on the way out.\n"
+            "        const length = this.uint32();\n"
+            "        if (length === 0) return null;\n"
+            "        const head = new NodeWithNext(" + item_read + ");\n"
+            "        let tail: NodeWithNext = head;\n"
+            "        for (let index = 1; index < length; index++) {\n"
+            "            tail.right = new NodeWithNext(" + item_read + ");\n"
+            "            tail.right.left = tail;\n"
+            "            tail = tail.right;\n"
+            "        }\n"
+            "        return head;\n"
+            "    }\n"
+            "    static doublyCircularJSON(head: NodeWithNext | null): number[] {\n"
+            "        if (head === null) return [];\n"
+            "        const values: number[] = [];\n"
+            "        let previous: NodeWithNext | null = null;\n"
+            "        let node: NodeWithNext | null = head;\n"
+            "        for (let bound = 0; bound < (1 << 20); bound++) {\n"
+            "            // head's own back-link is the tail, verified when the\n"
+            "            // walk closes below.\n"
+            "            if (previous !== null && node.left !== previous) {\n"
+            "                throw new Error(\"Doubly linked list is not properly linked\");\n"
+            "            }\n"
+            "            values.push(node.val);\n"
+            "            previous = node;\n"
+            "            node = node.right;\n"
+            "            if (node === head) {\n"
+            "                if (head.left !== previous) throw new Error(\"Doubly linked list is not properly linked\");\n"
+            "                return values;\n"
+            "            }\n"
+            "            if (node === null) throw new Error(\"Doubly linked list is not closed\");\n"
+            "        }\n"
+            "        throw new Error(\"Doubly linked list exceeds the walk bound\");\n"
+            "    }\n"
+        )
+    if "multi_list" in structs:
+        prelude += (
+            "class MultiListNode {\n"
+            "    val: number;\n"
+            "    prev: MultiListNode | null;\n"
+            "    next: MultiListNode | null;\n"
+            "    child: MultiListNode | null;\n"
+            "    constructor(val?: number, prev?: MultiListNode | null, next?: MultiListNode | null, child?: MultiListNode | null) {\n"
+            "        this.val = val ?? 0; this.prev = prev ?? null; this.next = next ?? null; this.child = child ?? null;\n"
+            "    }\n"
+            "}\n\n"
+        )
+        codecs += (
+            "    multiList(): MultiListNode | null {\n"
+            "        // One chain: u32 n, then per node the value, a child flag,\n"
+            "        // and the flagged child's own chain. Every chain (top and\n"
+            "        // nested) gets its prev links set.\n"
+            "        const length = this.uint32();\n"
+            "        let head: MultiListNode | null = null;\n"
+            "        let tail: MultiListNode | null = null;\n"
+            "        for (let index = 0; index < length; index++) {\n"
+            "            const node = new MultiListNode(this.int32());\n"
+            "            if (tail !== null) { tail.next = node; node.prev = tail; } else head = node;\n"
+            "            tail = node;\n"
+            "            this.need(1);\n"
+            "            if (this.data[this.offset++] === 1) node.child = this.multiList();\n"
+            "        }\n"
+            "        return head;\n"
+            "    }\n"
+            "    static multiListJSON(head: MultiListNode | null): number[] {\n"
+            "        // A flattened result must be a clean doubly chain: every\n"
+            "        // prev back-link set, no child left.\n"
+            "        const values: number[] = [];\n"
+            "        let previous: MultiListNode | null = null;\n"
+            "        let node: MultiListNode | null = head;\n"
+            "        let bound = 0;\n"
+            "        for (; node !== null && bound < (1 << 20); bound++) {\n"
+            "            if (node.prev !== previous || node.child !== null) {\n"
+            "                throw new Error(\"Flattened list is not properly linked\");\n"
+            "            }\n"
+            "            values.push(node.val);\n"
+            "            previous = node;\n"
+            "            node = node.next;\n"
+            "        }\n"
+            "        if (node !== null) throw new Error(\"Flattened list exceeds the walk bound\");\n"
+            "        return values;\n"
+            "    }\n"
+        )
+    if "graph" in structs:
+        # The class is the using problem's provided/ source (LC 133); the
+        # placeholder becomes the manifest's class name below.
+        prelude += (
+            "class @@GRAPH_CLASS@@ {\n"
+            "    val: number;\n"
+            "    neighbors: @@GRAPH_CLASS@@[];\n"
+            "    constructor(val?: number, neighbors?: @@GRAPH_CLASS@@[]) { this.val = val ?? 0; this.neighbors = neighbors ?? []; }\n"
+            "}\n\n"
+        )
+        codecs += (
+            "    graph(): @@GRAPH_CLASS@@ | null {\n"
+            "        const count = this.uint32();\n"
+            "        if (count === 0) return null;\n"
+            "        const nodes: @@GRAPH_CLASS@@[] = [];\n"
+            "        for (let index = 0; index < count; index++) nodes.push(new @@GRAPH_CLASS@@(index + 1));\n"
+            "        for (let index = 0; index < count; index++) {\n"
+            "            const degree = this.uint32();\n"
+            "            for (let neighbor = 0; neighbor < degree; neighbor++) {\n"
+            "                const value = this.int32() + 1;\n"
+            "                if (value < 1 || value > count) throw new Error(\"Graph neighbor is out of range\");\n"
+            "                nodes[index].neighbors.push(nodes[value - 1]);\n"
+            "            }\n"
+            "        }\n"
+            "        return nodes[0];\n"
+            "    }\n"
+            "    static collectGraph(root: @@GRAPH_CLASS@@ | null): void {\n"
+            "        if (root === null) return;\n"
+            "        const queue: @@GRAPH_CLASS@@[] = [root];\n"
+            "        for (let index = 0; index < queue.length; index++) {\n"
+            "            const node = queue[index];\n"
+            "            if (queue.indexOf(node) !== index) continue;\n"
+            "            OpenOJReader.inputNodes.add(node);\n"
+            "            for (const neighbor of node.neighbors) queue.push(neighbor);\n"
+            "        }\n"
+            "    }\n"
+            "    static graphJSON(root: @@GRAPH_CLASS@@ | null): number[][] {\n"
+            "        // Rows ordered by node value; neighbor order is normalized\n"
+            "        // (sorted) since LC treats adjacency order as irrelevant.\n"
+            "        const visited: @@GRAPH_CLASS@@[] = [];\n"
+            "        if (root !== null) {\n"
+            "            const queue: @@GRAPH_CLASS@@[] = [root];\n"
+            "            for (let index = 0; index < queue.length; index++) {\n"
+            "                const node = queue[index];\n"
+            "                if (queue.indexOf(node) !== index) continue;\n"
+            "                visited.push(node);\n"
+            "                for (const neighbor of node.neighbors) queue.push(neighbor);\n"
+            "            }\n"
+            "        }\n"
+            "        for (const node of visited) {\n"
+            "            if (OpenOJReader.inputNodes.has(node)) {\n"
+            "                throw new Error(\"Returned graph shares nodes with the input graph\");\n"
+            "            }\n"
+            "        }\n"
+            "        visited.sort((a, b) => a.val - b.val);\n"
+            "        return visited.map((node) =>\n"
+            "            node.neighbors.map((neighbor) => neighbor.val).sort((a, b) => a - b));\n"
+            "    }\n"
+        )
+    if "random_list" in structs:
+        prelude += (
+            "class @@RANDOM_CLASS@@ {\n"
+            "    val: number;\n"
+            "    next: @@RANDOM_CLASS@@ | null;\n"
+            "    random: @@RANDOM_CLASS@@ | null;\n"
+            "    constructor(val?: number, next?: @@RANDOM_CLASS@@ | null, random?: @@RANDOM_CLASS@@ | null) {\n"
+            "        this.val = val ?? 0; this.next = next ?? null; this.random = random ?? null;\n"
+            "    }\n"
+            "}\n\n"
+        )
+        codecs += (
+            "    randomList(): @@RANDOM_CLASS@@ | null {\n"
+            "        const count = this.uint32();\n"
+            "        if (count === 0) return null;\n"
+            "        const nodes: @@RANDOM_CLASS@@[] = [];\n"
+            "        const targets: number[] = [];\n"
+            "        // Each row carries [val, random] together.\n"
+            "        for (let index = 0; index < count; index++) {\n"
+            "            nodes.push(new @@RANDOM_CLASS@@(this.int32()));\n"
+            "            targets.push(this.uint32());\n"
+            "        }\n"
+            "        for (let index = 0; index + 1 < count; index++) nodes[index].next = nodes[index + 1];\n"
+            "        for (let index = 0; index < count; index++) {\n"
+            "            if (targets[index] === 0xFFFFFFFF) continue;\n"
+            "            if (targets[index] >= count) throw new Error(\"Random pointer target is out of range\");\n"
+            "            nodes[index].random = nodes[targets[index]];\n"
+            "        }\n"
+            "        return nodes[0];\n"
+            "    }\n"
+            "    static collectRandomList(head: @@RANDOM_CLASS@@ | null): void {\n"
+            "        for (let node = head; node; node = node.next) OpenOJReader.inputNodes.add(node);\n"
+            "    }\n"
+            "    static randomListJSON(head: @@RANDOM_CLASS@@ | null): Array<Array<number | null>> {\n"
+            "        const nodes: @@RANDOM_CLASS@@[] = [];\n"
+            "        for (let node = head; node; node = node.next) {\n"
+            "            if (nodes.indexOf(node) !== -1) throw new Error(\"Random list has a cycle in next\");\n"
+            "            nodes.push(node);\n"
+            "        }\n"
+            "        for (const node of nodes) {\n"
+            "            if (OpenOJReader.inputNodes.has(node)) {\n"
+            "                throw new Error(\"Returned list shares nodes with the input list\");\n"
+            "            }\n"
+            "        }\n"
+            "        return nodes.map((node) => {\n"
+            "            if (node.random === null) return [node.val, null];\n"
+            "            const target = nodes.indexOf(node.random);\n"
+            "            if (target === -1) throw new Error(\"Random pointer leaves the returned list\");\n"
+            "            return [node.val, target];\n"
+            "        });\n"
+            "    }\n"
+        )
+    if "alias_list" in structs:
+        codecs += (
+            "    static aliasListJSON(node: ListNode | null): number[] {\n"
+            "        // LC 160: the intersection is by identity — the result must\n"
+            "        // be a node taken from the input lists, and the wire is the\n"
+            "        // shared tail's values.\n"
+            "        if (node === null) return [];\n"
+            "        if (!OpenOJReader.inputNodes.has(node)) {\n"
+            "            throw new Error(\"Returned node is not part of the input lists\");\n"
+            "        }\n"
+            "        const values: number[] = [];\n"
+            "        for (let walk = node; walk; walk = walk.next) values.push(walk.val);\n"
+            "        return values;\n"
+            "    }\n"
+        )
+    for name, spec in sorted(struct_specs.items()):
+        # Struct classes are the using problem's provided/ source; under
+        # assembly the bank supplies them and this fallback is stripped
+        # with the rest of the prelude classes.
+        fields = spec.get("fields") or []
+        members = "\n".join(
+            f"    {field['name']}: {typescript_type(field['value_type'])};"
+            for field in fields
+        )
+        params = ", ".join(
+            f"{field['name']}: {typescript_type(field['value_type'])}"
+            for field in fields
+        )
+        assignments = " ".join(
+            f"this.{field['name']} = {field['name']};" for field in fields
+        )
+        prelude += (
+            f"class {name} {{\n"
+            f"{members}\n"
+            f"    constructor({params}) {{ {assignments} }}\n"
+            "}\n\n"
+        )
+        reads = ", ".join(
+            _read_expression(field["value_type"], "this") for field in fields
+        )
+        codecs += (
+            f"    read{name}(): {name} {{\n"
+            f"        return new {name}({reads});\n"
+            "    }\n"
+        )
     return_type = invocation.get("return_type", {})
     if return_type.get("kind") == "array":
         item_kind = (return_type.get("items") or {}).get("kind")
@@ -125,21 +651,52 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
                 "    return values.map((value) => OpenOJReader.treeNodeJSON(value));\n"
                 "}\n\n"
             )
+        if item_kind == "circular_list" and "circular_list" in structs:
+            prelude += (
+                "function openojCircularArrayJSON(values: Array<ListNode | null>): Array<Array<number>> {\n"
+                "    return values.map((value) => OpenOJReader.circularListJSON(value));\n"
+                "}\n\n"
+            )
+    prelude = prelude.replace("@@GRAPH_CLASS@@", graph_class).replace("@@RANDOM_CLASS@@", random_class)
+    codecs = codecs.replace("@@GRAPH_CLASS@@", graph_class).replace("@@RANDOM_CLASS@@", random_class)
     return prelude, codecs
 
 
 def _result_wrapper(invocation: dict[str, Any]) -> str:
     return_type = invocation.get("return_type", {})
-    if return_type.get("kind") == "linked_list":
+    kind = return_type.get("kind")
+    if kind == "linked_list":
         return "OpenOJReader.listNodeJSON"
-    if return_type.get("kind") == "binary_tree":
+    if kind == "binary_tree":
         return "OpenOJReader.treeNodeJSON"
-    if return_type.get("kind") == "array":
+    if kind == "nary_tree":
+        return "OpenOJReader.naryTreeJSON"
+    if kind == "quad_tree":
+        return "OpenOJReader.quadTreeJSON"
+    if kind == "nested":
+        return "OpenOJReader.nestedJSON"
+    if kind == "next_tree":
+        return "OpenOJReader.nextTreeJSON"
+    if kind == "circular_list":
+        return "OpenOJReader.circularListJSON"
+    if kind == "doubly_circular":
+        return "OpenOJReader.doublyCircularJSON"
+    if kind == "multi_list":
+        return "OpenOJReader.multiListJSON"
+    if kind == "alias_list":
+        return "OpenOJReader.aliasListJSON"
+    if kind == "graph":
+        return "OpenOJReader.graphJSON"
+    if kind == "random_list":
+        return "OpenOJReader.randomListJSON"
+    if kind == "array":
         item_kind = (return_type.get("items") or {}).get("kind")
         if item_kind == "linked_list":
             return "openojListNodeArrayJSON"
         if item_kind == "binary_tree":
             return "openojTreeNodeArrayJSON"
+        if item_kind == "circular_list":
+            return "openojCircularArrayJSON"
     return "openojIdentity"
 
 
@@ -175,7 +732,8 @@ class TypeScriptExecutor(CompiledExecutor):
         assembly_prelude = "".join(
             content + "\n"
             for part in ("common", "provided")
-            for _, content in sorted((assembly or {}).get(part, {}).items())
+            for name, content in sorted((assembly or {}).get(part, {}).items())
+            if name.endswith(".ts")
         )
         struct_prelude, struct_codecs = _struct_prelude(invocation)
         if assembly_prelude:
@@ -184,9 +742,67 @@ class TypeScriptExecutor(CompiledExecutor):
             helpers = re.findall(r"function openoj\w+\([^)]*\): [^\n]*\{.*?\n\}", struct_prelude, re.S)
             struct_prelude = "".join(helpers)
         result_wrapper = _result_wrapper(invocation)
+        # Alias splices need the aliased list's nodes; clone checks need
+        # every input node registered — read the parameters with that
+        # bookkeeping inline (one registration per list-shaped parameter).
+        alias_sources = sorted(
+            {
+                spec["alias"]
+                for spec in parameters
+                if spec.get("kind") == "alias_list"
+            }
+        )
+        reader_item = (
+            "openojReader.int64()"
+            if struct_item_spec(invocation).get("bits", 32) == 64
+            else "openojReader.int32()"
+        )
+        collectors = {
+            "linked_list": "collectList",
+            "graph": "collectGraph",
+            "random_list": "collectRandomList",
+        }
+
+        def declaration(index: int, spec: dict[str, Any]) -> str:
+            if spec.get("kind") == "alias_list":
+                aliased = f"openojArg{spec['alias']}Nodes"
+                lines = [
+                    f"    const openojArg{index} = (() => {{",
+                    "        const count = openojReader.uint32();",
+                    "        let head: ListNode | null = null, current: ListNode | null = null;",
+                    "        const prefix: ListNode[] = [];",
+                    "        for (let step = 0; step < count; step++) {",
+                    f"            const node = new ListNode({reader_item});",
+                    "            if (current === null) head = node; else current.next = node;",
+                    "            current = node;",
+                    "            prefix.push(node);",
+                    "        }",
+                    "        const spliceAt = openojReader.uint32();",
+                    f"        if (spliceAt < {aliased}.length) {{",
+                    "            // Real shared nodes: the prefix's last node (or the",
+                    "            // head when the prefix is empty) joins the aliased",
+                    "            // list at the splice point.",
+                    f"            if (current === null) head = {aliased}[spliceAt];",
+                    f"            else current.next = {aliased}[spliceAt];",
+                    "        }",
+                    "        for (const node of prefix) OpenOJReader.inputNodes.add(node);",
+                    "        return head;",
+                    "    })();",
+                ]
+                return "\n".join(lines)
+            lines = [f"    const openojArg{index} = {_read_expression(spec)};"]
+            if spec.get("kind") == "linked_list" and index in alias_sources:
+                lines.append(f"    const openojArg{index}Nodes: ListNode[] = [];")
+                lines.append(
+                    f"    for (let node = openojArg{index}; node; node = node.next) openojArg{index}Nodes.push(node);"
+                )
+            collector = collectors.get(spec.get("kind"))
+            if collector:
+                lines.append(f"    OpenOJReader.{collector}(openojArg{index});")
+            return "\n".join(lines)
+
         declarations = "\n".join(
-            f"    const openojArg{index} = {_read_expression(spec)};"
-            for index, spec in enumerate(parameters)
+            declaration(index, spec) for index, spec in enumerate(parameters)
         )
         arguments = ", ".join(f"openojArg{index}" for index in range(len(parameters)))
         wrapper = textwrap.dedent(
@@ -257,7 +873,15 @@ class TypeScriptExecutor(CompiledExecutor):
         )
         source_path = job_root / "main.ts"
         output_path = job_root / "main.js"
-        source_path.write_text(assembly_prelude + struct_prelude + code + "\n" + wrapper, encoding="utf-8")
+        # The module marker keeps the whole file (assembly sources included)
+        # one compilation unit whose top-level classes are plainly visible to
+        # the submission — no imports — while shadowing same-name DOM globals
+        # (lib.dom's `Node`) that would otherwise collide with a bare
+        # `class Node` in script scope.
+        source_path.write_text(
+            "export {};\n" + assembly_prelude + struct_prelude + code + "\n" + wrapper,
+            encoding="utf-8",
+        )
         source_path.chmod(0o444)
         self.compile(
             job_root,
