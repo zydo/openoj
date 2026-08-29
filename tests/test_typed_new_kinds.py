@@ -255,5 +255,101 @@ class StructEncodingTests(unittest.TestCase):
             }, "cpp")
 
 
+class SecondWaveEncodingTests(unittest.TestCase):
+    def test_doubly_list_shares_the_linked_list_wire(self) -> None:
+        expected = b"\x01" + struct.pack(">I", 2) + struct.pack(">i", 1) + struct.pack(">i", 2)
+        self.assertEqual(expected, encode_case(invocation("doubly_list"), [[1, 2]], "cpp"))
+        self.assertEqual(b"\x00", encode_case(invocation("doubly_list"), [None], "cpp"))
+
+    def test_doubly_list_node_appends_the_target_value(self) -> None:
+        invocation_spec = {
+            "type": "function",
+            "method": "solve",
+            "parameters": [{"name": "value", "value_type": {"kind": "doubly_list_node", "items": I32}}],
+            "return_type": {"kind": "boolean"},
+        }
+        expected = (
+            b"\x01" + struct.pack(">I", 2) + struct.pack(">i", 7) + struct.pack(">i", 3)
+            + struct.pack(">i", 3)
+        )
+        self.assertEqual(expected, encode_case(invocation_spec, [{"values": [7, 3], "node": 3}], "cpp"))
+        with self.assertRaisesRegex(ExecutorError, "values and node"):
+            encode_case(invocation_spec, [{"values": [1]}], "cpp")
+
+    def test_random_tree_rows_carry_val_plus_random_index(self) -> None:
+        expected = (
+            struct.pack(">I", 2)
+            + b"\x01" + struct.pack(">i", 7) + struct.pack(">I", 0xFFFFFFFF)
+            + b"\x01" + struct.pack(">i", 13) + struct.pack(">I", 0)
+        )
+        self.assertEqual(expected, encode_case(invocation("random_tree"), [[[7, None], [13, 0]]], "cpp"))
+        self.assertEqual(struct.pack(">I", 0), encode_case(invocation("random_tree"), [[]], "cpp"))
+        with self.assertRaisesRegex(ExecutorError, "random index must be null or within"):
+            encode_case(invocation("random_tree"), [[[7, 5]]], "cpp")
+
+    def test_special_tree_and_nary_tree_nodes_ride_the_plain_display_wires(self) -> None:
+        display = [1, None, 3, 2]
+        expected = (
+            struct.pack(">I", 4)
+            + b"\x01" + struct.pack(">i", 1)
+            + b"\x00"
+            + b"\x01" + struct.pack(">i", 3)
+            + b"\x01" + struct.pack(">i", 2)
+        )
+        self.assertEqual(expected, encode_case(invocation("special_tree"), [display], "rust"))
+        self.assertEqual(expected, encode_case(invocation("nary_tree_nodes"), [display], "go"))
+
+    def test_nary_tree_ref_is_just_the_value(self) -> None:
+        invocation_spec = {
+            "type": "function",
+            "method": "solve",
+            "parameters": [
+                {"name": "tree", "value_type": {"kind": "nary_tree", "items": I32, "alias": 0}},
+                {"name": "value", "value_type": {"kind": "nary_tree_ref", "items": I32, "alias": 0}},
+            ],
+            "return_type": {"kind": "boolean"},
+        }
+        expected = (
+            struct.pack(">I", 2) + b"\x01" + struct.pack(">i", 1) + b"\x00"
+            + struct.pack(">i", 3)
+        )
+        self.assertEqual(expected, encode_case(invocation_spec, [[1, None], 3], "rust"))
+
+    def test_json_frames_compact_json_behind_a_length(self) -> None:
+        payload = b'[1,[2,{"a":null}]]'
+        expected = struct.pack(">I", len(payload)) + payload
+        self.assertEqual(expected, encode_case(invocation("json"), [[1, [2, {"a": None}]]], "javascript"))
+
+    def test_json_accepts_a_top_level_object(self) -> None:
+        payload = b'{"a":1,"b":[2,null]}'
+        expected = struct.pack(">I", len(payload)) + payload
+        self.assertEqual(expected, encode_case(invocation("json"), [{"a": 1, "b": [2, None]}], "javascript"))
+
+    def test_nary_tree_ref_alias_must_reference_an_earlier_nary_parameter(self) -> None:
+        from runner.executors.typed import function_signature
+
+        base = {
+            "type": "function",
+            "method": "solve",
+            "parameters": [
+                {"name": "a", "value_type": {"kind": "nary_tree", "items": I32, "alias": 0}},
+                {"name": "b", "value_type": {"kind": "nary_tree_ref", "items": I32, "alias": 0}},
+            ],
+            "return_type": {"kind": "boolean"},
+        }
+        parameters, _, _ = function_signature(base, "rust")
+        self.assertEqual(["nary_tree", "nary_tree_ref"], [item["kind"] for item in parameters])
+        with self.assertRaisesRegex(ExecutorError, "earlier parameter"):
+            function_signature({**base, "parameters": base["parameters"][::-1]}, "rust")
+        with self.assertRaisesRegex(ExecutorError, "nary_tree parameter"):
+            function_signature({
+                **base,
+                "parameters": [
+                    {"name": "a", "value_type": I32},
+                    {"name": "b", "value_type": {"kind": "nary_tree_ref", "items": I32, "alias": 0}},
+                ],
+            }, "rust")
+
+
 if __name__ == "__main__":
     unittest.main()

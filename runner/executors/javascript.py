@@ -50,9 +50,32 @@ def _read_expression(spec: dict[str, Any]) -> str:
         return "openojReader.graph()"
     if kind == "random_list":
         return "openojReader.randomList()"
+    if kind == "doubly_list":
+        return "openojReader.doublyList()"
+    if kind == "doubly_list_node":
+        return "openojReader.doublyListNode()"
+    if kind == "random_tree":
+        return "openojReader.randomTree()"
+    if kind == "special_tree":
+        return "openojReader.specialTree()"
+    if kind == "nary_tree_nodes":
+        return "openojReader.naryTreeNodes()"
+    if kind == "json":
+        return "openojReader.json()"
     if kind == "struct":
         return f"openojReader.read{spec['class']}()"
     return f"openojReader.array(() => {_read_expression(spec['items'])})"
+
+
+def _uses_json(spec: Any) -> bool:
+    """Whether a type spec (or any nested array item) is the generic JSON
+    kind — the one kind uses_struct_kinds does not collect, since it names
+    no class and needs no prelude."""
+    if not isinstance(spec, dict):
+        return False
+    if spec.get("kind") == "json":
+        return True
+    return _uses_json(spec.get("items"))
 
 
 def _collect_structs(spec: Any, found: dict[str, dict[str, Any]]) -> None:
@@ -74,6 +97,13 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
     structs = uses_struct_kinds(invocation)
     graph_class = provided_node_class(invocation, "graph")
     random_class = provided_node_class(invocation, "random_list")
+    # The second-wave pointer kinds name the using problem's provided/
+    # class too. A doubly_list_node parameter carries the class when the
+    # problem only ships that kind — the chain kind is the same node.
+    doubly_class = provided_node_class(invocation, "doubly_list")
+    if doubly_class == "Node" and "doubly_list_node" in structs:
+        doubly_class = provided_node_class(invocation, "doubly_list_node")
+    random_tree_class = provided_node_class(invocation, "random_tree")
     item_read = "this.int64()" if struct_item_spec(invocation).get("bits", 32) == 64 else "this.int32()"
     prelude = ""
     codecs = (
@@ -141,7 +171,7 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "        throw new Error(\"Circular list exceeds the walk bound\");\n"
             "    }\n"
         )
-    if "tree" in structs:
+    if "tree" in structs or "special_tree" in structs:
         prelude += (
             "class TreeNode {\n"
             "    constructor(val = 0, left = null, right = null) { this.val = val; this.left = left; this.right = right; }\n"
@@ -185,7 +215,7 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "        return values;\n"
             "    }\n"
         )
-    if "nary_tree" in structs:
+    if "nary_tree" in structs or "nary_tree_nodes" in structs or "nary_tree_ref" in structs:
         prelude += (
             "class Node {\n"
             "    constructor(val = 0, children = []) { this.val = val; this.children = children; }\n"
@@ -556,6 +586,244 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "        });\n"
             "    }\n"
         )
+    if "doubly_list" in structs or "doubly_list_node" in structs:
+        # The class is the using problem's provided/ source (LC 3263/3294
+        # ship their own doubly-linked node); the placeholder becomes the
+        # manifest's class name below.
+        prelude += (
+            "class @@DOUBLY_CLASS@@ {\n"
+            "    constructor(val = 0, prev = null, next = null) { this.val = val; this.prev = prev; this.next = next; }\n"
+            "}\n"
+        )
+        codecs += (
+            "    doublyList() {\n"
+            "        // The LC 3263 wire: a plain value array decoding into an\n"
+            "        // open chain with both directions wired.\n"
+            "        if (this.data[this.offset++] === 0) return null;\n"
+            "        const length = this.uint32();\n"
+            "        const nodes = [];\n"
+            "        for (let index = 0; index < length; index++) nodes.push(new @@DOUBLY_CLASS@@(" + item_read + "));\n"
+            "        for (let index = 1; index < length; index++) {\n"
+            "            nodes[index - 1].next = nodes[index];\n"
+            "            nodes[index].prev = nodes[index - 1];\n"
+            "        }\n"
+            "        return length > 0 ? nodes[0] : null;\n"
+            "    }\n"
+            "    static doublyListJSON(head) {\n"
+            "        // The forward walk must agree with every back-link,\n"
+            "        // mirroring the doubly_circular invariant on an open chain.\n"
+            "        const values = [];\n"
+            "        let previous = null;\n"
+            "        let node = head;\n"
+            "        for (let bound = 0; node !== null && bound < (1 << 20); bound++) {\n"
+            "            if (node.prev !== previous) {\n"
+            "                throw new Error(\"Doubly linked list is not properly linked\");\n"
+            "            }\n"
+            "            values.push(node.val);\n"
+            "            previous = node;\n"
+            "            node = node.next;\n"
+            "        }\n"
+            "        if (node !== null) throw new Error(\"Doubly linked list exceeds the walk bound\");\n"
+            "        return values;\n"
+            "    }\n"
+        )
+    if "doubly_list_node" in structs:
+        codecs += (
+            "    doublyListNode() {\n"
+            "        // The LC 3294 wire: the chain plus the (unique) value of\n"
+            "        // the node the method receives.\n"
+            "        const head = this.doublyList();\n"
+            "        const target = " + item_read + ";\n"
+            "        for (let node = head; node !== null; node = node.next) {\n"
+            "            if (node.val === target) return node;\n"
+            "        }\n"
+            "        throw new Error(\"doubly_list_node target value is not in the chain\");\n"
+            "    }\n"
+        )
+    if "random_tree" in structs:
+        prelude += (
+            "class @@RANDOM_TREE_CLASS@@ {\n"
+            "    constructor(val = 0) {\n"
+            "        this.val = val; this.left = null; this.right = null; this.random = null;\n"
+            "    }\n"
+            "}\n"
+        )
+        codecs += (
+            "    randomTree() {\n"
+            "        // The LC 1485 wire: a binary-tree level order whose\n"
+            "        // present slots are [val, randomIndex] rows — random_list's\n"
+            "        // index addressing on a tree topology. The index counts\n"
+            "        // present nodes in level order, from the root.\n"
+            "        const length = this.uint32();\n"
+            "        const slots = [];\n"
+            "        const targets = [];\n"
+            "        for (let index = 0; index < length; index++) {\n"
+            "            if (this.data[this.offset++] === 1) {\n"
+            "                slots.push(" + item_read + ");\n"
+            "                targets.push(this.uint32());\n"
+            "            } else {\n"
+            "                slots.push(null);\n"
+            "                targets.push(0xFFFFFFFF);\n"
+            "            }\n"
+            "        }\n"
+            "        if (length === 0 || slots[0] === null) return null;\n"
+            "        const root = new @@RANDOM_TREE_CLASS@@(slots[0]);\n"
+            "        const order = [root];\n"
+            "        const pending = [[root, targets[0]]];\n"
+            "        const queue = [root];\n"
+            "        let index = 1;\n"
+            "        while (queue.length > 0 && index < slots.length) {\n"
+            "            const node = queue.shift();\n"
+            "            if (index < slots.length) {\n"
+            "                if (slots[index] !== null) {\n"
+            "                    const child = new @@RANDOM_TREE_CLASS@@(slots[index]);\n"
+            "                    node.left = child;\n"
+            "                    order.push(child);\n"
+            "                    pending.push([child, targets[index]]);\n"
+            "                    queue.push(child);\n"
+            "                }\n"
+            "                index++;\n"
+            "            }\n"
+            "            if (index < slots.length) {\n"
+            "                if (slots[index] !== null) {\n"
+            "                    const child = new @@RANDOM_TREE_CLASS@@(slots[index]);\n"
+            "                    node.right = child;\n"
+            "                    order.push(child);\n"
+            "                    pending.push([child, targets[index]]);\n"
+            "                    queue.push(child);\n"
+            "                }\n"
+            "                index++;\n"
+            "            }\n"
+            "        }\n"
+            "        for (const [node, target] of pending) {\n"
+            "            if (target === 0xFFFFFFFF) continue;\n"
+            "            if (target >= order.length) throw new Error(\"Random pointer target is out of range\");\n"
+            "            node.random = order[target];\n"
+            "        }\n"
+            "        return root;\n"
+            "    }\n"
+            "    static collectRandomTree(root) {\n"
+            "        // The input-side registry backing random_tree's clone check.\n"
+            "        if (root === null) return;\n"
+            "        const queue = [root];\n"
+            "        for (let index = 0; index < queue.length; index++) {\n"
+            "            const node = queue[index];\n"
+            "            if (queue.indexOf(node) !== index) continue;\n"
+            "            OpenOJReader.inputNodes.add(node);\n"
+            "            if (node.left !== null) queue.push(node.left);\n"
+            "            if (node.right !== null) queue.push(node.right);\n"
+            "        }\n"
+            "    }\n"
+            "    static randomTreeJSON(root) {\n"
+            "        // Level order rows like the input side (absent slots stay\n"
+            "        // null); the clone check forbids returning (part of) the\n"
+            "        // input tree, and every random pointer must land inside the\n"
+            "        // returned tree.\n"
+            "        if (root === null) return [];\n"
+            "        const order = [];\n"
+            "        const queue = [root];\n"
+            "        while (queue.length > 0) {\n"
+            "            const node = queue.shift();\n"
+            "            if (node === null) { order.push(null); continue; }\n"
+            "            if (order.indexOf(node) !== -1) {\n"
+            "                throw new Error(\"Random tree repeats a node in level order\");\n"
+            "            }\n"
+            "            order.push(node);\n"
+            "            queue.push(node.left, node.right);\n"
+            "        }\n"
+            "        while (order.length > 0 && order[order.length - 1] === null) order.pop();\n"
+            "        for (const node of order) {\n"
+            "            if (node !== null && OpenOJReader.inputNodes.has(node)) {\n"
+            "                throw new Error(\"Returned tree shares nodes with the input tree\");\n"
+            "            }\n"
+            "        }\n"
+            "        // Random indices address present nodes in level order — the\n"
+            "        // same convention the decode side uses — so placeholder\n"
+            "        // slots shift neither the numbering nor the walk below.\n"
+            "        const present = order.filter((node) => node !== null);\n"
+            "        return order.map((node) => {\n"
+            "            if (node === null) return null;\n"
+            "            if (node.random === null) return [node.val, null];\n"
+            "            const target = present.indexOf(node.random);\n"
+            "            if (target === -1) throw new Error(\"Random pointer leaves the returned tree\");\n"
+            "            return [node.val, target];\n"
+            "        });\n"
+            "    }\n"
+        )
+    if "special_tree" in structs:
+        codecs += (
+            "    specialTree() {\n"
+            "        // The LC 2773 wire: a binary-tree display whose leaves\n"
+            "        // b1..bk (in increasing value order) are ring-wired left\n"
+            "        // to the previous and right to the next leaf — the special\n"
+            "        // property the statement grants, which the display cannot\n"
+            "        // carry. k === 1 self-loops both ways.\n"
+            "        const root = this.tree();\n"
+            "        if (root === null) return null;\n"
+            "        const leaves = [];\n"
+            "        const queue = [root];\n"
+            "        for (let index = 0; index < queue.length; index++) {\n"
+            "            const node = queue[index];\n"
+            "            if (node.left === null && node.right === null) leaves.push(node);\n"
+            "            else {\n"
+            "                if (node.left !== null) queue.push(node.left);\n"
+            "                if (node.right !== null) queue.push(node.right);\n"
+            "            }\n"
+            "        }\n"
+            "        leaves.sort((a, b) => a.val - b.val);\n"
+            "        const count = leaves.length;\n"
+            "        for (let position = 0; position < count; position++) {\n"
+            "            leaves[position].left = leaves[(position - 1 + count) % count];\n"
+            "            leaves[position].right = leaves[(position + 1) % count];\n"
+            "        }\n"
+            "        return root;\n"
+            "    }\n"
+        )
+    if "nary_tree_nodes" in structs:
+        codecs += (
+            "    naryTreeNodes() {\n"
+            "        // The LC 1506 wire: the n-ary display decoded and handed\n"
+            "        // over as the list of its nodes (level order — the\n"
+            "        // statement grants the solution an arbitrary permutation).\n"
+            "        const root = this.naryTree();\n"
+            "        if (root === null) return [];\n"
+            "        const nodes = [root];\n"
+            "        for (let cursor = 0; cursor < nodes.length; cursor++) {\n"
+            "            for (const child of nodes[cursor].children) nodes.push(child);\n"
+            "        }\n"
+            "        return nodes;\n"
+            "    }\n"
+        )
+    if "nary_tree_ref" in structs:
+        codecs += (
+            "    naryTreeRef(aliased) {\n"
+            "        // The LC 1516 wire: an integer naming a node of the\n"
+            "        // already-decoded aliased tree; the argument is that exact\n"
+            "        // node object (shared identity), found by its unique value.\n"
+            "        const target = " + item_read + ";\n"
+            "        const stack = [aliased];\n"
+            "        while (stack.length > 0) {\n"
+            "            const node = stack.pop();\n"
+            "            if (node === null) continue;\n"
+            "            if (node.val === target) return node;\n"
+            "            for (let index = node.children.length - 1; index >= 0; index--) {\n"
+            "                stack.push(node.children[index]);\n"
+            "            }\n"
+            "        }\n"
+            "        throw new Error(\"nary_tree_ref target value is not in the aliased tree\");\n"
+            "    }\n"
+        )
+    if any(_uses_json(spec) for spec in
+           [parameter.get("value_type") for parameter in invocation.get("parameters", [])]
+           + [invocation.get("return_type")]):
+        codecs += (
+            "    json() {\n"
+            "        // The generic any-shaped value: length-prefixed compact\n"
+            "        // JSON passed through parsed, and returned values pass\n"
+            "        // back out as-is (already JSON).\n"
+            "        return JSON.parse(this.string());\n"
+            "    }\n"
+        )
     if "alias_list" in structs:
         codecs += (
             "    static aliasListJSON(node) {\n"
@@ -607,7 +875,9 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
                 "}\n"
             )
     prelude = prelude.replace("@@GRAPH_CLASS@@", graph_class).replace("@@RANDOM_CLASS@@", random_class)
+    prelude = prelude.replace("@@DOUBLY_CLASS@@", doubly_class).replace("@@RANDOM_TREE_CLASS@@", random_tree_class)
     codecs = codecs.replace("@@GRAPH_CLASS@@", graph_class).replace("@@RANDOM_CLASS@@", random_class)
+    codecs = codecs.replace("@@DOUBLY_CLASS@@", doubly_class).replace("@@RANDOM_TREE_CLASS@@", random_tree_class)
     return prelude, codecs
 
 
@@ -643,6 +913,8 @@ def _result_wrapper(invocation: dict[str, Any]) -> str:
         "alias_list": "OpenOJReader.aliasListJSON",
         "graph": "OpenOJReader.graphJSON",
         "random_list": "OpenOJReader.randomListJSON",
+        "doubly_list": "OpenOJReader.doublyListJSON",
+        "random_tree": "OpenOJReader.randomTreeJSON",
     }
     if kind in direct:
         return direct[kind]
@@ -713,9 +985,18 @@ class JavaScriptExecutor(CompiledExecutor):
             "linked_list": "collectList",
             "graph": "collectGraph",
             "random_list": "collectRandomList",
+            "random_tree": "collectRandomTree",
         }
 
         def declaration(index: int, spec: dict[str, Any]) -> str:
+            if spec.get("kind") == "nary_tree_ref":
+                # A node of an earlier n-ary tree, named by its (unique)
+                # value: the reader resolves it inside the aliased tree the
+                # way an alias_list splices onto its earlier list.
+                return (
+                    f"    const openojArg{index} = "
+                    f"openojReader.naryTreeRef(openojArg{spec['alias']});"
+                )
             if spec.get("kind") == "alias_list":
                 aliased = f"openojArg{spec['alias']}Nodes"
                 lines = [

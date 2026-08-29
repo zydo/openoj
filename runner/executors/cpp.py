@@ -51,6 +51,12 @@ class CppExecutor(CompiledExecutor):
         # jobs fall back to the generic Node emission below.
         graph_class = provided_node_class(invocation, "graph")
         random_class = provided_node_class(invocation, "random_list")
+        # The second wave keeps the provided-class model: open doubly chains
+        # (LC 3263/3294) and random-pointer trees (LC 1485) decode into the
+        # using problem's provided/ node class.
+        doubly_class = provided_node_class(invocation, "doubly_list")
+        doubly_node_class = provided_node_class(invocation, "doubly_list_node")
+        random_tree_class = provided_node_class(invocation, "random_tree")
         # Struct classes arrive as source (the bank's common library or the
         # problem's provided/); pre-assembly jobs fall back to generated
         # equivalents below.
@@ -155,6 +161,25 @@ class CppExecutor(CompiledExecutor):
                 f"explicit Node({cpp_type(item_spec)} x) : val(x), next(nullptr), random(nullptr) {{}} "
                 f"Node({cpp_type(item_spec)} x, Node* n, Node* r) : val(x), next(n), random(r) {{}} }};\n"
             ).replace("Node", random_class)
+        if not assembly_decls and ("doubly_list" in structs or "doubly_list_node" in structs):
+            # LC 3263/3294: the open doubly chain's node (a bundle uses one
+            # list kind, so one chain shape serves either).
+            chain_class = doubly_class if "doubly_list" in structs else doubly_node_class
+            struct_decls += (
+                "struct Node { "
+                f"{cpp_type(item_spec)} val; Node *prev, *next; "
+                f"Node() : val(0), prev(nullptr), next(nullptr) {{}} "
+                f"explicit Node({cpp_type(item_spec)} x) : val(x), prev(nullptr), next(nullptr) {{}} }};\n"
+            ).replace("Node", chain_class)
+        if not assembly_decls and "random_tree" in structs:
+            # LC 1485: a binary-tree node carrying a random pointer.
+            struct_decls += (
+                "struct Node { "
+                f"{cpp_type(item_spec)} val; Node *left, *right, *random; "
+                f"Node() : val(0), left(nullptr), right(nullptr), random(nullptr) {{}} "
+                f"explicit Node({cpp_type(item_spec)} x) : val(x), left(nullptr), right(nullptr), "
+                "random(nullptr) {} };\n"
+            ).replace("Node", random_tree_class)
         if not assembly_decls and struct_specs:
             for name, spec in struct_specs.items():
                 fields = spec.get("fields") or []
@@ -215,7 +240,10 @@ class CppExecutor(CompiledExecutor):
                 }}
                 """
             )
-        if "nary_tree" in structs:
+        # The plain n-ary display serves three kinds: nary_tree itself, the
+        # LC 1506 node-list handover (which decodes the same tree), and the
+        # LC 1516 ref (whose DFS helper walks the decoded tree).
+        if structs & {"nary_tree", "nary_tree_nodes", "nary_tree_ref"}:
             struct_codecs += textwrap.dedent(
                 f"""
                 template <> struct OpenOJDecoder<Node*> {{
@@ -273,6 +301,24 @@ class CppExecutor(CompiledExecutor):
                 static std::string openoj_result(Node* root) {{ return openoj_json(root); }}
                 """
             )
+            if "nary_tree_ref" in structs:
+                struct_codecs += textwrap.dedent(
+                    f"""
+                    // LC 1516: an nary_tree_ref names a node of an
+                    // already-decoded tree by its (unique) value; the
+                    // argument is that exact node, sharing identity with
+                    // the aliased tree.
+                    static Node* openojFindNaryNode(Node* root, {cpp_type(item_spec)} target) {{
+                        if (root == nullptr) return nullptr;
+                        if (root->val == target) return root;
+                        for (Node* child : root->children) {{
+                            Node* found = openojFindNaryNode(child, target);
+                            if (found != nullptr) return found;
+                        }}
+                        return nullptr;
+                    }}
+                    """
+                )
         if "quad_tree" in structs:
             struct_codecs += textwrap.dedent(
                 """
@@ -683,6 +729,298 @@ class CppExecutor(CompiledExecutor):
                 }
                 """
             ).replace("Node", random_class)
+        if "doubly_list" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                template <> struct OpenOJDecoder<{doubly_class}*> {{
+                    static {doubly_class}* read(OpenOJReader& reader) {{
+                        if (reader.byte() == 0) return nullptr;
+                        uint32_t length = reader.u32();
+                        if (length == 0) return nullptr;
+                        std::vector<{doubly_class}*> nodes;
+                        nodes.reserve(length);
+                        for (uint32_t index = 0; index < length; ++index) {{
+                            nodes.push_back(new {doubly_class}(OpenOJDecoder<{cpp_type(item_spec)}>::read(reader)));
+                        }}
+                        // The chain is wired in both directions before the
+                        // solution sees it.
+                        for (uint32_t index = 0; index + 1 < length; ++index) {{
+                            nodes[index]->next = nodes[index + 1];
+                            nodes[index + 1]->prev = nodes[index];
+                        }}
+                        return nodes[0];
+                    }}
+                }};
+                // The forward walk must agree with every back-link — the
+                // open chain's answer to the circular walk's closure check.
+                static std::string openoj_result({doubly_class}* head) {{
+                    std::string output = "[";
+                    const {doubly_class}* node = head;
+                    const {doubly_class}* previous = nullptr;
+                    for (size_t bound = 0; node != nullptr && bound < (1u << 20); ++bound) {{
+                        if (node->prev != previous) {{
+                            throw std::runtime_error("Doubly linked list is not properly linked");
+                        }}
+                        if (node != head) output += ',';
+                        output += openoj_json(node->val);
+                        previous = node;
+                        node = node->next;
+                    }}
+                    if (node != nullptr) throw std::runtime_error("Doubly linked list exceeds the walk bound");
+                    return output + "]";
+                }}
+                """
+            )
+        if "doubly_list_node" in structs:
+            # Same wire as doubly_list plus one trailing value naming the
+            # chain node the method receives; a bundle uses one list kind.
+            struct_codecs += textwrap.dedent(
+                f"""
+                template <> struct OpenOJDecoder<{doubly_node_class}*> {{
+                    static {doubly_node_class}* read(OpenOJReader& reader) {{
+                        if (reader.byte() == 0) return nullptr;
+                        uint32_t length = reader.u32();
+                        {doubly_node_class}* head = nullptr;
+                        if (length > 0) {{
+                            std::vector<{doubly_node_class}*> nodes;
+                            nodes.reserve(length);
+                            for (uint32_t index = 0; index < length; ++index) {{
+                                nodes.push_back(new {doubly_node_class}(OpenOJDecoder<{cpp_type(item_spec)}>::read(reader)));
+                            }}
+                            for (uint32_t index = 0; index + 1 < length; ++index) {{
+                                nodes[index]->next = nodes[index + 1];
+                                nodes[index + 1]->prev = nodes[index];
+                            }}
+                            head = nodes[0];
+                        }}
+                        auto target = OpenOJDecoder<{cpp_type(item_spec)}>::read(reader);
+                        for ({doubly_node_class}* node = head; node != nullptr; node = node->next) {{
+                            if (node->val == target) return node;
+                        }}
+                        throw std::runtime_error("doubly_list_node target value is not in the chain");
+                    }}
+                }};
+                static std::string openoj_result({doubly_node_class}* head) {{
+                    std::string output = "[";
+                    const {doubly_node_class}* node = head;
+                    const {doubly_node_class}* previous = nullptr;
+                    for (size_t bound = 0; node != nullptr && bound < (1u << 20); ++bound) {{
+                        if (node->prev != previous) {{
+                            throw std::runtime_error("Doubly linked list is not properly linked");
+                        }}
+                        if (node != head) output += ',';
+                        output += openoj_json(node->val);
+                        previous = node;
+                        node = node->next;
+                    }}
+                    if (node != nullptr) throw std::runtime_error("Doubly linked list exceeds the walk bound");
+                    return output + "]";
+                }}
+                """
+            )
+        if "random_tree" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                template <> struct OpenOJDecoder<{random_tree_class}*> {{
+                    static {random_tree_class}* read(OpenOJReader& reader) {{
+                        // Binary-tree level order whose present slots carry
+                        // [val, randomIndex] rows; the index counts present
+                        // nodes in level order, from the root.
+                        uint32_t count = reader.u32();
+                        if (count == 0) return nullptr;
+                        if (reader.byte() == 0) throw std::runtime_error("random_tree root must be a [val, random] row");
+                        {random_tree_class}* root = new {random_tree_class}(OpenOJDecoder<{cpp_type(item_spec)}>::read(reader));
+                        std::vector<{random_tree_class}*> order{{root}};
+                        std::vector<std::pair<{random_tree_class}*, uint32_t>> pending;
+                        pending.emplace_back(root, reader.u32());
+                        std::deque<{random_tree_class}*> queue{{root}};
+                        size_t index = 1;
+                        while (!queue.empty() && index < count) {{
+                            {random_tree_class}* node = queue.front();
+                            queue.pop_front();
+                            for ({random_tree_class}** side : {{&node->left, &node->right}}) {{
+                                if (index >= count) break;
+                                ++index;
+                                if (reader.byte() == 0) continue;
+                                {random_tree_class}* child = new {random_tree_class}(OpenOJDecoder<{cpp_type(item_spec)}>::read(reader));
+                                pending.emplace_back(child, reader.u32());
+                                *side = child;
+                                order.push_back(child);
+                                queue.push_back(child);
+                            }}
+                        }}
+                        for (const auto& [node, target] : pending) {{
+                            if (target == 0xFFFFFFFFu) continue;
+                            if (target >= order.size()) throw std::runtime_error("Random pointer target is out of range");
+                            node->random = order[target];
+                        }}
+                        return root;
+                    }}
+                }};
+                static void openojCollectInput(const {random_tree_class}* root) {{
+                    if (root == nullptr) return;
+                    std::vector<const {random_tree_class}*> queue{{root}};
+                    for (size_t index = 0; index < queue.size(); ++index) {{
+                        const {random_tree_class}* node = queue[index];
+                        if (node == nullptr) continue;
+                        if (std::find(queue.begin(), queue.begin() + index, node) != queue.begin() + index) continue;
+                        openoj_input_nodes.push_back(node);
+                        queue.push_back(node->left);
+                        queue.push_back(node->right);
+                    }}
+                }}
+                // Level order rows like the input side, with null
+                // placeholders for absent slots and trailing nulls trimmed.
+                // Random indices address present nodes in level order — the
+                // same numbering the decode side uses — so placeholder
+                // slots shift nothing and are never dereferenced. The clone
+                // check forbids returning (part of) the input tree, and
+                // every random pointer must land inside the returned tree.
+                static std::string openoj_result({random_tree_class}* root) {{
+                    std::vector<const {random_tree_class}*> order;
+                    std::vector<std::string> values;
+                    if (root != nullptr) {{
+                        std::deque<const {random_tree_class}*> queue{{root}};
+                        while (!queue.empty()) {{
+                            const {random_tree_class}* node = queue.front();
+                            queue.pop_front();
+                            if (node == nullptr) {{
+                                order.push_back(nullptr);
+                                values.push_back("null");
+                                continue;
+                            }}
+                            if (std::find(order.begin(), order.end(), node) != order.end()) {{
+                                throw std::runtime_error("Random tree repeats a node in level order");
+                            }}
+                            order.push_back(node);
+                            values.push_back(openoj_json(node->val));
+                            queue.push_back(node->left);
+                            queue.push_back(node->right);
+                        }}
+                    }}
+                    while (!values.empty() && values.back() == "null") {{
+                        values.pop_back();
+                        order.pop_back();
+                    }}
+                    for (const {random_tree_class}* node : order) {{
+                        if (node != nullptr && std::find(openoj_input_nodes.begin(), openoj_input_nodes.end(), static_cast<const void*>(node)) != openoj_input_nodes.end()) {{
+                            throw std::runtime_error("Returned tree shares nodes with the input tree");
+                        }}
+                    }}
+                    std::vector<const {random_tree_class}*> present;
+                    for (const {random_tree_class}* node : order) {{
+                        if (node != nullptr) present.push_back(node);
+                    }}
+                    std::string output = "[";
+                    for (size_t index = 0; index < order.size(); ++index) {{
+                        if (index) output += ',';
+                        if (order[index] == nullptr) {{
+                            output += "null";
+                            continue;
+                        }}
+                        output += '[';
+                        output += values[index];
+                        output += ',';
+                        const {random_tree_class}* target = order[index]->random;
+                        if (target == nullptr) {{
+                            output += "null";
+                        }} else {{
+                            auto found = std::find(present.begin(), present.end(), target);
+                            if (found == present.end()) throw std::runtime_error("Random pointer leaves the returned tree");
+                            output += std::to_string(static_cast<long long>(found - present.begin()));
+                        }}
+                        output += ']';
+                    }}
+                    return output + "]";
+                }}
+                """
+            )
+        if "special_tree" in structs:
+            # The display wire is the plain binary-tree one; the special
+            # property is wired here. Reuses the TreeNode decoder slot — a
+            # bundle uses one binary-tree kind.
+            struct_codecs += textwrap.dedent(
+                f"""
+                template <> struct OpenOJDecoder<TreeNode*> {{
+                    static TreeNode* read(OpenOJReader& reader) {{
+                        uint32_t length = reader.u32();
+                        std::vector<std::pair<bool, {cpp_type(item_spec)}>> slots;
+                        slots.reserve(length);
+                        for (uint32_t index = 0; index < length; ++index) {{
+                            if (reader.byte() == 1) slots.emplace_back(true, OpenOJDecoder<{cpp_type(item_spec)}>::read(reader));
+                            else slots.emplace_back(false, {cpp_type(item_spec)}());
+                        }}
+                        if (length == 0 || !slots[0].first) return nullptr;
+                        TreeNode* root = new TreeNode(slots[0].second);
+                        std::deque<TreeNode*> queue{{root}};
+                        size_t index = 1;
+                        while (!queue.empty() && index < slots.size()) {{
+                            TreeNode* node = queue.front();
+                            queue.pop_front();
+                            if (index < slots.size()) {{
+                                if (slots[index].first) {{
+                                    node->left = new TreeNode(slots[index].second);
+                                    queue.push_back(node->left);
+                                }}
+                                ++index;
+                            }}
+                            if (index < slots.size()) {{
+                                if (slots[index].first) {{
+                                    node->right = new TreeNode(slots[index].second);
+                                    queue.push_back(node->right);
+                                }}
+                                ++index;
+                            }}
+                        }}
+                        // LC 2773: the leaves b1..bk in increasing value
+                        // order are ring-wired left to the previous and
+                        // right to the next leaf (a lone leaf loops on
+                        // itself).
+                        std::vector<TreeNode*> leaves;
+                        std::deque<TreeNode*> pending{{root}};
+                        while (!pending.empty()) {{
+                            TreeNode* node = pending.front();
+                            pending.pop_front();
+                            if (node->left == nullptr && node->right == nullptr) leaves.push_back(node);
+                            else {{
+                                if (node->left != nullptr) pending.push_back(node->left);
+                                if (node->right != nullptr) pending.push_back(node->right);
+                            }}
+                        }}
+                        std::stable_sort(leaves.begin(), leaves.end(), [](const TreeNode* a, const TreeNode* b) {{ return a->val < b->val; }});
+                        size_t count = leaves.size();
+                        for (size_t index = 0; index < count; ++index) {{
+                            leaves[index]->left = leaves[(index + count - 1) % count];
+                            leaves[index]->right = leaves[(index + 1) % count];
+                        }}
+                        return root;
+                    }}
+                }};
+                """
+            )
+        if "nary_tree_nodes" in structs:
+            # The display wire is the plain n-ary one; the handover is the
+            # decoded tree's node list (level order — the statement grants
+            # an arbitrary permutation).
+            struct_codecs += textwrap.dedent(
+                """
+                template <> struct OpenOJDecoder<std::vector<Node*>> {
+                    static std::vector<Node*> read(OpenOJReader& reader) {
+                        Node* root = OpenOJDecoder<Node*>::read(reader);
+                        std::vector<Node*> nodes;
+                        if (root == nullptr) return nodes;
+                        std::deque<Node*> queue{root};
+                        while (!queue.empty()) {
+                            Node* node = queue.front();
+                            queue.pop_front();
+                            nodes.push_back(node);
+                            for (Node* child : node->children) queue.push_back(child);
+                        }
+                        return nodes;
+                    }
+                };
+                """
+            )
         if "alias_list" in structs:
             struct_codecs += textwrap.dedent(
                 """
@@ -829,13 +1167,25 @@ class CppExecutor(CompiledExecutor):
                     "        }();",
                 ]
                 return "\n".join(" " * 20 + line for line in lines)
+            if kind == "nary_tree_ref":
+                # The value names a node of the already-decoded aliased
+                # tree; the argument is that exact node (shared identity).
+                lines = [
+                    f"auto openoj_arg_{index} = [&]() -> Node* {{",
+                    f"            auto named = OpenOJDecoder<{cpp_type(item_spec)}>::read(openoj_reader);",
+                    f"            Node* found = openojFindNaryNode(openoj_arg_{spec['alias']}, named);",
+                    '            if (found == nullptr) throw std::runtime_error("nary_tree_ref target value is not in the aliased tree");',
+                    "            return found;",
+                    "        }();",
+                ]
+                return "\n".join(" " * 20 + line for line in lines)
             lines = [f"auto openoj_arg_{index} = OpenOJDecoder<{cpp_type(spec)}>::read(openoj_reader);"]
             if kind == "linked_list" and index in alias_sources:
                 lines.append(
                     f"std::vector<ListNode*> openoj_arg_{index}_nodes;"
                     f" for (ListNode* node = openoj_arg_{index}; node; node = node->next) openoj_arg_{index}_nodes.push_back(node);"
                 )
-            if kind in {"linked_list", "graph", "random_list"}:
+            if kind in {"linked_list", "graph", "random_list", "random_tree"}:
                 lines.append(f"openojCollectInput(openoj_arg_{index});")
             return "\n".join(" " * 20 + line for line in lines)
 

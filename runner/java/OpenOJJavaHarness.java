@@ -542,6 +542,7 @@ public final class OpenOJJavaHarness {
         List<Object> listHeads = new ArrayList<>();
         List<Object> graphNodes = new ArrayList<>();
         List<Object> randomNodes = new ArrayList<>();
+        List<Object> randomTreeNodes = new ArrayList<>();
         for (int index = 0; index < parameterSpecs.size(); index++) {
             Map<String, Object> spec = asMap(parameterSpecs.get(index), "Parameter spec must be an object");
             Object valueType = spec.get("value_type");
@@ -559,6 +560,18 @@ public final class OpenOJJavaHarness {
                 arguments.add(decodeAliasList(rawArguments.get(index), arguments.get(alias.intValue())));
                 continue;
             }
+            if ("nary_tree_ref".equals(codec)) {
+                // A node of an earlier n-ary tree, named by its (unique)
+                // value: the argument is that exact node object, so
+                // mutations through it land in the aliased tree.
+                Object aliasValue = spec.get("alias");
+                if (!(aliasValue instanceof Number alias) || alias.intValue() < 0
+                    || alias.intValue() >= arguments.size()) {
+                    throw new IllegalArgumentException("nary_tree_ref requires an earlier n-ary parameter");
+                }
+                arguments.add(decodeNaryTreeRef(rawArguments.get(index), arguments.get(alias.intValue())));
+                continue;
+            }
             Object decoded;
             if ("graph".equals(codec)) {
                 decoded = decodeGraph(
@@ -568,6 +581,18 @@ public final class OpenOJJavaHarness {
                 decoded = decodeRandomList(
                     rawArguments.get(index),
                     declaredNodeClass(targetClass, methodName, rawArguments.size(), index, "val", "next", "random"));
+            } else if ("doubly_list".equals(codec)) {
+                decoded = decodeDoublyChain(
+                    rawArguments.get(index),
+                    declaredNodeClass(targetClass, methodName, rawArguments.size(), index, "val", "prev", "next"));
+            } else if ("doubly_list_node".equals(codec)) {
+                decoded = decodeDoublyListNode(
+                    rawArguments.get(index),
+                    declaredNodeClass(targetClass, methodName, rawArguments.size(), index, "val", "prev", "next"));
+            } else if ("random_tree".equals(codec)) {
+                decoded = decodeRandomTree(
+                    rawArguments.get(index),
+                    declaredNodeClass(targetClass, methodName, rawArguments.size(), index, "val", "left", "right", "random"));
             } else {
                 decoded = decodeCodec(rawArguments.get(index), codec);
             }
@@ -577,6 +602,8 @@ public final class OpenOJJavaHarness {
                 collectGraphNodes(decoded, graphNodes);
             } else if ("random_list".equals(codec)) {
                 collectChainNodes(decoded, randomNodes);
+            } else if ("random_tree".equals(codec)) {
+                collectRandomTreeNodes(decoded, randomTreeNodes);
             }
             arguments.add(decoded);
         }
@@ -601,6 +628,12 @@ public final class OpenOJJavaHarness {
         }
         if ("random_list".equals(returnCodec)) {
             return serializeRandomList(result, randomNodes);
+        }
+        if ("doubly_list".equals(returnCodec)) {
+            return serializeDoublyList(result);
+        }
+        if ("random_tree".equals(returnCodec)) {
+            return serializeRandomTree(result, randomTreeNodes);
         }
         return encodeCodec(result, returnCodec);
     }
@@ -760,8 +793,64 @@ public final class OpenOJJavaHarness {
         if ("multi_list".equals(codec)) {
             return decodeMultiList(value);
         }
-        // graph / random_list are decoded in invokeFunction only: their
-        // reflective construction needs the solution's declared node class.
+        if ("nary_tree_nodes".equals(codec)) {
+            // The LC 1506 wire: an n-ary display array decoded and handed
+            // over as the list of its nodes (level order — any order is
+            // faithful, the statement grants an arbitrary permutation).
+            Node root = (Node) decodeCodec(value, "nary_tree");
+            List<Object> nodes = new ArrayList<>();
+            if (root != null) {
+                List<Node> queue = new ArrayList<>();
+                queue.add(root);
+                int index = 0;
+                while (index < queue.size()) {
+                    Node node = queue.get(index++);
+                    nodes.add(node);
+                    queue.addAll(node.children);
+                }
+            }
+            return nodes;
+        }
+        if ("special_tree".equals(codec)) {
+            // The LC 2773 wire: a binary-tree display whose leaves b1..bk
+            // (in increasing value order) are ring-wired left to the
+            // previous and right to the next leaf — the special property
+            // the statement grants, which the display cannot carry.
+            if (value == null) {
+                return null;
+            }
+            TreeNode root = (TreeNode) decodeCodec(value, "tree_node");
+            if (root == null) {
+                return null;
+            }
+            List<TreeNode> leaves = new ArrayList<>();
+            List<TreeNode> queue = new ArrayList<>();
+            queue.add(root);
+            int index = 0;
+            while (index < queue.size()) {
+                TreeNode node = queue.get(index++);
+                if (node.left == null && node.right == null) {
+                    leaves.add(node);
+                } else {
+                    if (node.left != null) {
+                        queue.add(node.left);
+                    }
+                    if (node.right != null) {
+                        queue.add(node.right);
+                    }
+                }
+            }
+            leaves.sort(java.util.Comparator.comparingInt(leaf -> leaf.val));
+            int count = leaves.size();
+            for (int position = 0; position < count; position++) {
+                leaves.get(position).left = leaves.get((position - 1 + count) % count);
+                leaves.get(position).right = leaves.get((position + 1) % count);
+            }
+            return root;
+        }
+        // graph / random_list / doubly_list / doubly_list_node /
+        // random_tree are decoded in invokeFunction only: their reflective
+        // construction needs the solution's declared node class.
         throw new IllegalArgumentException("Java executor does not support codec: " + codec);
     }
 
@@ -1320,6 +1409,292 @@ public final class OpenOJJavaHarness {
             output.add(pair);
         }
         return output;
+    }
+
+    private static Object newNode(java.lang.reflect.Constructor<?> ctor, java.lang.reflect.Field valField, int value)
+        throws Exception {
+        Object node = ctor.getParameterCount() == 1 ? ctor.newInstance(value) : ctor.newInstance();
+        valField.set(node, value);
+        return node;
+    }
+
+    private static Object decodeDoublyChain(Object value, Class<?> nodeClass) throws Exception {
+        // The LC 3263 wire: a plain value array decoding into an open
+        // chain with both directions wired.
+        List<Object> values = asList(value, "doubly_list input must be a value array");
+        if (values.isEmpty()) {
+            return null;
+        }
+        java.lang.reflect.Constructor<?> ctor;
+        try {
+            ctor = nodeClass.getDeclaredConstructor(int.class);
+        } catch (NoSuchMethodException noScalarCtor) {
+            ctor = nodeClass.getDeclaredConstructor();
+        }
+        ctor.setAccessible(true);
+        java.lang.reflect.Field valField = nodeClass.getField("val");
+        java.lang.reflect.Field prev = nodeClass.getField("prev");
+        java.lang.reflect.Field next = nodeClass.getField("next");
+        List<Object> nodes = new ArrayList<>();
+        for (Object item : values) {
+            nodes.add(newNode(ctor, valField, numberValue(item).intValue()));
+        }
+        for (int index = 1; index < nodes.size(); index++) {
+            next.set(nodes.get(index - 1), nodes.get(index));
+            prev.set(nodes.get(index), nodes.get(index - 1));
+        }
+        return nodes.get(0);
+    }
+
+    private static Object decodeDoublyListNode(Object value, Class<?> nodeClass) throws Exception {
+        // The LC 3294 wire: {"values": [...], "node": v} decodes to the
+        // chain node whose value is v (values are unique per the
+        // constraints).
+        if (!(value instanceof Map)) {
+            throw new IllegalArgumentException("doubly_list_node input must carry values and node");
+        }
+        Map<?, ?> spec = (Map<?, ?>) value;
+        Object rawValues = spec.get("values");
+        Object target = spec.get("node");
+        if (rawValues == null || target == null) {
+            throw new IllegalArgumentException("doubly_list_node input must carry values and node");
+        }
+        Object head = decodeDoublyChain(rawValues, nodeClass);
+        java.lang.reflect.Field valField = nodeClass.getField("val");
+        java.lang.reflect.Field next = nodeClass.getField("next");
+        int wanted = numberValue(target).intValue();
+        for (Object node = head; node != null; node = next.get(node)) {
+            if (valField.getInt(node) == wanted) {
+                return node;
+            }
+        }
+        throw new IllegalArgumentException("doubly_list_node target value is not in the chain");
+    }
+
+    private static List<Object> serializeDoublyList(Object head) throws Exception {
+        // The forward walk must agree with every back-link, mirroring the
+        // doubly_circular invariant on an open chain.
+        List<Object> output = new ArrayList<>();
+        if (head == null) {
+            return output;
+        }
+        Class<?> nodeClass = head.getClass();
+        java.lang.reflect.Field valField = nodeClass.getField("val");
+        java.lang.reflect.Field prev = nodeClass.getField("prev");
+        java.lang.reflect.Field next = nodeClass.getField("next");
+        Object node = head;
+        Object previous = null;
+        for (int i = 0; i < (1 << 20) && node != null; i++) {
+            if (prev.get(node) != previous) {
+                throw new IllegalArgumentException("Doubly linked list is not properly linked");
+            }
+            output.add(valField.getInt(node));
+            previous = node;
+            node = next.get(node);
+        }
+        if (node != null) {
+            throw new IllegalArgumentException("Doubly linked list exceeds the walk bound");
+        }
+        return output;
+    }
+
+    private static Node decodeNaryTreeRef(Object value, Object aliasedRoot) {
+        if (!(value instanceof Number target)) {
+            throw new IllegalArgumentException("nary_tree_ref input must be a node value");
+        }
+        Node found = findNaryNode(aliasedRoot, target.intValue());
+        if (found == null) {
+            throw new IllegalArgumentException("nary_tree_ref target value is not in the aliased tree");
+        }
+        return found;
+    }
+
+    private static Node findNaryNode(Object node, int target) {
+        if (!(node instanceof Node cast)) {
+            return null;
+        }
+        if (cast.val == target) {
+            return cast;
+        }
+        for (Node child : cast.children) {
+            Node found = findNaryNode(child, target);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    private static Object[] randomTreeRow(Object raw) {
+        List<Object> row = asList(raw, "random_tree node must be a [val, random] row");
+        if (row.size() != 2) {
+            throw new IllegalArgumentException("random_tree node must be a [val, random] row");
+        }
+        return new Object[] {numberValue(row.get(0)).intValue(), row.get(1)};
+    }
+
+    private static Object decodeRandomTree(Object value, Class<?> nodeClass) throws Exception {
+        // The LC 1485 wire: a binary-tree level order whose present slots
+        // are [val, randomIndex] rows — random_list's index addressing on
+        // a tree topology. The index counts present nodes in level order,
+        // from the root.
+        List<Object> rows = asList(value, "random_tree input must be a display array");
+        if (rows.isEmpty()) {
+            return null;
+        }
+        java.lang.reflect.Constructor<?> ctor;
+        try {
+            ctor = nodeClass.getDeclaredConstructor(int.class);
+        } catch (NoSuchMethodException noScalarCtor) {
+            ctor = nodeClass.getDeclaredConstructor();
+        }
+        ctor.setAccessible(true);
+        java.lang.reflect.Field valField = nodeClass.getField("val");
+        java.lang.reflect.Field left = nodeClass.getField("left");
+        java.lang.reflect.Field right = nodeClass.getField("right");
+        java.lang.reflect.Field random = nodeClass.getField("random");
+        Object[] first = randomTreeRow(rows.get(0));
+        Object root = newNode(ctor, valField, (Integer) first[0]);
+        List<Object> order = new ArrayList<>();
+        List<Object[]> pending = new ArrayList<>();
+        List<Object> queue = new ArrayList<>();
+        order.add(root);
+        pending.add(new Object[] {root, first[1]});
+        queue.add(root);
+        int index = 1;
+        int writeIndex = 0;
+        while (writeIndex < queue.size() && index < rows.size()) {
+            Object parent = queue.get(writeIndex++);
+            for (java.lang.reflect.Field side : new java.lang.reflect.Field[] {left, right}) {
+                if (index >= rows.size()) {
+                    break;
+                }
+                Object raw = rows.get(index++);
+                if (raw == null) {
+                    continue;
+                }
+                Object[] row = randomTreeRow(raw);
+                Object child = newNode(ctor, valField, (Integer) row[0]);
+                side.set(parent, child);
+                order.add(child);
+                pending.add(new Object[] {child, row[1]});
+                queue.add(child);
+            }
+        }
+        for (Object[] entry : pending) {
+            Object target = entry[1];
+            if (target == null) {
+                continue;
+            }
+            int targetIndex = numberValue(target).intValue();
+            if (targetIndex < 0 || targetIndex >= order.size()) {
+                throw new IllegalArgumentException("Random pointer target is out of range");
+            }
+            random.set(entry[0], order.get(targetIndex));
+        }
+        return root;
+    }
+
+    private static void collectRandomTreeNodes(Object root, List<Object> into) throws Exception {
+        if (root == null) {
+            return;
+        }
+        Class<?> nodeClass = root.getClass();
+        java.lang.reflect.Field left = nodeClass.getField("left");
+        java.lang.reflect.Field right = nodeClass.getField("right");
+        List<Object> queue = new ArrayList<>();
+        queue.add(root);
+        List<Object> seen = new ArrayList<>();
+        int index = 0;
+        while (index < queue.size()) {
+            Object node = queue.get(index++);
+            if (node == null || seen.contains(node)) {
+                continue;
+            }
+            seen.add(node);
+            into.add(node);
+            queue.add(left.get(node));
+            queue.add(right.get(node));
+        }
+    }
+
+    private static List<Object> serializeRandomTree(Object result, List<Object> inputNodes) throws Exception {
+        // Level order rows like the input side; the clone check forbids
+        // returning (part of) the input tree, and every random pointer
+        // must land inside the returned tree.
+        List<Object> rows = new ArrayList<>();
+        if (result == null) {
+            return rows;
+        }
+        Class<?> nodeClass = result.getClass();
+        java.lang.reflect.Field valField = nodeClass.getField("val");
+        java.lang.reflect.Field left = nodeClass.getField("left");
+        java.lang.reflect.Field right = nodeClass.getField("right");
+        java.lang.reflect.Field random = nodeClass.getField("random");
+        List<Object> order = new ArrayList<>();
+        List<Object> queue = new ArrayList<>();
+        queue.add(result);
+        int index = 0;
+        while (index < queue.size()) {
+            Object node = queue.get(index++);
+            if (node == null) {
+                rows.add(null);
+                order.add(null);
+                continue;
+            }
+            if (order.contains(node)) {
+                throw new IllegalArgumentException("Random tree repeats a node in level order");
+            }
+            rows.add(valField.getInt(node));
+            order.add(node);
+            queue.add(left.get(node));
+            queue.add(right.get(node));
+        }
+        while (!rows.isEmpty() && rows.get(rows.size() - 1) == null) {
+            rows.remove(rows.size() - 1);
+            order.remove(order.size() - 1);
+        }
+        if (!inputNodes.isEmpty()) {
+            for (Object node : order) {
+                if (inputNodes.contains(node)) {
+                    throw new IllegalArgumentException("Returned tree shares nodes with the input tree");
+                }
+            }
+        }
+        // Random indices address present nodes in level order — the same
+        // convention the decode side uses — so placeholder slots shift
+        // neither the numbering nor the walk below.
+        List<Object> present = new ArrayList<>();
+        for (Object node : order) {
+            if (node != null) {
+                present.add(node);
+            }
+        }
+        List<Object> encoded = new ArrayList<>();
+        for (Object node : order) {
+            if (node == null) {
+                encoded.add(null);
+                continue;
+            }
+            Object target = random.get(node);
+            Integer targetIndex = null;
+            if (target != null) {
+                for (int position = 0; position < present.size(); position++) {
+                    if (present.get(position) == target) {
+                        targetIndex = position;
+                        break;
+                    }
+                }
+                if (targetIndex == null) {
+                    throw new IllegalArgumentException("Random pointer leaves the returned tree");
+                }
+            }
+            List<Object> row = new ArrayList<>();
+            row.add(valField.getInt(node));
+            row.add(targetIndex);
+            encoded.add(row);
+        }
+        return encoded;
     }
 
     @SuppressWarnings("unchecked")

@@ -1,3 +1,4 @@
+import json
 import math
 import re
 import struct
@@ -14,7 +15,26 @@ SUPPORTED_KINDS = {
     "nary_tree", "quad_tree", "nested", "next_tree", "circular_list",
     "doubly_circular", "multi_list", "alias_list", "graph", "random_list",
     "struct",
+    # Second wave: open doubly chains (LC 3263/3294), binary trees with a
+    # random pointer (LC 1485), leaf-ring specials (LC 2773), and the n-ary
+    # node-list / node-ref pair (LC 1506/1516). "json" is the generic
+    # JSON-any value (JS/TS only).
+    "doubly_list", "doubly_list_node", "random_tree", "special_tree",
+    "nary_tree_nodes", "nary_tree_ref", "json",
 }
+
+# Kinds whose node payload is an integer and whose manifest may omit the
+# implied items spec (same convention as the first wave's codecs).
+_ITEM_KINDS = {
+    "linked_list", "binary_tree", "nary_tree", "next_tree", "circular_list",
+    "doubly_circular", "alias_list", "multi_list", "doubly_list",
+    "doubly_list_node", "random_tree", "special_tree", "nary_tree_nodes",
+    "nary_tree_ref",
+}
+
+# Kinds that may carry a "class" naming the using problem's provided node
+# class, exactly like graph/random_list.
+_CLASS_KINDS = {"graph", "random_list", "doubly_list", "doubly_list_node", "random_tree"}
 
 
 def type_spec(value: Any, location: str) -> dict[str, Any]:
@@ -25,9 +45,7 @@ def type_spec(value: Any, location: str) -> dict[str, Any]:
         raise ExecutorError(f"{location} integer bits must be 32 or 64")
     if kind == "array":
         type_spec(value.get("items"), f"{location} array items")
-    if kind in {"linked_list", "binary_tree", "nary_tree", "next_tree",
-                "circular_list", "doubly_circular", "alias_list", "multi_list",
-                "graph", "random_list"}:
+    if kind in _ITEM_KINDS:
         items = value.get("items")
         if items is None:
             # Node payloads are 32-bit integers throughout the judge's
@@ -38,11 +56,11 @@ def type_spec(value: Any, location: str) -> dict[str, Any]:
         if not isinstance(items, dict) or items.get("kind") != "integer":
             raise ExecutorError(f"{location} {kind} items must be integers")
         type_spec(items, f"{location} {kind} items")
-    if kind == "alias_list":
+    if kind in {"alias_list", "nary_tree_ref"}:
         alias = value.get("alias")
         if not isinstance(alias, int) or isinstance(alias, bool) or alias < 0:
-            raise ExecutorError(f"{location} alias_list needs a non-negative 'alias' parameter index")
-    if kind in {"graph", "random_list"} and value.get("class") is not None:
+            raise ExecutorError(f"{location} {kind} needs a non-negative 'alias' parameter index")
+    if kind in _CLASS_KINDS and value.get("class") is not None:
         class_name = value.get("class")
         if not isinstance(class_name, str) or not class_name.isidentifier():
             raise ExecutorError(f"{location} {kind} 'class' must be an identifier")
@@ -76,12 +94,16 @@ def function_signature(
     if len(parameter_types) != len(parameters):
         raise ExecutorError("Every invocation parameter must be an object")
     for index, spec in enumerate(parameter_types):
-        if spec["kind"] != "alias_list":
-            continue
-        if spec["alias"] >= index:
-            raise ExecutorError(f"Parameter {index + 1} alias_list must reference an earlier parameter")
-        if parameter_types[spec["alias"]]["kind"] != "linked_list":
-            raise ExecutorError(f"Parameter {index + 1} alias_list must splice into a linked_list parameter")
+        if spec["kind"] == "alias_list":
+            if spec["alias"] >= index:
+                raise ExecutorError(f"Parameter {index + 1} alias_list must reference an earlier parameter")
+            if parameter_types[spec["alias"]]["kind"] != "linked_list":
+                raise ExecutorError(f"Parameter {index + 1} alias_list must splice into a linked_list parameter")
+        if spec["kind"] == "nary_tree_ref":
+            if spec["alias"] >= index:
+                raise ExecutorError(f"Parameter {index + 1} nary_tree_ref must reference an earlier parameter")
+            if parameter_types[spec["alias"]]["kind"] != "nary_tree":
+                raise ExecutorError(f"Parameter {index + 1} nary_tree_ref must resolve into an nary_tree parameter")
     return_type = type_spec(invocation.get("return_type"), "Return value")
     if return_type["kind"] == "struct":
         # Struct values never cross back (input-only wire for now); an
@@ -411,6 +433,86 @@ def _encode_value(value: Any, spec: dict[str, Any], location: str) -> bytes:
                     raise ExecutorError(f"{location}[{index}] random index must be null or within the list")
                 chunks.append(struct.pack(">I", random_index))
         return b"".join(chunks)
+    if kind == "doubly_list":
+        # Same value slots as linked_list; the open chain is wired both
+        # ways by the reader.
+        if value is None:
+            return b"\x00"
+        if not isinstance(value, list) or len(value) > 0xFFFFFFFF:
+            raise ExecutorError(f"{location} must be an array or null")
+        return (
+            b"\x01"
+            + struct.pack(">I", len(value))
+            + b"".join(
+                _encode_value(item, spec["items"], f"{location}[{index}]")
+                for index, item in enumerate(value)
+            )
+        )
+    if kind == "doubly_list_node":
+        # {"values": [...], "node": v} — the chain plus the (unique) value
+        # of the node the method receives.
+        if not isinstance(value, dict) or set(value) != {"values", "node"}:
+            raise ExecutorError(f"{location} must be an object with values and node")
+        chain, target = value["values"], value["node"]
+        if chain is None:
+            chain_prefix = b"\x00"
+        elif isinstance(chain, list) and len(chain) <= 0xFFFFFFFF:
+            chain_prefix = b"\x01" + struct.pack(">I", len(chain))
+        else:
+            raise ExecutorError(f"{location}.values must be an array or null")
+        return (
+            chain_prefix
+            + b"".join(
+                _encode_value(item, spec["items"], f"{location}.values[{index}]")
+                for index, item in enumerate(chain or [])
+            )
+            + _encode_value(target, spec["items"], f"{location}.node")
+        )
+    if kind == "random_tree":
+        # Binary-tree level order whose present slots are [val, randomIndex]
+        # rows: the slot flag of binary_tree plus random_list's index
+        # addressing (0xFFFFFFFF = null).
+        if not isinstance(value, list) or len(value) > 0xFFFFFFFF:
+            raise ExecutorError(f"{location} must be a display array")
+        chunks = [struct.pack(">I", len(value))]
+        for index, row in enumerate(value):
+            if row is None:
+                chunks.append(b"\x00")
+                continue
+            if not isinstance(row, list) or len(row) != 2:
+                raise ExecutorError(f"{location}[{index}] must be a [val, random] row")
+            node_val, random_index = row
+            chunks.append(b"\x01")
+            chunks.append(_encode_value(node_val, spec["items"], f"{location}[{index}]"))
+            if random_index is None:
+                chunks.append(struct.pack(">I", 0xFFFFFFFF))
+            else:
+                if isinstance(random_index, bool) or not isinstance(random_index, int) or not 0 <= random_index < len(value):
+                    raise ExecutorError(f"{location}[{index}] random index must be null or within the display")
+                chunks.append(struct.pack(">I", random_index))
+        return b"".join(chunks)
+    if kind in {"special_tree", "nary_tree_nodes"}:
+        # The leaf ring (LC 2773) and the node-list handover (LC 1506) ride
+        # the plain binary-tree / n-ary display wires; the special wiring is
+        # the reader's semantics, not the wire's.
+        wire = "binary_tree" if kind == "special_tree" else "nary_tree"
+        return _encode_value(value, {**spec, "kind": wire}, location)
+    if kind == "nary_tree_ref":
+        # Just the (unique) value naming the node inside the aliased tree.
+        return _encode_value(value, spec["items"], location)
+    if kind == "json":
+        # Length-prefixed compact JSON — the generic any-shaped value
+        # (JS/TS readers JSON.parse it; other renderers reject the kind).
+        if isinstance(value, (bool, int, float, str, list, dict)) or value is None:
+            try:
+                encoded = json.dumps(value, allow_nan=False, separators=(",", ":")).encode("utf-8")
+            except (TypeError, ValueError) as error:
+                raise ExecutorError(f"{location} is not JSON-encodable: {error}") from error
+        else:
+            raise ExecutorError(f"{location} has unsupported type {type(value).__name__}")
+        if len(encoded) > 0xFFFFFFFF:
+            raise ExecutorError(f"{location} is too large")
+        return struct.pack(">I", len(encoded)) + encoded
     if kind == "struct":
         fields = spec.get("fields") or []
         if not isinstance(value, list) or len(value) != len(fields):
@@ -444,11 +546,19 @@ def cpp_type(spec: dict[str, Any]) -> str:
             "alias_list": "ListNode*",
             "graph": "Node*",
             "random_list": "Node*",
+            "doubly_list": "Node*",
+            "doubly_list_node": "Node*",
+            "random_tree": "Node*",
+            "special_tree": "TreeNode*",
+            "nary_tree_nodes": "std::vector<Node*>",
+            "nary_tree_ref": "Node*",
         },
     )
 
 
 def typescript_type(spec: dict[str, Any]) -> str:
+    if spec["kind"] == "json":
+        return "any"
     return _render_type(
         spec,
         {
@@ -470,6 +580,13 @@ def typescript_type(spec: dict[str, Any]) -> str:
             "alias_list": "ListNode | null",
             "graph": "Node | null",
             "random_list": "Node | null",
+            "doubly_list": "Node | null",
+            "doubly_list_node": "Node | null",
+            "random_tree": "Node | null",
+            "special_tree": "TreeNode | null",
+            "nary_tree_nodes": "Array<Node | null>",
+            "nary_tree_ref": "Node | null",
+            "json": "any",
         },
     )
 
@@ -496,6 +613,12 @@ def go_type(spec: dict[str, Any]) -> str:
             "alias_list": "*ListNode",
             "graph": "*Node",
             "random_list": "*Node",
+            "doubly_list": "*Node",
+            "doubly_list_node": "*Node",
+            "random_tree": "*Node",
+            "special_tree": "*TreeNode",
+            "nary_tree_nodes": "[]*Node",
+            "nary_tree_ref": "*Node",
         },
     )
 
@@ -529,28 +652,43 @@ def rust_type(spec: dict[str, Any]) -> str:
             "alias_list": "Option<std::rc::Rc<std::cell::RefCell<SharedListNode>>>",
             "graph": "Option<std::rc::Rc<std::cell::RefCell<Node>>>",
             "random_list": "Option<std::rc::Rc<std::cell::RefCell<Node>>>",
+            # Second wave: every kind whose wire carries sharing (an open
+            # doubly chain, a random pointer, a leaf ring, a node handed
+            # over by identity) needs Rc — Box's single owner cannot
+            # express it.
+            "doubly_list": "Option<std::rc::Rc<std::cell::RefCell<Node>>>",
+            "doubly_list_node": "Option<std::rc::Rc<std::cell::RefCell<Node>>>",
+            "random_tree": "Option<std::rc::Rc<std::cell::RefCell<Node>>>",
+            "special_tree": "Option<std::rc::Rc<std::cell::RefCell<TreeNode>>>",
+            "nary_tree_nodes": "Vec<std::rc::Rc<std::cell::RefCell<Node>>>",
+            "nary_tree_ref": "Option<std::rc::Rc<std::cell::RefCell<Node>>>",
         },
     )
 
 
 def rust_parameter_type(invocation: dict[str, Any], index: int, spec: dict[str, Any]) -> str:
     """The Rust type of one function parameter: an aliased linked_list
-    renders as the shared-ownership node, since the alias_list reader
-    splices real nodes between the lists."""
-    if spec.get("kind") == "linked_list":
-        aliased = set()
-        for parameter in invocation.get("parameters", []):
-            if not isinstance(parameter, dict):
-                continue
-            # Parameters appear raw ({name, value_type}) on the invocation
-            # and flattened (kind/alias hoisted) once type_spec has run;
-            # read the alias target from either shape.
-            value_type = parameter.get("value_type")
-            nested = value_type if isinstance(value_type, dict) else {}
-            if parameter.get("kind", nested.get("kind")) == "alias_list":
-                aliased.add(parameter.get("alias", nested.get("alias")))
-        if index in aliased:
-            return "Option<std::rc::Rc<std::cell::RefCell<SharedListNode>>>"
+    renders as the shared-ownership node (the alias_list reader splices
+    real nodes between the lists), and an aliased nary_tree as the shared
+    n-ary node (an nary_tree_ref parameter hands over a node inside it —
+    LC 1516's rust stub is Rc-based for exactly this reason)."""
+    aliased_targets = set()
+    for parameter in invocation.get("parameters", []):
+        if not isinstance(parameter, dict):
+            continue
+        # Parameters appear raw ({name, value_type}) on the invocation
+        # and flattened (kind/alias hoisted) once type_spec has run;
+        # read the alias target from either shape.
+        value_type = parameter.get("value_type")
+        nested = value_type if isinstance(value_type, dict) else {}
+        kind = parameter.get("kind", nested.get("kind"))
+        if kind in {"alias_list", "nary_tree_ref"}:
+            aliased_targets.add((kind, parameter.get("alias", nested.get("alias"))))
+    if spec.get("kind") == "linked_list" and ("alias_list", index) in aliased_targets:
+        return "Option<std::rc::Rc<std::cell::RefCell<SharedListNode>>>"
+    if spec.get("kind") == "nary_tree" and ("nary_tree_ref", index) in aliased_targets:
+        class_name = provided_node_class(invocation, "nary_tree")
+        return f"Option<std::rc::Rc<std::cell::RefCell<{class_name}>>>"
     return rust_type(spec)
 
 
@@ -571,7 +709,8 @@ def uses_struct_kinds(invocation: dict[str, Any]) -> set[str]:
         elif kind in {
             "nary_tree", "quad_tree", "nested", "next_tree", "circular_list",
             "doubly_circular", "multi_list", "alias_list", "graph",
-            "random_list", "struct",
+            "random_list", "struct", "doubly_list", "doubly_list_node",
+            "random_tree", "special_tree", "nary_tree_nodes", "nary_tree_ref",
         }:
             found.add(kind)
         elif kind == "array":
@@ -590,7 +729,7 @@ def struct_item_spec(invocation: dict[str, Any]) -> dict[str, Any]:
     def walk(spec: Any) -> Optional[dict[str, Any]]:
         if not isinstance(spec, dict):
             return None
-        if spec.get("kind") in {"linked_list", "binary_tree"}:
+        if spec.get("kind") in {"linked_list", "binary_tree", "special_tree", "nary_tree_nodes", "nary_tree_ref"}:
             return spec.get("items")
         if spec.get("kind") == "array":
             return walk(spec.get("items"))
@@ -628,7 +767,9 @@ def _render_type(spec: dict[str, Any], names: dict[str, str]) -> str:
         # The class is the using problem's provided/ source; its bare name
         # is the type in every language.
         return str(spec["class"])
-    if kind in {"graph", "random_list"} and isinstance(spec.get("class"), str) and spec["class"]:
+    if kind == "json":
+        raise ExecutorError("json values are supported in JavaScript and TypeScript only")
+    if kind in _CLASS_KINDS and isinstance(spec.get("class"), str) and spec["class"]:
         # Re-decorate the language's rendering around the provided name so
         # every pointer/reference wrapper keeps its shape.
         return names[kind].replace("Node", spec["class"])

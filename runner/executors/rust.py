@@ -52,6 +52,16 @@ def _read_expression(spec: dict[str, Any], reader: str = "openoj_reader") -> str
         return f"{reader}.graph()?"
     if kind == "random_list":
         return f"{reader}.random_list()?"
+    if kind == "doubly_list":
+        return f"{reader}.doubly_list()?"
+    if kind == "doubly_list_node":
+        return f"{reader}.doubly_list_node()?"
+    if kind == "random_tree":
+        return f"{reader}.random_tree()?"
+    if kind == "special_tree":
+        return f"{reader}.special_tree()?"
+    if kind == "nary_tree_nodes":
+        return f"{reader}.nary_tree_nodes()?"
     if kind == "struct":
         return f"{reader}.read{_snake_case(spec['class'])}()?"
     nested = _read_expression(spec["items"], "reader")
@@ -105,6 +115,31 @@ class RustExecutor(CompiledExecutor):
         item_read = _read_expression(struct_item_spec(invocation), "self")
         graph_class = provided_node_class(invocation, "graph")
         random_class = provided_node_class(invocation, "random_list")
+        # Second-wave kinds resolve their node class exactly like
+        # graph/random_list — the manifest's provided/ source. An Rc-shared
+        # chain, ring, or n-ary tree cannot be built over the common
+        # library's Box-children shapes.
+        doubly_class = provided_node_class(
+            invocation, "doubly_list" if "doubly_list" in structs else "doubly_list_node"
+        )
+        random_tree_class = provided_node_class(invocation, "random_tree")
+        special_class = provided_node_class(invocation, "special_tree")
+        # LC 1506's invocation carries only an nary_tree_nodes parameter (no
+        # nary_tree one), so the class resolves from the kind actually
+        # present — same split as the doubly pair above.
+        nary_class = provided_node_class(
+            invocation, "nary_tree_nodes" if "nary_tree_nodes" in structs else "nary_tree"
+        )
+        nary_ref_aliased = sorted(
+            {
+                spec["alias"]
+                for spec in parameters
+                if spec.get("kind") == "nary_tree_ref"
+            }
+        )
+        shared_nary_return = return_type.get("kind") == "nary_tree" and (
+            "nary_tree_nodes" in structs or "nary_tree_ref" in structs or nary_ref_aliased
+        )
         struct_codecs = ""
         result_expression = "openoj_actual.openoj_json()"
         if "list" in structs:
@@ -766,6 +801,343 @@ class RustExecutor(CompiledExecutor):
                     ".map(|part| openoj_random_json(part, &openoj_input_nodes_random.borrow()))"
                     ".collect::<Result<Vec<String>, String>>()?.join(\",\")))"
                 )
+        if "doubly_list" in structs or "doubly_list_node" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                impl OpenOJReader {{
+                    fn doubly_list(&mut self) -> Result<Option<std::rc::Rc<std::cell::RefCell<{doubly_class}>>>, String> {{
+                        // The open chain wires both directions as it reads,
+                        // mirroring the multi_list reader's prev/next wiring.
+                        if self.take(1)?[0] == 0 {{ return Ok(None); }}
+                        let length = self.u32()? as usize;
+                        let mut head: Option<std::rc::Rc<std::cell::RefCell<{doubly_class}>>> = None;
+                        let mut tail: Option<std::rc::Rc<std::cell::RefCell<{doubly_class}>>> = None;
+                        for _ in 0..length {{
+                            let node = std::rc::Rc::new(std::cell::RefCell::new({doubly_class}::new({item_read})));
+                            if let Some(previous) = tail.clone() {{
+                                previous.borrow_mut().next = Some(node.clone());
+                                node.borrow_mut().prev = Some(previous);
+                            }} else {{
+                                head = Some(node.clone());
+                            }}
+                            tail = Some(node);
+                        }}
+                        Ok(head)
+                    }}
+                }}
+                """
+            )
+        if "doubly_list_node" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                impl OpenOJReader {{
+                    fn doubly_list_node(&mut self) -> Result<Option<std::rc::Rc<std::cell::RefCell<{doubly_class}>>>, String> {{
+                        // The chain, then the (unique) value naming the node
+                        // the method receives — the handle is the real node.
+                        let head = self.doubly_list()?;
+                        let target = self.i32()?;
+                        let mut current = head;
+                        while let Some(node) = current {{
+                            if node.borrow().val == target {{ return Ok(Some(node)); }}
+                            current = node.borrow().next.clone();
+                        }}
+                        Err("doubly_list_node target value is not in the chain".into())
+                    }}
+                }}
+                """
+            )
+        if "doubly_list" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                fn openoj_doubly_list_json(head: &Option<std::rc::Rc<std::cell::RefCell<{doubly_class}>>>) -> Result<String, String> {{
+                    // The forward walk must agree with every back-link,
+                    // mirroring the doubly_circular invariant on an open
+                    // chain.
+                    let mut items: Vec<String> = Vec::new();
+                    let mut previous: Option<std::rc::Rc<std::cell::RefCell<{doubly_class}>>> = None;
+                    let mut current = head.clone();
+                    for _ in 0..(1 << 20) {{
+                        let node = match current {{ Some(node) => node, None => return Ok(format!("[{{}}]", items.join(","))) }};
+                        let linked = match (node.borrow().prev.clone(), previous.clone()) {{
+                            (None, None) => true,
+                            (Some(value), Some(previous_node)) => std::rc::Rc::ptr_eq(&value, &previous_node),
+                            _ => false,
+                        }};
+                        if !linked {{ return Err("Doubly linked list is not properly linked".into()); }}
+                        items.push(node.borrow().val.to_string());
+                        previous = Some(node.clone());
+                        current = node.borrow().next.clone();
+                    }}
+                    Err("Doubly linked list exceeds the walk bound".into())
+                }}
+                """
+            )
+            if return_type.get("kind") == "doubly_list":
+                result_expression = "Ok(openoj_doubly_list_json(&openoj_actual)?)"
+            if return_type.get("kind") == "array" and return_type.get("items", {}).get("kind") == "doubly_list":
+                result_expression = (
+                    "Ok(format!(\"[{}]\", openoj_actual.iter()"
+                    ".map(|part| openoj_doubly_list_json(part))"
+                    ".collect::<Result<Vec<String>, String>>()?.join(\",\")))"
+                )
+        if "random_tree" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                impl OpenOJReader {{
+                    fn random_tree(&mut self) -> Result<Option<std::rc::Rc<std::cell::RefCell<{random_tree_class}>>>, String> {{
+                        // Binary-tree level order whose present slots carry
+                        // [val, random] rows; the random index counts present
+                        // nodes in level order and resolves after the build.
+                        let count = self.u32()? as usize;
+                        if count == 0 {{ return Ok(None); }}
+                        let mut slots: Vec<Option<std::rc::Rc<std::cell::RefCell<{random_tree_class}>>>> = Vec::with_capacity(count);
+                        let mut targets: Vec<u32> = Vec::with_capacity(count);
+                        for _ in 0..count {{
+                            if self.take(1)?[0] == 1 {{
+                                slots.push(Some(std::rc::Rc::new(std::cell::RefCell::new({random_tree_class}::new({item_read})))));
+                                targets.push(self.u32()?);
+                            }} else {{
+                                slots.push(None);
+                            }}
+                        }}
+                        if slots[0].is_none() {{ return Err("random_tree root must be a [val, random] row".into()); }}
+                        let root = slots[0].clone().unwrap();
+                        let mut queue: std::collections::VecDeque<std::rc::Rc<std::cell::RefCell<{random_tree_class}>>> = std::collections::VecDeque::new();
+                        queue.push_back(root.clone());
+                        let mut index = 1usize;
+                        while let Some(node) = queue.pop_front() {{
+                            for side in 0..2 {{
+                                if index >= slots.len() {{ break; }}
+                                let slot = slots[index].clone();
+                                index += 1;
+                                if let Some(child) = slot {{
+                                    if side == 0 {{ node.borrow_mut().left = Some(child.clone()); }}
+                                    else {{ node.borrow_mut().right = Some(child.clone()); }}
+                                    queue.push_back(child);
+                                }}
+                            }}
+                        }}
+                        let present: Vec<std::rc::Rc<std::cell::RefCell<{random_tree_class}>>> = slots.iter().flatten().cloned().collect();
+                        for (node, target) in present.iter().zip(targets.iter()) {{
+                            if *target == 0xFFFF_FFFF {{ continue; }}
+                            if (*target as usize) >= present.len() {{ return Err("Random pointer target is out of range".into()); }}
+                            node.borrow_mut().random = Some(present[*target as usize].clone());
+                        }}
+                        Ok(Some(root))
+                    }}
+                }}
+                fn openoj_random_tree_json(root: &Option<std::rc::Rc<std::cell::RefCell<{random_tree_class}>>>, input_nodes: &[*const std::cell::RefCell<{random_tree_class}>]) -> Result<String, String> {{
+                    // The returned tree's own level order as [val,
+                    // randomIndex-or-null] rows, trailing slots trimmed; the
+                    // clone check forbids returning (part of) the input tree
+                    // and every random pointer must land inside the returned
+                    // tree. Indices address present nodes in level order —
+                    // the decode side's convention — so placeholder slots
+                    // shift neither the numbering nor the walk below.
+                    let mut items: Vec<String> = Vec::new();
+                    let mut order: Vec<Option<std::rc::Rc<std::cell::RefCell<{random_tree_class}>>>> = Vec::new();
+                    let mut seen: Vec<*const std::cell::RefCell<{random_tree_class}>> = Vec::new();
+                    let mut queue: std::collections::VecDeque<Option<std::rc::Rc<std::cell::RefCell<{random_tree_class}>>>> = std::collections::VecDeque::new();
+                    if let Some(node) = root {{ queue.push_back(Some(node.clone())); }}
+                    while let Some(entry) = queue.pop_front() {{
+                        let node = match entry {{
+                            None => {{ items.push("null".to_string()); order.push(None); continue; }}
+                            Some(node) => node,
+                        }};
+                        if seen.contains(&std::rc::Rc::as_ptr(&node)) {{ return Err("Random tree repeats a node in level order".into()); }}
+                        seen.push(std::rc::Rc::as_ptr(&node));
+                        items.push(node.borrow().val.to_string());
+                        order.push(Some(node.clone()));
+                        let left = node.borrow().left.clone();
+                        let right = node.borrow().right.clone();
+                        queue.push_back(left);
+                        queue.push_back(right);
+                    }}
+                    while items.last().map_or(false, |value| value == "null") {{ items.pop(); order.pop(); }}
+                    for entry in order.iter().flatten() {{
+                        if input_nodes.contains(&std::rc::Rc::as_ptr(entry)) {{
+                            return Err("Returned tree shares nodes with the input tree".into());
+                        }}
+                    }}
+                    let present: Vec<std::rc::Rc<std::cell::RefCell<{random_tree_class}>>> = order.iter().flatten().cloned().collect();
+                    for index in 0..order.len() {{
+                        let Some(node) = &order[index] else {{ continue; }};
+                        let random = node.borrow().random.clone();
+                        items[index] = match random {{
+                            None => format!("[{{}},null]", node.borrow().val),
+                            Some(target) => match present.iter().position(|value| std::rc::Rc::ptr_eq(value, &target)) {{
+                                Some(position) => format!("[{{}},{{}}]", node.borrow().val, position),
+                                None => return Err("Random pointer leaves the returned tree".into()),
+                            }},
+                        }};
+                    }}
+                    Ok(format!("[{{}}]", items.join(",")))
+                }}
+                """
+            )
+            if return_type.get("kind") == "random_tree":
+                result_expression = "Ok(openoj_random_tree_json(&openoj_actual, &openoj_input_nodes_random_tree.borrow())?)"
+            if return_type.get("kind") == "array" and return_type.get("items", {}).get("kind") == "random_tree":
+                result_expression = (
+                    "Ok(format!(\"[{}]\", openoj_actual.iter()"
+                    ".map(|part| openoj_random_tree_json(part, &openoj_input_nodes_random_tree.borrow()))"
+                    ".collect::<Result<Vec<String>, String>>()?.join(\",\")))"
+                )
+        if "special_tree" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                impl OpenOJReader {{
+                    fn special_tree(&mut self) -> Result<Option<std::rc::Rc<std::cell::RefCell<{special_class}>>>, String> {{
+                        // Binary-tree slots decode into shared nodes (a ring
+                        // cannot live in Box children); the leaves — collected
+                        // in level order, sorted by value — are then ring-wired
+                        // left to the previous and right to the next leaf, the
+                        // special property the display cannot carry.
+                        let length = self.u32()? as usize;
+                        let mut slots: Vec<Option<std::rc::Rc<std::cell::RefCell<{special_class}>>>> = Vec::with_capacity(length);
+                        for _ in 0..length {{
+                            if self.take(1)?[0] == 1 {{
+                                slots.push(Some(std::rc::Rc::new(std::cell::RefCell::new({special_class}::new({item_read})))));
+                            }} else {{
+                                slots.push(None);
+                            }}
+                        }}
+                        if slots.is_empty() || slots[0].is_none() {{ return Ok(None); }}
+                        let root = slots[0].clone().unwrap();
+                        let mut queue: std::collections::VecDeque<std::rc::Rc<std::cell::RefCell<{special_class}>>> = std::collections::VecDeque::new();
+                        queue.push_back(root.clone());
+                        let mut index = 1usize;
+                        while let Some(node) = queue.pop_front() {{
+                            for side in 0..2 {{
+                                if index >= slots.len() {{ break; }}
+                                let slot = slots[index].clone();
+                                index += 1;
+                                if let Some(child) = slot {{
+                                    if side == 0 {{ node.borrow_mut().left = Some(child.clone()); }}
+                                    else {{ node.borrow_mut().right = Some(child.clone()); }}
+                                    queue.push_back(child);
+                                }}
+                            }}
+                        }}
+                        let mut leaves: Vec<std::rc::Rc<std::cell::RefCell<{special_class}>>> = Vec::new();
+                        let mut walk: std::collections::VecDeque<std::rc::Rc<std::cell::RefCell<{special_class}>>> = std::collections::VecDeque::new();
+                        walk.push_back(root.clone());
+                        while let Some(node) = walk.pop_front() {{
+                            let left = node.borrow().left.clone();
+                            let right = node.borrow().right.clone();
+                            match (left, right) {{
+                                (None, None) => leaves.push(node),
+                                (left, right) => {{
+                                    for child in [left, right].into_iter().flatten() {{ walk.push_back(child); }}
+                                }}
+                            }}
+                        }}
+                        leaves.sort_by_key(|leaf| leaf.borrow().val);
+                        let count = leaves.len();
+                        for position in 0..count {{
+                            let previous = leaves[(position + count - 1) % count].clone();
+                            let next = leaves[(position + 1) % count].clone();
+                            leaves[position].borrow_mut().left = Some(previous);
+                            leaves[position].borrow_mut().right = Some(next);
+                        }}
+                        Ok(Some(root))
+                    }}
+                }}
+                """
+            )
+        if "nary_tree_nodes" in structs or "nary_tree_ref" in structs or nary_ref_aliased:
+            struct_codecs += textwrap.dedent(
+                f"""
+                impl OpenOJReader {{
+                    fn shared_nary(&mut self) -> Result<Option<std::rc::Rc<std::cell::RefCell<{nary_class}>>>, String> {{
+                        // The plain n-ary display decoded into shared nodes —
+                        // an nary_tree_ref handover or node-list parameter
+                        // cannot express node identity through Box children.
+                        let length = self.u32()? as usize;
+                        let mut slots: Vec<Option<std::rc::Rc<std::cell::RefCell<{nary_class}>>>> = Vec::with_capacity(length);
+                        for _ in 0..length {{
+                            if self.take(1)?[0] == 1 {{
+                                slots.push(Some(std::rc::Rc::new(std::cell::RefCell::new({nary_class}::new({item_read})))));
+                            }} else {{
+                                slots.push(None);
+                            }}
+                        }}
+                        if slots.is_empty() || slots[0].is_none() {{ return Ok(None); }}
+                        let root = slots[0].clone().unwrap();
+                        let mut queue: std::collections::VecDeque<std::rc::Rc<std::cell::RefCell<{nary_class}>>> = std::collections::VecDeque::new();
+                        queue.push_back(root.clone());
+                        // Display wire: slot 1 closes the root group, then
+                        // every node's children run until that node's own
+                        // separator slot; tolerate the marker's absence.
+                        let mut index = if length > 1 && slots[1].is_some() {{ 1 }} else {{ 2 }};
+                        while let Some(node) = queue.pop_front() {{
+                            while index < slots.len() {{
+                                let slot = slots[index].clone();
+                                index += 1;
+                                match slot {{
+                                    Some(child) => {{
+                                        queue.push_back(child.clone());
+                                        node.borrow_mut().children.push(Some(child));
+                                    }}
+                                    None => break,
+                                }}
+                            }}
+                        }}
+                        Ok(Some(root))
+                    }}
+                }}
+                """
+            )
+        if "nary_tree_nodes" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                impl OpenOJReader {{
+                    fn nary_tree_nodes(&mut self) -> Result<Vec<std::rc::Rc<std::cell::RefCell<{nary_class}>>>, String> {{
+                        // The node-list handover: the tree decoded shared, its
+                        // nodes handed over in level order (the statement
+                        // grants the solution an arbitrary permutation).
+                        let root = self.shared_nary()?;
+                        let mut nodes: Vec<std::rc::Rc<std::cell::RefCell<{nary_class}>>> = Vec::new();
+                        let mut queue: std::collections::VecDeque<std::rc::Rc<std::cell::RefCell<{nary_class}>>> = std::collections::VecDeque::new();
+                        if let Some(root) = root {{ queue.push_back(root); }}
+                        while let Some(node) = queue.pop_front() {{
+                            let children = node.borrow().children.clone();
+                            nodes.push(node);
+                            for child in children.into_iter().flatten() {{ queue.push_back(child); }}
+                        }}
+                        Ok(nodes)
+                    }}
+                }}
+                """
+            )
+        if shared_nary_return:
+            struct_codecs += textwrap.dedent(
+                f"""
+                fn openoj_shared_nary_json(root: &Option<std::rc::Rc<std::cell::RefCell<{nary_class}>>>) -> Result<String, String> {{
+                    // The display wire from shared nodes, clone-walking
+                    // children — a returned node is frequently an input node
+                    // and must not be consumed.
+                    let mut items: Vec<String> = Vec::new();
+                    if let Some(node) = root {{
+                        items.push(node.borrow().val.to_string());
+                        items.push("null".to_string());
+                        let mut queue: std::collections::VecDeque<std::rc::Rc<std::cell::RefCell<{nary_class}>>> = std::collections::VecDeque::new();
+                        queue.push_back(node.clone());
+                        while let Some(current) = queue.pop_front() {{
+                            let children = current.borrow().children.clone();
+                            for child in children.into_iter().flatten() {{
+                                items.push(child.borrow().val.to_string());
+                                queue.push_back(child);
+                            }}
+                            items.push("null".to_string());
+                        }}
+                    }}
+                    while items.last().map_or(false, |value| value == "null") {{ items.pop(); }}
+                    Ok(format!("[{{}}]", items.join(",")))
+                }}
+                """
+            )
+            result_expression = "Ok(openoj_shared_nary_json(&openoj_actual)?)"
         if "struct" in structs:
             def _struct_reader(spec: dict[str, Any]) -> str:
                 fields = spec.get("fields") or []
@@ -821,6 +1193,24 @@ class RustExecutor(CompiledExecutor):
                 f"    let openoj_input_nodes_random: std::cell::RefCell<Vec<*const std::cell::RefCell<{random_class}>>> = "
                 "std::cell::RefCell::new(Vec::new());\n"
             )
+        if "random_tree" in structs:
+            input_locals += (
+                f"    let openoj_input_nodes_random_tree: std::cell::RefCell<Vec<*const std::cell::RefCell<{random_tree_class}>>> = "
+                "std::cell::RefCell::new(Vec::new());\n"
+            )
+
+        def parameter_type(index: int, spec: dict[str, Any]) -> str:
+            # The shared-identity kinds render the manifest's provided
+            # class: an Rc-shared shape the common Box-children nodes
+            # cannot carry. Everything else goes through rust_parameter_type.
+            kind = spec.get("kind")
+            if kind == "special_tree":
+                return f"Option<std::rc::Rc<std::cell::RefCell<{special_class}>>>"
+            if kind == "nary_tree_nodes":
+                return f"Vec<std::rc::Rc<std::cell::RefCell<{nary_class}>>>"
+            if kind == "nary_tree_ref":
+                return f"Option<std::rc::Rc<std::cell::RefCell<{nary_class}>>>"
+            return rust_parameter_type(invocation, index, spec)
 
         def declaration(index: int, spec: dict[str, Any]) -> str:
             if spec.get("kind") == "alias_list":
@@ -864,13 +1254,48 @@ class RustExecutor(CompiledExecutor):
                     }};
                     """
                 ).rstrip()
+            if spec.get("kind") == "nary_tree_ref":
+                # A node of the already-decoded aliased tree, named by its
+                # (unique) value: the argument is that exact Rc handle, so
+                # mutations through it land in the aliased tree.
+                aliased_tree = f"openoj_arg_{spec['alias']}"
+                return textwrap.dedent(
+                    f"""
+                    let openoj_arg_{index}: Option<std::rc::Rc<std::cell::RefCell<{nary_class}>>> = {{
+                        let target = openoj_reader.i32()?;
+                        fn openoj_find_nary_node(
+                            node: &std::rc::Rc<std::cell::RefCell<{nary_class}>>,
+                            target: i32,
+                        ) -> Option<std::rc::Rc<std::cell::RefCell<{nary_class}>>> {{
+                            if node.borrow().val == target {{ return Some(node.clone()); }}
+                            let children = node.borrow().children.clone();
+                            for child in children.into_iter().flatten() {{
+                                if let Some(found) = openoj_find_nary_node(&child, target) {{ return Some(found); }}
+                            }}
+                            None
+                        }}
+                        match &{aliased_tree} {{
+                            Some(root) => match openoj_find_nary_node(root, target) {{
+                                Some(found) => Some(found),
+                                None => return Err("nary_tree_ref target value is not in the aliased tree".into()),
+                            }},
+                            None => return Err("nary_tree_ref target value is not in the aliased tree".into()),
+                        }}
+                    }};
+                    """
+                ).rstrip()
             aliased = spec.get("kind") == "linked_list" and index in aliased_indexes
+            nary_aliased = spec.get("kind") == "nary_tree" and index in nary_ref_aliased
             # An aliased linked_list renders as the shared-ownership node
             # (the alias_list reader splices real nodes between the lists),
-            # so it decodes through the shared reader, not the Box one.
+            # so it decodes through the shared reader, not the Box one —
+            # and a tree aliased by an nary_tree_ref parameter decodes
+            # shared for the same reason.
             read_expression = "openoj_reader.shared_list()?" if aliased else _read_expression(spec)
+            if nary_aliased:
+                read_expression = "openoj_reader.shared_nary()?"
             lines = [
-                f"    let openoj_arg_{index}: {rust_parameter_type(invocation, index, spec)} = {read_expression};"
+                f"    let openoj_arg_{index}: {parameter_type(index, spec)} = {read_expression};"
             ]
             if aliased:
                 lines.append(
@@ -909,6 +1334,25 @@ class RustExecutor(CompiledExecutor):
                     "            openoj_input_nodes_random.borrow_mut().push(std::rc::Rc::as_ptr(&node));"
                 )
                 lines.append("            current = node.borrow().next.clone();")
+                lines.append("        }")
+                lines.append("    }")
+            if spec.get("kind") == "random_tree":
+                # Clone-check registry: every input tree node (the random
+                # targets live inside the tree, left/right reaches them all).
+                lines.append("    {")
+                lines.append(
+                    "        let mut queue: std::collections::VecDeque<std::rc::Rc<std::cell::RefCell<"
+                    f"{random_tree_class}>>> = std::collections::VecDeque::new();"
+                )
+                lines.append(f"        if let Some(root) = openoj_arg_{index}.clone() {{ queue.push_back(root); }}")
+                lines.append("        while let Some(node) = queue.pop_front() {")
+                lines.append(
+                    "            if openoj_input_nodes_random_tree.borrow().iter().any(|value| *value == std::rc::Rc::as_ptr(&node)) { continue; }"
+                )
+                lines.append("            openoj_input_nodes_random_tree.borrow_mut().push(std::rc::Rc::as_ptr(&node));")
+                lines.append("            let left = node.borrow().left.clone();")
+                lines.append("            let right = node.borrow().right.clone();")
+                lines.append("            for child in [left, right].into_iter().flatten() { queue.push_back(child); }")
                 lines.append("        }")
                 lines.append("    }")
             return "\n".join(lines)

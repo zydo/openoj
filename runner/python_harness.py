@@ -14,6 +14,7 @@ from typing import Any
 sys.path.insert(0, "/runner")
 
 from leetcode_types import (
+    DoublyListNode,
     GraphNode,
     ListNode,
     MultiListNode,
@@ -22,16 +23,20 @@ from leetcode_types import (
     NodeWithNext,
     QuadNode,
     RandomListNode,
+    RandomTreeNode,
     TreeNode,
+    binary_tree_nodes,
     chain_nodes,
     decode,
     emit_protocol,
     encode,
     graph_nodes,
     parse_alias_list,
+    parse_nary_tree_ref,
     serialize_alias_list,
     serialize_graph,
     serialize_random_list,
+    serialize_random_tree,
 )
 
 
@@ -84,6 +89,8 @@ def _load_solution(solution_path: Path, assembly_paths: list[Path] | None = None
                 "MultiListNode": MultiListNode,
                 "GraphNode": GraphNode,
                 "RandomListNode": RandomListNode,
+                "DoublyListNode": DoublyListNode,
+                "RandomTreeNode": RandomTreeNode,
             }
         )
     spec.loader.exec_module(module)
@@ -137,6 +144,15 @@ def _decode_function_arguments(
                 raise ValueError("alias_list requires an earlier aliased parameter")
             arguments.append(parse_alias_list(value, arguments[int(alias)]))
             continue
+        if codec == "nary_tree_ref":
+            # A node of an earlier n-ary tree, named by its (unique) value:
+            # the argument is that exact node object, so mutations through
+            # it land in the aliased tree.
+            alias = parameter.get("alias")
+            if alias is None or not 0 <= int(alias) < index:
+                raise ValueError("nary_tree_ref requires an earlier n-ary parameter")
+            arguments.append(parse_nary_tree_ref(value, arguments[int(alias)]))
+            continue
         decoded = decode(value, codec)
         if codec == "list_node":
             context.setdefault("list_heads", []).append(decoded)
@@ -144,6 +160,8 @@ def _decode_function_arguments(
             context.setdefault("graph_nodes", []).extend(graph_nodes(decoded))
         elif codec == "random_list":
             context.setdefault("random_nodes", []).extend(chain_nodes(decoded))
+        elif codec == "random_tree":
+            context.setdefault("random_tree_nodes", []).extend(binary_tree_nodes(decoded))
         arguments.append(decoded)
     return arguments, context
 
@@ -161,6 +179,8 @@ def _encode_function_result(
         return serialize_graph(actual, context.get("graph_nodes", []))
     if codec == "random_list":
         return serialize_random_list(actual, context.get("random_nodes", []))
+    if codec == "random_tree":
+        return serialize_random_tree(actual, context.get("random_tree_nodes", []))
     return encode(actual, codec)
 
 

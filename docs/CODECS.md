@@ -79,6 +79,18 @@ reader (`OpenOJReader`) decodes before calling the submission:
   neighbor indices
 - `random_list` → `uint32` count, then per node value + `uint32` random
   index (`0xFFFFFFFF` = null)
+- `doubly_list` → presence byte (`0` = empty), then `uint32` count + values
+- `doubly_list_node` → the same chain encoding, then one value: the target
+  node's val
+- `random_tree` → `uint32` slot count + per slot `0` | (`1` + value +
+  `uint32` random index, `0xFFFFFFFF` = null); the index counts present
+  nodes in level order from the root
+- `special_tree` → `binary_tree` slots exactly (the leaf ring is the
+  reader's wiring, not the wire's)
+- `nary_tree_nodes` → `nary_tree` slots exactly (the node list is the
+  reader's handover)
+- `nary_tree_ref` → one value: the referenced node's val
+- `json` (JS/TS only) → `uint32` byte length + UTF-8 compact JSON
 - `struct` → field values in declaration order
 
 The reader rejects trailing bytes (`finished()`), truncation, and — for the
@@ -103,6 +115,14 @@ templates).
   neighbors sorted — adjacency order is irrelevant on LC 133. The judge also
   clone-checks: the returned graph must not alias any input node (python/java
   identity sets; the typed wrappers collect input pointers alongside).
+- `random_tree` returns serialize the RETURNED tree's own level order as
+  `[val, randomIndex-or-null]` rows. Two checks guard the wire: the clone
+  check (no returned node may alias an input node — "shares nodes with the
+  input tree") and the containment check (every random pointer must land
+  inside the returned tree — "leaves the returned tree").
+- `doubly_list` returns walk via `next` (bound 1<<20) and verify every
+  `prev` back-link, mirroring the doubly_circular invariant on an open
+  chain ("not properly linked" / "exceeds the walk bound").
 - `alias_list` returns serialize the aliased segment from the returned node;
   a null return serializes as `[]` (LC 160's "no intersection").
 - An array-of-rings return (LC 2674's split) declares `return_codec:
@@ -127,17 +147,48 @@ manifest and ships the sources in `provided/<language>/`:
     "value_type": {"kind": "graph", "items": {"kind": "integer", "bits": 32},
                    "class": "GraphNode"}
 
-- `class` (optional, identifier) is honored for `graph` and `random_list`
-  only. Every typed renderer re-decorates around the provided name
-  (`GraphNode*` in C++, `*GraphNode` in Go, `GraphNode | null` in TS,
-  `Option<Rc<RefCell<GraphNode>>>` in Rust); legacy manifests without
+- `class` (optional, identifier) is honored for `graph`, `random_list`,
+  `doubly_list`, `doubly_list_node`, and `random_tree` in every typed
+  renderer, and additionally for `special_tree` and `nary_tree` (the
+  `nary_tree_nodes`/`nary_tree_ref` shapes) in Rust — the one renderer
+  whose common node shapes (`Box` children) cannot alias, so a leaf ring
+  or shared n-ary tree needs the bundle's own Rc-shared provided class;
+  the raw-pointer and JS-object renderers build the ring over the common
+  `TreeNode`/`Node` directly. Renderers re-decorate around the provided
+  name (`GraphNode*` in C++, `*GraphNode` in Go, `GraphNode | null` in
+  TS, `Option<Rc<RefCell<GraphNode>>>` in Rust); legacy manifests without
   `class` fall back to `Node`.
 - Java resolves the node type reflectively from the solution's declared
   parameter type; the python harness decodes into the classes its
   namespace carries.
 - Same contract on the return side: return_codec `graph`/`random_list`
   serialize through the provided class's `neighbors` / `next`+`random`
-  fields.
+  fields; `random_tree` through `left`/`right`/`random`.
+
+The second wave adds four shapes built on the common vocabulary plus one
+generic value:
+
+- `special_tree` (LC 2773) decodes an ordinary `TreeNode` display, then
+  ring-wires its leaves — collected BEFORE wiring, sorted by value — with
+  `leaf.left = previous leaf`, `leaf.right = next leaf`, wrap-around
+  (a single leaf self-loops both ways). The statement's property
+  (`v.left.right == v`) is judge-provided, not encoded in the wire.
+- `nary_tree_nodes` (LC 1506) decodes a plain n-ary display and hands the
+  solution the node LIST (`std::vector<Node*>` / `[]*Node` /
+  `Array<Node | null>` / `Vec<Rc<RefCell<Node>>>`) in level order — any
+  order is faithful; the statement grants an arbitrary permutation.
+- `nary_tree_ref` (LC 1516) carries just a value; the parameter declares
+  `"alias": N` pointing at an earlier `nary_tree` parameter (validated),
+  and the reader hands over THAT tree's node with the given value — shared
+  identity, so mutations through it land in the aliased tree. Rust renders
+  the aliased tree `Option<Rc<RefCell<Node>>>` for the same reason.
+- `doubly_list_node` (LC 3294) carries `{"values": [...], "node": v}` and
+  hands over the chain node whose value is `v` (values unique per the
+  constraints).
+- `json` (LC 2755/2759) is the generic any-shaped value: JS/TS readers
+  parse the framed JSON and pass it through; the API's structural
+  `exact` comparison needs no codec on the way back. Other renderers
+  reject the kind at assembly time.
 
 `struct` fields name their own provided class the same way: the struct's
 `class` must exist in `provided/` (constructed positionally from the

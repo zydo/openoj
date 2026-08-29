@@ -113,6 +113,28 @@ class RandomListNode:
         self.random = random
 
 
+class DoublyListNode:
+    """The LC 3263/3294 node shape (per-problem provided/ re-declares the
+    class; the harness decodes into this duck-compatible shape)."""
+
+    def __init__(self, val=0, prev=None, next=None):
+        self.val = val
+        self.prev = prev
+        self.next = next
+
+
+class RandomTreeNode:
+    """The LC 1485 node shape: a binary-tree node with a random pointer
+    (per-problem provided/ re-declares ``NodeCopy``; the harness decodes
+    into this duck-compatible class)."""
+
+    def __init__(self, val=0, left=None, right=None, random=None):
+        self.val = val
+        self.left = left
+        self.right = right
+        self.random = random
+
+
 class HtmlParser:
     def __init__(self, url_to_urls):
         self._map = url_to_urls
@@ -403,6 +425,210 @@ def _serialize_multi_list(head):
     raise ValueError("Flattened list exceeds the walk bound")
 
 
+def _parse_doubly_list(values):
+    """The LC 3263 wire: a plain value array decoding into an open chain
+    with both directions wired."""
+    if not isinstance(values, list):
+        raise ValueError("doubly_list input must be a value array")
+    nodes = [DoublyListNode(value) for value in values]
+    for left, right in zip(nodes, nodes[1:]):
+        left.next = right
+        right.prev = left
+    return nodes[0] if nodes else None
+
+
+def _serialize_doubly_list(head):
+    # The forward walk must agree with every back-link, mirroring the
+    # doubly_circular invariant on an open chain.
+    values = []
+    node = head
+    previous = None
+    for _ in range(1 << 20):
+        if node is None:
+            return values
+        if node.prev is not previous:
+            raise ValueError("Doubly linked list is not properly linked")
+        values.append(node.val)
+        previous = node
+        node = node.next
+    raise ValueError("Doubly linked list exceeds the walk bound")
+
+
+def _parse_doubly_list_node(value):
+    """The LC 3294 wire: ``{"values": [...], "node": v}`` decodes to the
+    chain node whose value is v (values are unique per the constraints)."""
+    if not isinstance(value, dict) or set(value) != {"values", "node"}:
+        raise ValueError("doubly_list_node input must carry values and node")
+    head = _parse_doubly_list(value["values"])
+    target = value["node"]
+    node = head
+    while node is not None:
+        if node.val == target:
+            return node
+        node = node.next
+    raise ValueError("doubly_list_node target value is not in the chain")
+
+
+def _parse_nary_tree_nodes(value):
+    """The LC 1506 wire: an n-ary display array decoded and handed over as
+    the list of its nodes (level order — any order is faithful, the
+    statement grants the solution an arbitrary permutation)."""
+    root = _parse_nary_tree(value)
+    if root is None:
+        return []
+    nodes = []
+    queue = deque([root])
+    while queue:
+        node = queue.popleft()
+        nodes.append(node)
+        queue.extend(node.children)
+    return nodes
+
+
+def parse_nary_tree_ref(value, root):
+    """The LC 1516 wire: an integer naming a node of the already-decoded
+    aliased tree; the argument is that exact node object (shared
+    identity), found by its unique value."""
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node is None:
+            continue
+        if node.val == value:
+            return node
+        stack.extend(reversed(node.children))
+    raise ValueError("nary_tree_ref target value is not in the aliased tree")
+
+
+def _parse_special_tree(data):
+    """The LC 2773 wire: a binary-tree display whose leaves b1..bk (in
+    increasing value order) are ring-wired left to the previous and right
+    to the next leaf — the special property the statement grants, which
+    the display array itself cannot carry."""
+    root = _parse_tree_node(data)
+    if root is None:
+        return None
+    leaves = []
+    queue = deque([root])
+    while queue:
+        node = queue.popleft()
+        if node.left is None and node.right is None:
+            leaves.append(node)
+            continue
+        for child in (node.left, node.right):
+            if child is not None:
+                queue.append(child)
+    leaves.sort(key=lambda node: node.val)
+    for index, leaf in enumerate(leaves):
+        leaf.left = leaves[index - 1]
+        leaf.right = leaves[(index + 1) % len(leaves)]
+    return root
+
+
+def _parse_random_tree(rows):
+    """The LC 1485 wire: a binary-tree level order whose present slots are
+    ``[val, randomIndex]`` rows — random_list's index addressing on a tree
+    topology. The index counts present nodes in level order, from the
+    root."""
+    if not isinstance(rows, list):
+        raise ValueError("random_tree input must be a display array")
+    if not rows:
+        return None
+    if not isinstance(rows[0], list):
+        raise ValueError("random_tree root must be a [val, random] row")
+    root = RandomTreeNode(rows[0][0])
+    order = [root]
+    pending = [(root, rows[0][1])]
+    queue = deque([root])
+    index = 1
+    while queue and index < len(rows):
+        node = queue.popleft()
+        for side in ("left", "right"):
+            if index >= len(rows):
+                break
+            row = rows[index]
+            index += 1
+            if row is None:
+                continue
+            if not isinstance(row, list) or len(row) != 2:
+                raise ValueError("random_tree node must be a [val, random] row")
+            child = RandomTreeNode(row[0])
+            setattr(node, side, child)
+            order.append(child)
+            pending.append((child, row[1]))
+            queue.append(child)
+    for node, target in pending:
+        if target is None:
+            continue
+        if not 0 <= target < len(order):
+            raise ValueError("Random pointer target is out of range")
+        node.random = order[target]
+    return root
+
+
+def serialize_random_tree(root, input_nodes=()):
+    # Level order rows like the input side; the clone check forbids
+    # returning (part of) the input tree, and every random pointer must
+    # land inside the returned tree.
+    if root is None:
+        return []
+    rows = []
+    order = []
+    marks = set()
+    queue = deque([root])
+    while queue:
+        node = queue.popleft()
+        if node is None:
+            rows.append(None)
+            order.append(None)
+            continue
+        if id(node) in marks:
+            raise ValueError("Random tree repeats a node in level order")
+        marks.add(id(node))
+        rows.append(node.val)
+        order.append(node)
+        queue.extend((node.left, node.right))
+    while rows and rows[-1] is None:
+        rows.pop()
+        order.pop()
+    if any(id(node) in marks for node in input_nodes):
+        raise ValueError("Returned tree shares nodes with the input tree")
+    # Random indices address present nodes in level order — the same
+    # convention the decode side uses — so placeholder slots shift
+    # neither the numbering nor the walk below.
+    present = [node for node in order if node is not None]
+    index_of = {id(node): index for index, node in enumerate(present)}
+    encoded = []
+    for node in order:
+        if node is None:
+            encoded.append(None)
+            continue
+        if node.random is None:
+            encoded.append([node.val, None])
+            continue
+        if id(node.random) not in index_of:
+            raise ValueError("Random pointer leaves the returned tree")
+        encoded.append([node.val, index_of[id(node.random)]])
+    return encoded
+
+
+def binary_tree_nodes(root):
+    """Every node reachable through left/right from a decoded tree (the
+    input side of the random_tree clone check; random targets live inside
+    the tree, so left/right reaches them all)."""
+    nodes = []
+    marks = set()
+    queue = deque([root])
+    while queue:
+        node = queue.popleft()
+        if node is None or id(node) in marks:
+            continue
+        marks.add(id(node))
+        nodes.append(node)
+        queue.extend((node.left, node.right))
+    return nodes
+
+
 def parse_alias_list(value, head):
     """Decode a prefix chain whose tail continues at the aliased list's node
     ``value['splice_at']`` — genuine shared references (the LC 160 wire: the
@@ -561,6 +787,16 @@ def decode(value: Any, codec: str) -> Any:
         return _parse_graph(value)
     if codec == "random_list":
         return _parse_random_list(value)
+    if codec == "doubly_list":
+        return _parse_doubly_list(value)
+    if codec == "doubly_list_node":
+        return _parse_doubly_list_node(value)
+    if codec == "nary_tree_nodes":
+        return _parse_nary_tree_nodes(value)
+    if codec == "special_tree":
+        return _parse_special_tree(value)
+    if codec == "random_tree":
+        return _parse_random_tree(value)
     if codec == "html_parser":
         urls = value["urls"]
         mapping = {url: [] for url in urls}
@@ -597,6 +833,8 @@ def encode(value: Any, codec: str) -> Any:
         return _serialize_doubly_circular(value)
     if codec == "multi_list":
         return _serialize_multi_list(value)
+    if codec == "doubly_list":
+        return _serialize_doubly_list(value)
     raise ValueError(f"Unsupported output codec: {codec}")
 
 

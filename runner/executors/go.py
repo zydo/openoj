@@ -3,7 +3,7 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-from .base import PreparedProgram
+from .base import ExecutorError, PreparedProgram
 from .compiled import CompiledExecutor
 from .typed import (
     encode_case,
@@ -37,6 +37,13 @@ READER_METHODS = {
     "multi_list": "multiList",
     "graph": "graph",
     "random_list": "randomList",
+    "doubly_list": "doublyList",
+    "doubly_list_node": "doublyListNode",
+    "random_tree": "randomTree",
+    "special_tree": "specialTree",
+    "nary_tree_nodes": "naryTreeNodes",
+    # nary_tree_ref reads inline in openojExecute like alias_list: the
+    # value names a node inside an earlier parameter's decoded tree.
 }
 # Kinds that share one fallback node class (a bundle still uses a single
 # shape, but the aliases tie the ListNode/NodeWithNext declarations to every
@@ -66,6 +73,10 @@ def _merge_imports(code: str, extra: tuple[str, ...] = ()) -> tuple[str, str]:
 
 def _read_expression(spec: dict[str, Any], reader: str = "openojReader") -> str:
     kind = spec["kind"]
+    if kind == "json":
+        # Same rejection go_type renders for the type: the generic any
+        # value is a JavaScript/TypeScript kind.
+        raise ExecutorError("json values are supported in JavaScript and TypeScript only")
     if kind in READER_METHODS:
         return f"{reader}.{READER_METHODS[kind]}()"
     if kind == "struct":
@@ -120,9 +131,14 @@ class GoExecutor(CompiledExecutor):
         structs = uses_struct_kinds(invocation)
         # Graph and random_list nodes are the using problem's provided/
         # class (LC 133/138 ship their own); the readers, collectors, and
-        # serializers below render around that name.
+        # serializers below render around that name. The open doubly
+        # chains (LC 3263/3294) and the random-pointer tree (LC 1485) are
+        # provided classes the same way.
         graph_class = provided_node_class(invocation, "graph")
         random_class = provided_node_class(invocation, "random_list")
+        doubly_class = provided_node_class(invocation, "doubly_list")
+        doubly_node_class = provided_node_class(invocation, "doubly_list_node")
+        random_tree_class = provided_node_class(invocation, "random_tree")
         item_type = go_type(struct_item_spec(invocation))
         item_expression = _read_expression(struct_item_spec(invocation), "reader")
         # The assembled program compiles as one package: common-library and
@@ -169,7 +185,7 @@ class GoExecutor(CompiledExecutor):
 
                 """
             )
-        if not assembled_types and "tree" in structs:
+        if not assembled_types and structs & {"tree", "special_tree"}:
             struct_decls += textwrap.dedent(
                 f"""
                 type TreeNode struct {{
@@ -180,7 +196,7 @@ class GoExecutor(CompiledExecutor):
 
                 """
             )
-        if not assembled_types and "nary_tree" in structs:
+        if not assembled_types and structs & {"nary_tree", "nary_tree_nodes", "nary_tree_ref"}:
             struct_decls += textwrap.dedent(
                 f"""
                 type Node struct {{
@@ -277,6 +293,39 @@ class GoExecutor(CompiledExecutor):
 
                 """
             )
+        if not assembled_types and structs & {"doubly_list", "doubly_list_node"}:
+            # One open-chain shape per problem; both wire kinds decorate
+            # the same provided class, so deduplicate while keeping order.
+            for chain_class in dict.fromkeys(
+                name
+                for name, kind in (
+                    (doubly_class, "doubly_list"),
+                    (doubly_node_class, "doubly_list_node"),
+                )
+                if kind in structs
+            ):
+                struct_decls += textwrap.dedent(
+                    f"""
+                    type {chain_class} struct {{
+                        Val  {item_type}
+                        Prev *{chain_class}
+                        Next *{chain_class}
+                    }}
+
+                    """
+                )
+        if not assembled_types and "random_tree" in structs:
+            struct_decls += textwrap.dedent(
+                f"""
+                type {random_tree_class} struct {{
+                    Val    {item_type}
+                    Left   *{random_tree_class}
+                    Right  *{random_tree_class}
+                    Random *{random_tree_class}
+                }}
+
+                """
+            )
         if not assembled_types:
             for name, spec in sorted(struct_specs.items()):
                 fields = spec.get("fields") or []
@@ -323,7 +372,9 @@ class GoExecutor(CompiledExecutor):
             if (return_type.get("kind") == "array"
                     and (return_type.get("items") or {}).get("kind") == "linked_list"):
                 result_conversion = "openojListNodeArrayJSON"
-        if "tree" in structs:
+        # special_tree rides the plain binary-tree display; its reader
+        # reuses tree() below and adds the leaf-ring wiring.
+        if structs & {"tree", "special_tree"}:
             struct_codecs += textwrap.dedent(
                 f"""
                 func (reader *openojReaderType) tree() *TreeNode {{
@@ -391,7 +442,10 @@ class GoExecutor(CompiledExecutor):
             if (return_type.get("kind") == "array"
                     and (return_type.get("items") or {}).get("kind") == "binary_tree"):
                 result_conversion = "openojTreeNodeArrayJSON"
-        if "nary_tree" in structs:
+        # nary_tree_nodes and nary_tree_ref ride the n-ary display too:
+        # the nodes reader and the inline ref resolver below both decode
+        # through naryTree().
+        if structs & {"nary_tree", "nary_tree_nodes", "nary_tree_ref"}:
             struct_codecs += textwrap.dedent(
                 f"""
                 func (reader *openojReaderType) naryTree() *Node {{
@@ -915,6 +969,267 @@ class GoExecutor(CompiledExecutor):
             if (return_type.get("kind") == "array"
                     and (return_type.get("items") or {}).get("kind") == "random_list"):
                 result_conversion = "openojRandomArrayJSON"
+        if "doubly_list" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                // LC 3263: an open chain wired in both directions.
+                func (reader *openojReaderType) doublyList() *{doubly_class} {{
+                    if reader.take(1)[0] == 0 {{ return nil }}
+                    count := int(reader.uint32())
+                    var head, tail *{doubly_class}
+                    for index := 0; index < count; index++ {{
+                        node := &{doubly_class}{{Val: {item_expression}}}
+                        if tail == nil {{ head = node }} else {{ tail.Next = node; node.Prev = tail }}
+                        tail = node
+                    }}
+                    return head
+                }}
+                // The forward walk must agree with every back-link,
+                // mirroring the doubly_circular invariant on an open chain.
+                func openojDoublyListJSON(head *{doubly_class}) []any {{
+                    values := []any{{}}
+                    var previous *{doubly_class}
+                    node := head
+                    for bound := 0; node != nil && bound < 1<<20; bound++ {{
+                        if node.Prev != previous {{
+                            panic("Doubly linked list is not properly linked")
+                        }}
+                        values = append(values, node.Val)
+                        previous = node
+                        node = node.Next
+                    }}
+                    if node != nil {{ panic("Doubly linked list exceeds the walk bound") }}
+                    return values
+                }}
+                func openojDoublyListArrayJSON(heads []*{doubly_class}) []any {{
+                    return openojArrayOfMapped(heads, openojDoublyListJSON)
+                }}
+                """
+            )
+            if return_type.get("kind") == "doubly_list":
+                result_conversion = "openojDoublyListJSON"
+            if (return_type.get("kind") == "array"
+                    and (return_type.get("items") or {}).get("kind") == "doubly_list"):
+                result_conversion = "openojDoublyListArrayJSON"
+        if "doubly_list_node" in structs:
+            doubly_node_spec = next(
+                (spec for spec in parameters if spec.get("kind") == "doubly_list_node"), {}
+            )
+            doubly_node_target = _read_expression(
+                doubly_node_spec.get("items") or struct_item_spec(invocation), "reader"
+            )
+            struct_codecs += textwrap.dedent(
+                f"""
+                // LC 3294: the chain plus the value of the received node
+                // (values are unique per the constraints).
+                func (reader *openojReaderType) doublyListNode() *{doubly_node_class} {{
+                    var head, tail *{doubly_node_class}
+                    if reader.take(1)[0] == 1 {{
+                        count := int(reader.uint32())
+                        for index := 0; index < count; index++ {{
+                            node := &{doubly_node_class}{{Val: {item_expression}}}
+                            if tail == nil {{ head = node }} else {{ tail.Next = node; node.Prev = tail }}
+                            tail = node
+                        }}
+                    }}
+                    target := {doubly_node_target}
+                    for node := head; node != nil; node = node.Next {{
+                        if node.Val == target {{ return node }}
+                    }}
+                    panic("doubly_list_node target value is not in the chain")
+                }}
+                """
+            )
+        if "random_tree" in structs:
+            struct_codecs += textwrap.dedent(
+                f"""
+                // LC 1485: binary-tree level order whose present slots are
+                // [val, random] rows — random_list's index addressing on a
+                // tree topology. The index counts present nodes in level
+                // order, from the root.
+                func (reader *openojReaderType) randomTree() *{random_tree_class} {{
+                    length := int(reader.uint32())
+                    if length == 0 {{ return nil }}
+                    type slot struct {{
+                        present bool
+                        value   {item_type}
+                        random  uint32
+                    }}
+                    slots := make([]slot, length)
+                    for index := 0; index < length; index++ {{
+                        if reader.take(1)[0] == 1 {{
+                            value := {item_expression}
+                            slots[index] = slot{{present: true, value: value, random: reader.uint32()}}
+                        }}
+                    }}
+                    if !slots[0].present {{ panic("random_tree root must be a [val, random] row") }}
+                    root := &{random_tree_class}{{Val: slots[0].value}}
+                    order := []*{random_tree_class}{{root}}
+                    type link struct {{
+                        node   *{random_tree_class}
+                        random uint32
+                    }}
+                    links := []link{{{{root, slots[0].random}}}}
+                    queue := []*{random_tree_class}{{root}}
+                    index := 1
+                    for len(queue) > 0 && index < length {{
+                        node := queue[0]
+                        queue = queue[1:]
+                        if index < length {{
+                            if slots[index].present {{
+                                node.Left = &{random_tree_class}{{Val: slots[index].value}}
+                                order = append(order, node.Left)
+                                links = append(links, link{{node.Left, slots[index].random}})
+                                queue = append(queue, node.Left)
+                            }}
+                            index++
+                        }}
+                        if index < length {{
+                            if slots[index].present {{
+                                node.Right = &{random_tree_class}{{Val: slots[index].value}}
+                                order = append(order, node.Right)
+                                links = append(links, link{{node.Right, slots[index].random}})
+                                queue = append(queue, node.Right)
+                            }}
+                            index++
+                        }}
+                    }}
+                    for _, entry := range links {{
+                        if entry.random == 0xFFFFFFFF {{ continue }}
+                        if int(entry.random) >= len(order) {{
+                            panic("Random pointer target is out of range")
+                        }}
+                        entry.node.Random = order[entry.random]
+                    }}
+                    return root
+                }}
+                func openojCollectRandomTree(root *{random_tree_class}) {{
+                    queue := []*{random_tree_class}{{root}}
+                    for index := 0; index < len(queue); index++ {{
+                        node := queue[index]
+                        if node == nil {{ continue }}
+                        seen := false
+                        for _, earlier := range queue[:index] {{
+                            if earlier == node {{ seen = true; break }}
+                        }}
+                        if seen {{ continue }}
+                        openojInputNodes = append(openojInputNodes, node)
+                        queue = append(queue, node.Left, node.Right)
+                    }}
+                }}
+                // Level order rows like the input side; the clone check
+                // forbids returning (part of) the input tree, and every
+                // random pointer must land inside the returned tree.
+                func openojRandomTreeJSON(root *{random_tree_class}) []any {{
+                    rows := []any{{}}
+                    if root == nil {{ return rows }}
+                    var order []*{random_tree_class}
+                    queue := []*{random_tree_class}{{root}}
+                    for index := 0; index < len(queue); index++ {{
+                        node := queue[index]
+                        if node == nil {{
+                            rows = append(rows, nil)
+                            order = append(order, nil)
+                            continue
+                        }}
+                        for _, earlier := range order {{
+                            if earlier == node {{ panic("Random tree repeats a node in level order") }}
+                        }}
+                        rows = append(rows, node.Val)
+                        order = append(order, node)
+                        queue = append(queue, node.Left, node.Right)
+                    }}
+                    for len(rows) > 0 && rows[len(rows)-1] == nil {{
+                        rows = rows[:len(rows)-1]
+                        order = order[:len(order)-1]
+                    }}
+                    for _, node := range order {{
+                        if openojRegisteredInput(node) {{
+                            panic("Returned tree shares nodes with the input tree")
+                        }}
+                    }}
+                    present := []*{random_tree_class}{{}}
+                    for _, node := range order {{
+                        if node != nil {{ present = append(present, node) }}
+                    }}
+                    encoded := []any{{}}
+                    for _, node := range order {{
+                        if node == nil {{ encoded = append(encoded, nil); continue }}
+                        row := []any{{node.Val, nil}}
+                        if node.Random != nil {{
+                            target := -1
+                            for position, candidate := range present {{
+                                if candidate == node.Random {{ target = position; break }}
+                            }}
+                            if target < 0 {{ panic("Random pointer leaves the returned tree") }}
+                            row[1] = target
+                        }}
+                        encoded = append(encoded, row)
+                    }}
+                    return encoded
+                }}
+                func openojRandomTreeArrayJSON(roots []*{random_tree_class}) []any {{
+                    return openojArrayOfMapped(roots, openojRandomTreeJSON)
+                }}
+                """
+            )
+            if return_type.get("kind") == "random_tree":
+                result_conversion = "openojRandomTreeJSON"
+            if (return_type.get("kind") == "array"
+                    and (return_type.get("items") or {}).get("kind") == "random_tree"):
+                result_conversion = "openojRandomTreeArrayJSON"
+        if "special_tree" in structs:
+            struct_codecs += textwrap.dedent(
+                """
+                // LC 2773: an ordinary display decode, then the leaves
+                // b1..bk (in increasing value order) are ring-wired left to
+                // the previous and right to the next leaf — the special
+                // property the statement grants, which the display cannot
+                // carry.
+                func (reader *openojReaderType) specialTree() *TreeNode {
+                    root := reader.tree()
+                    if root == nil { return nil }
+                    leaves := []*TreeNode{}
+                    queue := []*TreeNode{root}
+                    for index := 0; index < len(queue); index++ {
+                        node := queue[index]
+                        if node == nil { continue }
+                        if node.Left == nil && node.Right == nil {
+                            leaves = append(leaves, node)
+                        } else {
+                            queue = append(queue, node.Left, node.Right)
+                        }
+                    }
+                    sort.Slice(leaves, func(a, b int) bool { return leaves[a].Val < leaves[b].Val })
+                    count := len(leaves)
+                    for position := 0; position < count; position++ {
+                        leaves[position].Left = leaves[(position-1+count)%count]
+                        leaves[position].Right = leaves[(position+1)%count]
+                    }
+                    return root
+                }
+                """
+            )
+        if "nary_tree_nodes" in structs:
+            struct_codecs += textwrap.dedent(
+                """
+                // LC 1506: the n-ary display decoded and handed over as the
+                // list of its nodes (level order — any order is faithful,
+                // the statement grants an arbitrary permutation).
+                func (reader *openojReaderType) naryTreeNodes() []*Node {
+                    root := reader.naryTree()
+                    nodes := []*Node{}
+                    queue := []*Node{}
+                    if root != nil { queue = append(queue, root) }
+                    for index := 0; index < len(queue); index++ {
+                        node := queue[index]
+                        nodes = append(nodes, node)
+                        queue = append(queue, node.Children...)
+                    }
+                    return nodes
+                }
+                """
+            )
         if "alias_list" in structs:
             struct_codecs += textwrap.dedent(
                 """
@@ -969,6 +1284,7 @@ class GoExecutor(CompiledExecutor):
             "linked_list": "openojCollectList",
             "graph": "openojCollectGraph",
             "random_list": "openojCollectRandom",
+            "random_tree": "openojCollectRandomTree",
         }
 
         def declaration(index: int, spec: dict[str, Any]) -> str:
@@ -999,6 +1315,29 @@ class GoExecutor(CompiledExecutor):
                     "}()",
                 ]
                 return _tabs("\n".join(lines))
+            if kind == "nary_tree_ref":
+                # LC 1516: the value names a node inside the ALREADY-DECODED
+                # aliased tree; the argument is that exact pointer (shared
+                # identity — mutations through it land in the aliased tree).
+                target_item = _read_expression(
+                    spec.get("items") or {"kind": "integer", "bits": 32}, "openojReader"
+                )
+                lines = [
+                    f"openojArg{index} := func() *Node {{",
+                    f"    target := {target_item}",
+                    "    var found *Node",
+                    "    var walk func(node *Node)",
+                    "    walk = func(node *Node) {",
+                    "        if node == nil || found != nil { return }",
+                    "        if node.Val == target { found = node; return }",
+                    "        for _, child := range node.Children { walk(child) }",
+                    "    }",
+                    f"    walk(openojArg{spec['alias']})",
+                    '    if found == nil { panic("nary_tree_ref target value is not in the aliased tree") }',
+                    "    return found",
+                    "}()",
+                ]
+                return _tabs("\n".join(lines))
             lines = [f"openojArg{index} := {_read_expression(spec)}"]
             if kind == "linked_list" and index in alias_sources:
                 lines.extend([
@@ -1015,7 +1354,7 @@ class GoExecutor(CompiledExecutor):
         )
         arguments = ", ".join(f"openojArg{index}" for index in range(len(parameters)))
         code, merged_imports = _merge_imports(
-            code, extra=("sort",) if "graph" in structs else ()
+            code, extra=("sort",) if structs & {"graph", "special_tree"} else ()
         )
         source = (
             f"package main\n\nimport (\n{merged_imports})\n\n"
