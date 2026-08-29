@@ -39,6 +39,8 @@ RUN apt-get update \
         rustc \
         rustfmt \
         clang-format \
+        shfmt \
+        gawk \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir ruff=="${RUFF_VERSION}"
 COPY --from=typescript-toolchain /usr/local/bin/node /usr/local/bin/node
@@ -56,7 +58,7 @@ COPY --from=typescript-toolchain \
     /usr/local/lib/node_modules/sql-formatter
 RUN ln -s /usr/local/lib/node_modules/typescript/bin/tsc /usr/local/bin/tsc \
     && ln -s /usr/local/lib/node_modules/prettier/bin/prettier.cjs /usr/local/bin/prettier
-COPY worker.py python_harness.py sql_harness.py leetcode_types.py privileges.py formatters.py ./
+COPY worker.py python_harness.py sql_harness.py shell_harness.py leetcode_types.py privileges.py formatters.py ./
 COPY cli.py ./
 RUN printf '#!/bin/sh\nexec python3 /runner/cli.py "$@"\n' > /usr/local/bin/openoj && chmod +x /usr/local/bin/openoj
 COPY compiler_sandbox.py runtime_sandbox.py ./

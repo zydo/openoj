@@ -13,9 +13,11 @@ The bank's live tree is `problems-adapt/`; `problems` is a **symlink** to
 it, so the served set can be swapped to any other layout/repo by moving
 one link. `problems-bettercode/` archives the LeetCode originals the
 adapted set derives from. `problems-extend/` is the second corpus: the
-crawled originals under ORIGINAL form (3,178 crawl-keyed bundles,
-complete except the 15 entries of `problems-extend/ROSTER-unfinished.json`;
-see its README and `docs/AUTHORING-GUIDE.md`). Scrape origin:
+crawled originals under ORIGINAL form (3,179 crawl-keyed bundles,
+complete except the 14 unauthored ids listed in
+`problems-extend/README.md`; the roster file itself was removed in the
+2026-08-28 cleanup — the set is derived by
+`openoj/.localonly/verify_corpus.py`). Scrape origin:
 `~/code/lc-crawl` (raw) → `~/code/bettercode` (curated) →
 `problems-bettercode` (in-repo archive).
 
@@ -73,7 +75,7 @@ formatter via the image.
 ## Judge infrastructure (openoj/)
 
 - `runner/` — executors for python3, java, cpp, go, rust, typescript,
-  javascript (+sql), compiler/runtime privilege split
+  javascript (+sql, +shell), compiler/runtime privilege split
   (`compiler_sandbox.py`, `runtime_sandbox.py`), and the authoring CLI.
 - **The judge protocol travels on fd 63; stdout is only a local-tooling
   fallback.** Anything that spawns harnesses outside the worker (local
@@ -146,13 +148,17 @@ evidence — read it before touching cases.json or statement wording.
 
 ## Tooling map
 
-- openoj `/.localonly/` (gitignored): authoring contracts
-  (`alt/SPEC.md`, `alt/DESIGN.md`), `alt/roster.json`, `verify_solution.py`,
-  sweeps (`add_common_version.py`, `designate_references.py`),
-  `reorder_audit.py`, the svg_* figure-audit pipeline, headless-UI
+- openoj `/.localonly/` (gitignored; see its README.md for the full
+  inventory): authoring contracts (`alt/SPEC.md`, `alt/DESIGN.md`,
+  `alt/normalize_meta.py`), the gates (`verify_solution.py`,
+  `verify_corpus.py`, `verify_extend.py`), wave auditors
+  (`audit_wave.py`, `regate_wave.py`), sweeps
+  (`add_common_version.py`, `designate_references.py`,
+  `reorder_audit.py`), the svg_* figure-audit pipeline, headless-UI
   drivers (`stub-server.mjs`, `shot.mjs`, `session-e2e.mjs`).
-- openoj-problems `/.localonly/`: per-bundle scratch, build scripts,
-  `dsw_shape_study.py` (tracked at scripts/ — see CORPUS-FLAGS).
+- openoj-problems `/.localonly/`: case-gen provenance for recently
+  authored bundles, 2755/2759 partial scratch, finished-wave
+  bookkeeping under `adapt_archive/` (see its README.md).
 - openoj-problems `/.adapt/`: live rate-limit state (`concurrency.json`
   — cap, floor, target, event log); finished-wave bookkeeping is
   archived under `.localonly/adapt_archive/`.

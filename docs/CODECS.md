@@ -14,25 +14,25 @@ parameter order — `[[2,7,11,15], 9]` for `twoSum(nums, target)`.
 
 Structured values ride as plain JSON:
 
-| `value_type.kind` | JSON shape |
-| --- | --- |
-| `integer` (+`bits` 32/64) | number |
-| `number` | float |
-| `boolean`, `string` | as-is |
-| `array` (+`items`) | JSON array |
-| `linked_list` | array of node values (`[1,2,4]`); `[]` is the empty list |
-| `binary_tree` | trimmed level-order array with `null` holes — `[3,9,20,null,null,15,7]`; trailing nulls are stripped, `[]` is the empty tree |
-| `nary_tree` | LeetCode display array: children groups separated by `null`, one trailing `null` per node (`[1,null,3,2,4,null,5,6]`) |
-| `next_tree` | binary-tree display array (`[1,2,3,4,5,6,7]`) — same trimmed level order as `binary_tree` |
-| `quad_tree` | flat preorder of `[isLeaf,val]` pairs; a non-leaf's `val` normalizes to 0; `null` is the empty tree |
-| `nested` | nested arrays of integers (`[1,[4,[6]]]`); a bare integer is an integer hold |
-| `circular_list` | the ring's values read from the head (`[3,4,1]`); `[]` is the empty ring |
-| `doubly_circular` | the ring's values read from the head; `[]` is the empty ring |
-| `alias_list` | `{"values": [...], "splice_at": n}` — the decode splices the prefix chain onto node `n` of the aliased `linked_list` parameter |
-| `multi_list` | `{"values": [...], "children": [...]}` — children align slot for slot, each entry `null` or a nested chain object |
-| `graph` | adjacency rows by node index, 0-based (`[[2,4],[1,3]]`); row i lists node i's neighbors |
-| `random_list` | rows `[val, randomIndex]`, null random as `null` (`[[7,null],[13,0]]`); index counts from the head |
-| `struct` (+`class`, `fields`) | positional array in field order (`[1, 5, [2, 3]]`) |
+| `value_type.kind`             | JSON shape                                                                                                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `integer` (+`bits` 32/64)     | number                                                                                                                         |
+| `number`                      | float                                                                                                                          |
+| `boolean`, `string`           | as-is                                                                                                                          |
+| `array` (+`items`)            | JSON array                                                                                                                     |
+| `linked_list`                 | array of node values (`[1,2,4]`); `[]` is the empty list                                                                       |
+| `binary_tree`                 | trimmed level-order array with `null` holes — `[3,9,20,null,null,15,7]`; trailing nulls are stripped, `[]` is the empty tree   |
+| `nary_tree`                   | LeetCode display array: children groups separated by `null`, one trailing `null` per node (`[1,null,3,2,4,null,5,6]`)          |
+| `next_tree`                   | binary-tree display array (`[1,2,3,4,5,6,7]`) — same trimmed level order as `binary_tree`                                      |
+| `quad_tree`                   | flat preorder of `[isLeaf,val]` pairs; a non-leaf's `val` normalizes to 0; `null` is the empty tree                            |
+| `nested`                      | nested arrays of integers (`[1,[4,[6]]]`); a bare integer is an integer hold                                                   |
+| `circular_list`               | the ring's values read from the head (`[3,4,1]`); `[]` is the empty ring                                                       |
+| `doubly_circular`             | the ring's values read from the head; `[]` is the empty ring                                                                   |
+| `alias_list`                  | `{"values": [...], "splice_at": n}` — the decode splices the prefix chain onto node `n` of the aliased `linked_list` parameter |
+| `multi_list`                  | `{"values": [...], "children": [...]}` — children align slot for slot, each entry `null` or a nested chain object              |
+| `graph`                       | adjacency rows by node index, 0-based (`[[2,4],[1,3]]`); row i lists node i's neighbors                                        |
+| `random_list`                 | rows `[val, randomIndex]`, null random as `null` (`[[7,null],[13,0]]`); index counts from the head                             |
+| `struct` (+`class`, `fields`) | positional array in field order (`[1, 5, [2, 3]]`)                                                                             |
 
 Binary trees follow the LeetCode convention: children of missing nodes are
 omitted, so `null` appears only between real nodes, never after the last one.
@@ -106,7 +106,7 @@ templates).
 - `alias_list` returns serialize the aliased segment from the returned node;
   a null return serializes as `[]` (LC 160's "no intersection").
 - An array-of-rings return (LC 2674's split) declares `return_codec:
-  "circular_list_array"` with `return_type` an array of `circular_list`;
+"circular_list_array"` with `return_type` an array of `circular_list`;
   each element serializes through the ring walk, in every language.
 
 ## Wrapper types and the provided-class contract
@@ -158,9 +158,10 @@ items, mirroring LeetCode's own Go template.
 Cases carry LeetCode-style sequences instead of positional arguments:
 
 ```json
-{"input": {"actions": ["NumArray","update","sumRange"],
-            "params": [[[1,3,5]], [1,2], [0,2]]},
- "expected": [null, null, 9]}
+{
+    "input": { "actions": ["NumArray", "update", "sumRange"], "params": [[[1, 3, 5]], [1, 2], [0, 2]] },
+    "expected": [null, null, 9]
+}
 ```
 
 `params[0]` goes to the class constructor; each later `actions[i]` names a
@@ -182,8 +183,7 @@ separators=(",", ":"))` in Python; `Json.stringify` in Java). The matching
 expected slot carries the distribution:
 
 ```json
-{"mode": "distribution", "repeat": 2000, "tolerance": 0.12,
- "probabilities": {"1": 0.5, "2": 0.5}}
+{ "mode": "distribution", "repeat": 2000, "tolerance": 0.12, "probabilities": { "1": 0.5, "2": 0.5 } }
 ```
 
 The judge requires the observed total to equal `repeat`, every observed
@@ -231,14 +231,14 @@ touches only its own bundle — no judge changes. The wrapper constructs
 the oracle class the bundle ships, and the constructor signature is
 per-language (the budget parameter carries `query_limit`):
 
-| Language | Construction (one `construct` key shown) | Budget type |
-| --- | --- | --- |
-| Python 3 | `File(content, budget)` — construct values flattened | `int` |
-| Java | `new File(content, budget)` — flattened | `long` |
-| C++ | `File(openoj_value_0, …, budget)` — one `OjValue` per construct key | `long long` |
-| Go | `NewFile([]any{content…}, budget)` — construct values wrapped in one slice | `int64` |
-| TypeScript / JavaScript | `new File([content…], budget)` — wrapped in one array | `number` |
-| Rust | `File::new(&[OjValue…], budget)` — wrapped in one slice | `i64` |
+| Language                | Construction (one `construct` key shown)                                   | Budget type |
+| ----------------------- | -------------------------------------------------------------------------- | ----------- |
+| Python 3                | `File(content, budget)` — construct values flattened                       | `int`       |
+| Java                    | `new File(content, budget)` — flattened                                    | `long`      |
+| C++                     | `File(openoj_value_0, …, budget)` — one `OjValue` per construct key        | `long long` |
+| Go                      | `NewFile([]any{content…}, budget)` — construct values wrapped in one slice | `int64`     |
+| TypeScript / JavaScript | `new File([content…], budget)` — wrapped in one array                      | `number`    |
+| Rust                    | `File::new(&[OjValue…], budget)` — wrapped in one slice                    | `i64`       |
 
 C++ and Rust see generic `OjValue`s (decode with the language's helpers in
 the wrapper prelude); every other language receives decoded values. A void
@@ -251,10 +251,14 @@ LeetCode's concurrency problems hand the same object to several threads
 at once. The case carries a schedule, one entry per thread:
 
 ```json
-{"constructor": [3],
- "threads": [{"call": "hydrogen", "emits": "H"},
-              {"call": "hydrogen", "emits": "H"},
-              {"call": "oxygen", "emits": "O"}]}
+{
+    "constructor": [3],
+    "threads": [
+        { "call": "hydrogen", "emits": "H" },
+        { "call": "hydrogen", "emits": "H" },
+        { "call": "oxygen", "emits": "O" }
+    ]
+}
 ```
 
 Each entry becomes one real thread. `emits` marks the LeetCode shape
@@ -327,6 +331,22 @@ setup statements. Flags on `invocation.sql`:
 Multi-statement submissions without `dynamic_columns` are rejected up
 front. Expected rows compare through the invocation's ordinary
 comparison mode (`set`/`multiset`/`exact`).
+
+## Shell judging (`type: "shell"`)
+
+The submission file is a bash script and nothing else — no wrapper, no
+common vocabulary, no assembled sources. Each case's input is the raw
+text fed on stdin verbatim (no JSON envelope); the script's captured
+stdout, trailing newlines stripped, is the judged value, compared under
+the invocation's mode — usually
+
+    {"type": "shell", "comparison": "exact"}
+
+against a string expected value (stored without its trailing newline;
+`echo`'s newline and `printf`'s absence both compare clean). A nonzero
+exit is a runtime error carrying the last stderr lines; stdout past
+`limits.output_kb` is a runtime error, not a truncation. Starters are
+`starter.sh` only; solutions are `solution*.sh`.
 
 ## Validator judging (`{"mode": "validator", ...}`)
 

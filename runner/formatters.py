@@ -4,10 +4,9 @@ and CI — the single owner of every formatter pin.
 The runner already carries every language toolchain, so it is also the only
 place the real formatters can live. The problems repo formats its files
 through this module too (a thin loader shim in its scripts/), which is
-what keeps editor, generator, CLI, and CI byte-identical. Widths here are the same 120 columns the
-problems repo formats its bundles at (`openoj-problems/.prettierrc.json`,
-`ruff.toml`, `.clang-format`, `rustfmt.toml`) — a starter formatted in the
-editor should come out byte-identical to the one the generator writes.
+what keeps editor, generator, CLI, and CI byte-identical. All widths and
+styles are passed on the command line from this module — the problems
+bank deliberately carries no formatter configs of its own.
 
 Formatting is pure text in, text out: no user code is executed, so this runs
 directly rather than through the sandboxes the judge uses.
@@ -24,6 +23,7 @@ from pathlib import Path
 FORMAT_TIMEOUT_SECONDS = 20
 WIDTH = "120"
 
+
 # Prettier v3 resolves plugins as ESM relative to the working directory, which
 # the runner has none of, so the java plugin is named by absolute path rather
 # than left to NODE_PATH (which ESM import ignores). The ESM entry point
@@ -35,6 +35,7 @@ def _prettier_java_plugin() -> str:
     if Path(image_path).is_file():
         return image_path
     import shutil
+
     executable = shutil.which("prettier")
     if executable:
         # a node_modules install: .bin/prettier -> ../prettier/bin/prettier.cjs,
@@ -67,6 +68,7 @@ _COMMANDS: dict[str, list[str]] = {
         "const { format } = require('sql-formatter');"
         "process.stdout.write(format(require('fs').readFileSync(0, 'utf8'), { language: 'sqlite' }))",
     ],
+    "shell": ["shfmt", "-ln", "bash", "-i", "4"],
 }
 
 
@@ -91,7 +93,7 @@ def _wrap_go(code: str) -> tuple[str, bool]:
 
 
 def _unwrap_go(formatted: str) -> str:
-    body = formatted[len(_GO_PREAMBLE):] if formatted.startswith(_GO_PREAMBLE) else formatted
+    body = formatted[len(_GO_PREAMBLE) :] if formatted.startswith(_GO_PREAMBLE) else formatted
     # gofmt puts a blank line after the package clause that the fragment,
     # having never had a package clause, should not inherit.
     return body[1:] if body.startswith("\n") else body

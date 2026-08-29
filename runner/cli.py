@@ -20,6 +20,7 @@ In the image these run as `openoj format ...` / `openoj gen-starters
 Dockerfile). They operate on a bundle directory bind-mounted at any
 path; nothing here writes outside the paths it is given.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -38,7 +39,7 @@ RUNNER = Path(__file__).resolve().parent
 # schema is the contract, the tools are the standard) or, when the image
 # carries its own copy, from there.
 TOOLS_CANDIDATES = [
-    Path("/tools"),                    # image convention
+    Path("/tools"),  # image convention
     RUNNER.parent / "problems-tools",  # beside a checkout
 ]
 
@@ -47,9 +48,7 @@ def _tools() -> Path:
     for candidate in TOOLS_CANDIDATES:
         if (candidate / "scripts" / "gen_starters.py").exists():
             return candidate
-    raise SystemExit(
-        "gen_starters.py not found; bind-mount the problems repo at /tools"
-    )
+    raise SystemExit("gen_starters.py not found; bind-mount the problems repo at /tools")
 
 
 def _executors_ready() -> None:
@@ -58,9 +57,17 @@ def _executors_ready() -> None:
 
 
 LANGUAGE_BY_EXTENSION = {
-    "py": "python3", "js": "javascript", "ts": "typescript",
-    "java": "java", "cpp": "cpp", "go": "go", "rs": "rust", "sql": "sql",
-    "json": "json", "md": "markdown",
+    "py": "python3",
+    "js": "javascript",
+    "ts": "typescript",
+    "java": "java",
+    "cpp": "cpp",
+    "go": "go",
+    "rs": "rust",
+    "sql": "sql",
+    "sh": "shell",
+    "json": "json",
+    "md": "markdown",
 }
 
 
@@ -74,7 +81,8 @@ def cmd_format(arguments: argparse.Namespace) -> int:
         path = Path(name)
         if path.is_dir():
             files += sorted(
-                child for child in path.rglob("*")
+                child
+                for child in path.rglob("*")
                 if child.is_file() and child.suffix.lstrip(".") in LANGUAGE_BY_EXTENSION
             )
         elif path.is_file():
@@ -148,14 +156,16 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
 
         merged = {**environment, "PATH": "/usr/local/bin:" + environment.get("PATH", "/usr/bin:/bin")}
         completed = sp.run(
-            list(command), cwd=job_root, env=merged,
-            stdout=sp.PIPE, stderr=sp.STDOUT, timeout=300,
+            list(command),
+            cwd=job_root,
+            env=merged,
+            stdout=sp.PIPE,
+            stderr=sp.STDOUT,
+            timeout=300,
         )
         if completed.returncode != 0:
             raw = completed.stdout or completed.stderr or b""
-            raise ExecutorError(
-                "Compilation failed:\n" + raw.decode("utf-8", "replace")[-4000:]
-            )
+            raise ExecutorError("Compilation failed:\n" + raw.decode("utf-8", "replace")[-4000:])
 
     compiled.CompiledExecutor.compile = _plain_compile
 
@@ -170,8 +180,13 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
     # sources compile/run with the submission, exactly as a live judge
     # job would assemble them.
     LANGUAGE_DIRECTORIES = {
-        "python3": "python", "java": "java", "cpp": "cpp", "go": "go",
-        "rust": "rust", "typescript": "typescript", "javascript": "javascript",
+        "python3": "python",
+        "java": "java",
+        "cpp": "cpp",
+        "go": "go",
+        "rust": "rust",
+        "typescript": "typescript",
+        "javascript": "javascript",
     }
     assembly: dict[str, dict[str, str]] = {"common": {}, "provided": {}}
     tools = next((c for c in TOOLS_CANDIDATES if (c / "scripts" / "gen_starters.py").exists()), None)
@@ -196,8 +211,7 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
                 )
             if declared > contract["version"]:
                 raise SystemExit(
-                    f"bundle targets common harness v{declared}, "
-                    f"this checkout ships v{contract['version']}"
+                    f"bundle targets common harness v{declared}, this checkout ships v{contract['version']}"
                 )
     common_root = tools / "common" if tools else None
     for name, directory in LANGUAGE_DIRECTORIES.items():
@@ -213,9 +227,7 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
                 if path.is_file():
                     assembly["provided"][path.name] = path.read_text(encoding="utf-8")
 
-    solutions = sorted(
-        path for path in bundle.iterdir() if path.name.startswith("solution") and path.suffix != ".md"
-    )
+    solutions = sorted(path for path in bundle.iterdir() if path.name.startswith("solution") and path.suffix != ".md")
     if not solutions:
         print("no solution files found", file=sys.stderr)
         return 2
@@ -230,10 +242,18 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
         "typescript": {"ts"},
         "javascript": {"js"},
         "sql": {"sql"},
+        "shell": {"sh"},
     }
     EXTENSION_LANGUAGE = {
-        "py": "python3", "js": "javascript", "ts": "typescript", "java": "java",
-        "cpp": "cpp", "go": "go", "rs": "rust", "sql": "sql",
+        "py": "python3",
+        "js": "javascript",
+        "ts": "typescript",
+        "java": "java",
+        "cpp": "cpp",
+        "go": "go",
+        "rs": "rust",
+        "sql": "sql",
+        "sh": "shell",
     }
     for solution in solutions:
         language = EXTENSION_LANGUAGE.get(solution.suffix.lstrip("."))
@@ -266,10 +286,7 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
             try:
                 extensions = LANGUAGE_EXTENSIONS.get(language, set())
                 per_language = {
-                    part: {
-                        name: content for name, content in files.items()
-                        if name.rsplit(".", 1)[-1] in extensions
-                    }
+                    part: {name: content for name, content in files.items() if name.rsplit(".", 1)[-1] in extensions}
                     for part, files in assembly.items()
                 }
                 program = executor.prepare(work, scratch, code, invocation, limits, per_language)
@@ -294,9 +311,7 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
                         stderr=subprocess.DEVNULL,
                         env=program.environment,
                     )
-                    output, _ = process.communicate(
-                        payload, timeout=limits.get("time_ms", 1500) / 1000 * 3 + 5
-                    )
+                    output, _ = process.communicate(payload, timeout=limits.get("time_ms", 1500) / 1000 * 3 + 5)
                 except Exception as error:  # noqa: BLE001
                     print(f"FAIL  {solution.name}: case {index + 1}: {error}")
                     failures += 1
@@ -304,7 +319,7 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
                 text = output.decode("utf-8", "replace")
                 marker = "__OPENOJ_RESULT__"
                 line = next((l for l in text.splitlines() if marker in l), "")
-                verdict = json.loads(line[len(marker):]) if line else {"status": "no_output"}
+                verdict = json.loads(line[len(marker) :]) if line else {"status": "no_output"}
                 if verdict.get("status") == "completed":
                     passed += 1
                 else:

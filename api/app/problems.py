@@ -36,9 +36,7 @@ REQUIRED_SECTIONS = (
 HEADING = re.compile(r"^(?P<marks>#{1,6})[ \t]+(?P<title>.+?)[ \t]*$")
 TITLE = re.compile(r"^(?P<id>[1-9][0-9]*)\.[ \t]+(?P<title>\S(?:.*\S)?)$")
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-PROBLEM_FILE = re.compile(
-    r"^(?P<number>[0-9]{4,})_(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)\.md$"
-)
+PROBLEM_FILE = re.compile(r"^(?P<number>[0-9]{4,})_(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)\.md$")
 FENCED_BLOCK = re.compile(
     r"```(?P<info>[^\n`]*)\n(?P<body>.*?)\n```[ \t]*",
     re.DOTALL,
@@ -66,6 +64,7 @@ LANGUAGE_REGISTRY = {
     "go": {"display_name": "Go", "monaco_language": "go", "version": "Go 1.24.4"},
     "rust": {"display_name": "Rust", "monaco_language": "rust", "version": "Rust 1.85.0"},
     "sql": {"display_name": "SQL", "monaco_language": "sql", "version": "SQLite 3.45"},
+    "shell": {"display_name": "Shell", "monaco_language": "shell", "version": "Bash 5.2"},
 }
 EXTENSION_LANGUAGE = {
     "py": "python3",
@@ -76,10 +75,9 @@ EXTENSION_LANGUAGE = {
     "go": "go",
     "rs": "rust",
     "sql": "sql",
+    "sh": "shell",
 }
-PROBLEM_BUNDLE_DIR = re.compile(
-    r"^(?P<number>[0-9]{4,})_(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)$"
-)
+PROBLEM_BUNDLE_DIR = re.compile(r"^(?P<number>[0-9]{4,})_(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*)$")
 # Bundles live in id-range shards — problems/0001-0100/0001_two-sum/ —
 # with the flat layout (problems/0001_two-sum/) still accepted.
 SHARD_DIR = re.compile(r"^[0-9]{4,}-[0-9]{4,}$")
@@ -102,9 +100,7 @@ def _is_direct_child(path: Path) -> bool:
     """The resolved path sits in the tree root (flat layout) or exactly one
     shard below it — anything deeper is not a problem package."""
     parent = path.parent
-    return parent == PROBLEMS_DIR or (
-        parent.parent == PROBLEMS_DIR and SHARD_DIR.fullmatch(parent.name) is not None
-    )
+    return parent == PROBLEMS_DIR or (parent.parent == PROBLEMS_DIR and SHARD_DIR.fullmatch(parent.name) is not None)
 
 
 def _headings(markdown: str) -> list[tuple[int, str, int]]:
@@ -148,7 +144,7 @@ def _schema_sections(markdown: str) -> tuple[int, str, dict[str, str]]:
     sections = {}
     for index, (_, name, line_number) in enumerate(h2):
         end = h2[index + 1][2] if index + 1 < len(h2) else len(lines)
-        sections[name] = "".join(lines[line_number + 1:end]).strip("\n")
+        sections[name] = "".join(lines[line_number + 1 : end]).strip("\n")
     return int(title_match.group("id")), title_match.group("title"), sections
 
 
@@ -191,13 +187,13 @@ def _subsections(section: str, parent: str) -> list[tuple[str, str]]:
         raise ProblemError(f"## {parent} may contain only level-three child headings")
     if not headings:
         raise ProblemError(f"## {parent} must contain level-three child headings")
-    if "".join(lines[:headings[0][2]]).strip():
+    if "".join(lines[: headings[0][2]]).strip():
         raise ProblemError(f"## {parent} cannot contain text before its first child heading")
 
     result = []
     for index, (_, title, line_number) in enumerate(headings):
         end = headings[index + 1][2] if index + 1 < len(headings) else len(lines)
-        result.append((title, "".join(lines[line_number + 1:end]).strip("\n")))
+        result.append((title, "".join(lines[line_number + 1 : end]).strip("\n")))
     titles = [title for title, _ in result]
     if len(titles) != len(set(titles)):
         raise ProblemError(f"## {parent} contains a duplicate child heading")
@@ -217,10 +213,7 @@ def _validate_limits(limits: Any, heading: str) -> None:
         raise ProblemError(f"## {heading} must be an object")
     required = {"time_ms", "memory_mb", "output_kb"}
     if not required <= set(limits) or not set(limits) <= required | {"threads"}:
-        raise ProblemError(
-            f"## {heading} must contain exactly: {', '.join(sorted(required))}"
-            " (plus optional threads)"
-        )
+        raise ProblemError(f"## {heading} must contain exactly: {', '.join(sorted(required))} (plus optional threads)")
     if not all(isinstance(value, int) and value > 0 for value in limits.values()):
         raise ProblemError("Limits values must be positive integers")
 
@@ -229,9 +222,7 @@ def _validate_cases(value: list[Any], heading: str) -> list[dict[str, Any]]:
     cases = []
     for index, case in enumerate(value, start=1):
         if not isinstance(case, dict) or set(case) != {"input", "expected"}:
-            raise ProblemError(
-                f"{heading} testcase {index} must contain exactly 'input' and 'expected'"
-            )
+            raise ProblemError(f"{heading} testcase {index} must contain exactly 'input' and 'expected'")
         cases.append(case)
     return cases
 
@@ -256,9 +247,7 @@ def parse_problem_markdown(
         raise ProblemError("Metadata slug must be lowercase kebab-case")
     if not isinstance(metadata["difficulty"], str) or not metadata["difficulty"]:
         raise ProblemError("Metadata difficulty must be a non-empty string")
-    if not isinstance(metadata["tags"], list) or not all(
-        isinstance(tag, str) and tag for tag in metadata["tags"]
-    ):
+    if not isinstance(metadata["tags"], list) or not all(isinstance(tag, str) and tag for tag in metadata["tags"]):
         raise ProblemError("Metadata tags must be an array of non-empty strings")
 
     if source_path is not None:
@@ -291,8 +280,7 @@ def parse_problem_markdown(
             raise ProblemError(f"Language {language!r} configuration must be an object")
         _require_exact_keys(config, language_keys, f"Languages/{language}")
         if not all(
-            isinstance(config[key], str) and config[key]
-            for key in ("display_name", "monaco_language", "version")
+            isinstance(config[key], str) and config[key] for key in ("display_name", "monaco_language", "version")
         ) or not isinstance(config["enabled"], bool):
             raise ProblemError(f"Language {language!r} has invalid configuration values")
 
@@ -420,9 +408,7 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
         if re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", designated) is None or not any(
             name.startswith(f"solution_{designated}.") for name in solution_names
         ):
-            raise ProblemError(
-                "problem.json reference_solution names no solution_<variant>.* file in this bundle"
-            )
+            raise ProblemError("problem.json reference_solution names no solution_<variant>.* file in this bundle")
     elif not any(name.startswith("solution.") for name in solution_names):
         raise ProblemError(
             "problem.json reference_solution is empty but the bundle carries no canonical solution.* files"
@@ -507,9 +493,9 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
             "starter": starter.rstrip("\n") + "\n",
         }
     # One canonical language order everywhere (dropdowns, Solutions blocks):
-    # Python 3, Java, C++, Go, TypeScript, JavaScript, Rust, then anything
-    # else in first-seen order.
-    priority = ["python3", "java", "cpp", "go", "typescript", "javascript", "rust"]
+    # Python 3, Java, C++, Go, TypeScript, JavaScript, Rust, Shell, then
+    # anything else in first-seen order.
+    priority = ["python3", "java", "cpp", "go", "typescript", "javascript", "rust", "shell"]
     ordered = [key for key in priority if key in languages]
     ordered += [key for key in languages if key not in priority]
     languages = {key: languages[key] for key in ordered}
@@ -637,9 +623,7 @@ def assert_common_contract(slug: str) -> None:
     if not bundle.is_dir():
         return
     try:
-        declared = json.loads((bundle / "problem.json").read_text(encoding="utf-8")).get(
-            "common_version"
-        )
+        declared = json.loads((bundle / "problem.json").read_text(encoding="utf-8")).get("common_version")
     except (OSError, ValueError):
         raise ProblemError("problem.json is unreadable; cannot check the common-harness contract")
     if not isinstance(declared, int) or isinstance(declared, bool) or declared < 1:
@@ -648,17 +632,13 @@ def assert_common_contract(slug: str) -> None:
             "(the common-library version it targets; see common/VERSION.json)"
         )
     if declared > shipped:
-        raise ProblemError(
-            f"this bundle targets common harness v{declared}, "
-            f"but the problem set ships v{shipped}"
-        )
+        raise ProblemError(f"this bundle targets common harness v{declared}, but the problem set ships v{shipped}")
 
 
 def load_problem(slug: str) -> dict[str, Any]:
     problem, cases, public_count = _load_path(safe_problem_path(slug))
     problem["public_cases"] = [
-        {**case, "name": case.get("name", f"Example {index + 1}")}
-        for index, case in enumerate(cases[:public_count])
+        {**case, "name": case.get("name", f"Example {index + 1}")} for index, case in enumerate(cases[:public_count])
     ]
     return problem
 
@@ -704,7 +684,7 @@ def load_solutions(slug: str) -> Optional[dict[str, Any]]:
             sections = []
             for index, (title, line_number) in enumerate(level2):
                 end = level2[index + 1][1] if index + 1 < len(level2) else len(lines)
-                sections.append((title.strip(), "".join(lines[line_number + 1:end]).strip("\n")))
+                sections.append((title.strip(), "".join(lines[line_number + 1 : end]).strip("\n")))
             resolved = _match_sections(sections, sorted(implementations))
             for key, (title, body) in resolved.items():
                 guide[key] = body
@@ -719,9 +699,7 @@ def load_solutions(slug: str) -> Optional[dict[str, Any]]:
     if not guide and not implementations and not canonical:
         return None
     try:
-        reference = json.loads((path / "problem.json").read_text(encoding="utf-8")).get(
-            "reference_solution", ""
-        )
+        reference = json.loads((path / "problem.json").read_text(encoding="utf-8")).get("reference_solution", "")
     except (OSError, ValueError):
         reference = ""
     return {
@@ -795,9 +773,7 @@ def load_all_cases(slug: str) -> tuple[list[dict[str, Any]], int]:
             **case,
             "name": case.get(
                 "name",
-                f"Example {index + 1}"
-                if index < public_count
-                else f"Hidden case {index - public_count + 1}",
+                f"Example {index + 1}" if index < public_count else f"Hidden case {index - public_count + 1}",
             ),
         }
         for index, case in enumerate(cases)
@@ -821,9 +797,7 @@ def load_designated_reference(slug: str, language: str) -> Optional[str]:
     if extension is None:
         return None
     try:
-        designated = json.loads((path / "problem.json").read_text(encoding="utf-8")).get(
-            "reference_solution", ""
-        )
+        designated = json.loads((path / "problem.json").read_text(encoding="utf-8")).get("reference_solution", "")
     except (OSError, ValueError):
         return None
     stem = "solution" if not designated else f"solution_{designated}"
@@ -869,8 +843,17 @@ def list_problems() -> list[dict[str, Any]]:
 
 def public_problem(problem: dict[str, Any]) -> dict[str, Any]:
     allowed = {
-        "id", "slug", "title", "difficulty", "tags", "description", "hints",
-        "invocation", "limits", "languages", "public_cases",
+        "id",
+        "slug",
+        "title",
+        "difficulty",
+        "tags",
+        "description",
+        "hints",
+        "invocation",
+        "limits",
+        "languages",
+        "public_cases",
     }
     result = {key: value for key, value in problem.items() if key in allowed}
     # The loader already returns a private copy per call, so the languages
@@ -884,8 +867,6 @@ def public_problem(problem: dict[str, Any]) -> dict[str, Any]:
             display_input = dict(zip(names, raw_input))
         else:
             display_input = raw_input
-        public_cases.append(
-            {"name": case.get("name", f"Case {index + 1}"), "input": display_input}
-        )
+        public_cases.append({"name": case.get("name", f"Case {index + 1}"), "input": display_input})
     result["public_cases"] = public_cases
     return result

@@ -191,6 +191,12 @@ query's rows for row-set or exact-order comparison. SQL problems list only
 `SQL` in their languages block, so the editor's language selector shows SQL
 alone, and non-SQL problems never offer it.
 
+Shell problems are bash scripts judged as text filters. Each testcase's raw
+file text is fed on stdin; the script's stdout (without trailing newlines) is
+compared with a string expected value. Nonzero exits and output past the
+problem's limit are runtime errors. A shell bundle lists only `Shell` via its
+`starter.sh`, and the editor uses Monaco's built-in shell grammar.
+
 At startup the runner calibrates every executor, then a background thread
 pre-warms and periodically re-warms the compilers (rustc, g++, go build,
 javac, tsc) by building throwaway programs. First submissions therefore pay

@@ -1,7 +1,9 @@
 # problems-extend — authoring conventions and wire-class map
 
-The extend corpus is complete except for the 16 entries of
-`problems-extend/ROSTER-unfinished.json`. The end-to-end loop for
+The extend corpus is complete except for the 14 unauthored ids listed
+in `problems-extend/README.md` (derived by
+`openoj/.localonly/verify_corpus.py` — the roster file was removed in
+the 2026-08-28 cleanup). The end-to-end loop for
 authoring any single problem is `docs/AUTHORING.md`; the six-fleet wave
 machinery (trackers, lane protocol, concurrency carve) retired with the
 wave — its durable law lives in CLAUDE.md's "Fleet discipline" and in
@@ -58,25 +60,25 @@ Every mechanism below is judged green across all 7 languages; probe
 bundles live under `openoj/.localonly/probank/9000-9099/`. The wire law
 itself is `docs/CODECS.md`.
 
-| Class | Probe (exemplar bundle) |
-|---|---|
-| n-ary tree | `9010_probe-nary` |
-| quad tree | `9011_probe-quad` |
-| NestedInteger in/out | `9012_probe-nested-in`, `9013_probe-nested-out` |
-| parent/next tree | `9014_probe-next` |
-| doubly ring from tree | `9015_probe-doubly` |
-| circular list | `9016_probe-circular` |
-| aliased lists (LC 160) | `9017_probe-alias` |
-| graph / random list (provided class) | `9018_probe-graph`, `9019_probe-random` |
-| struct array input | `9020_probe-struct` |
-| validator-judged output | `9021_probe-validator`, `9022_probe-flip` |
-| interactive oracle + out-buffer | `9024_probe-read4` |
-| LC 430 multi-list | `9026_probe-multilist` |
+| Class                                | Probe (exemplar bundle)                         |
+| ------------------------------------ | ----------------------------------------------- |
+| n-ary tree                           | `9010_probe-nary`                               |
+| quad tree                            | `9011_probe-quad`                               |
+| NestedInteger in/out                 | `9012_probe-nested-in`, `9013_probe-nested-out` |
+| parent/next tree                     | `9014_probe-next`                               |
+| doubly ring from tree                | `9015_probe-doubly`                             |
+| circular list                        | `9016_probe-circular`                           |
+| aliased lists (LC 160)               | `9017_probe-alias`                              |
+| graph / random list (provided class) | `9018_probe-graph`, `9019_probe-random`         |
+| struct array input                   | `9020_probe-struct`                             |
+| validator-judged output              | `9021_probe-validator`, `9022_probe-flip`       |
+| interactive oracle + out-buffer      | `9024_probe-read4`                              |
+| LC 430 multi-list                    | `9026_probe-multilist`                          |
 
 Per-class laws that most often bite (details in CODECS.md):
 
 - Go's assembled `NestedInteger` is pointer-based (`GetList()
-  []*NestedInteger`); walk `*NestedInteger` items.
+[]*NestedInteger`); walk `*NestedInteger` items.
 - A missing list/tree/ring return serializes as `[]`; `alias_list` null
   return is `[]` too (LC 160's "no intersection"); quad null is `null`.
 - `multi_list` (LC 430) returns must be fully flattened, child spliced
