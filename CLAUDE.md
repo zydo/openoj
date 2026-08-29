@@ -12,8 +12,12 @@ Two repos, deliberately decoupled:
 The bank's live tree is `problems-adapt/`; `problems` is a **symlink** to
 it, so the served set can be swapped to any other layout/repo by moving
 one link. `problems-bettercode/` archives the LeetCode originals the
-adapted set derives from. Scrape origin: `~/code/lc-crawl` (raw) →
-`~/code/bettercode` (curated) → `problems-bettercode` (in-repo archive).
+adapted set derives from. `problems-extend/` is the second corpus: the
+crawled originals under ORIGINAL form (3,177 crawl-keyed bundles,
+complete except the 16 entries of `problems-extend/ROSTER-unfinished.json`;
+see its README and `docs/AUTHORING-GUIDE.md`). Scrape origin:
+`~/code/lc-crawl` (raw) → `~/code/bettercode` (curated) →
+`problems-bettercode` (in-repo archive).
 
 ## Adaptation philosophy
 
@@ -149,8 +153,9 @@ evidence — read it before touching cases.json or statement wording.
   drivers (`stub-server.mjs`, `shot.mjs`, `session-e2e.mjs`).
 - openoj-problems `/.localonly/`: per-bundle scratch, build scripts,
   `dsw_shape_study.py` (tracked at scripts/ — see CORPUS-FLAGS).
-- openoj-problems `/.adapt/`: fleet state (`concurrency.json` — cap,
-  floor, target, event log) and wave/ledger bookkeeping.
+- openoj-problems `/.adapt/`: live rate-limit state (`concurrency.json`
+  — cap, floor, target, event log); finished-wave bookkeeping is
+  archived under `.localonly/adapt_archive/`.
 
 ## Fleet discipline (agent concurrency)
 
