@@ -343,7 +343,10 @@ one question — is THIS output a correct answer to THIS input:
 - `fizzbuzz` — the recorded value-callback stream is exactly the fizzbuzz
   sequence for `params.n` (LC 1195)
 - `knight_tour` — a full n×n tour: every cell once, every step a legal
-  knight move (LC 2674-ish tour contracts)
+  knight move (LC 2664-ish tour contracts)
+- `last_marked_nodes` — for every node i the answer names a node at
+  maximum distance from i, the crawl's "choose any one answer"
+  (input `[edges]`, LC 3313)
 - `grid_layout`, `grid_paths`, `grid_k_paths`, `grid_k_paths_free` —
   grid-construction families; `params.impossible: true` (or a derived
   impossibility) accepts an explicitly declared impossible answer

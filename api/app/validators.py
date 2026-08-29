@@ -126,6 +126,110 @@ def _validate_grid_layout(actual: Any, params: dict, case_input: Any, expected: 
     return sorted(layout_pairs) == sorted(edge_pairs)
 
 
+def _tree_depths(adjacency: list[list[int]], start: int) -> list[int]:
+    """BFS depth from `start`; -1 marks unreachable (non-tree input)."""
+    depths = [-1] * len(adjacency)
+    depths[start] = 0
+    queue = [start]
+    for node in queue:
+        for neighbor in adjacency[node]:
+            if depths[neighbor] < 0:
+                depths[neighbor] = depths[node] + 1
+                queue.append(neighbor)
+    return depths
+
+
+def _validate_last_marked_nodes(actual: Any, params: dict, case_input: Any, expected: Any) -> bool:
+    """3313 Find the Last Marked Nodes in Tree. Input is [edges]; for every
+    node i the output must name a node at maximum distance from i — the crawl's
+    "you can choose any one answer", since node v gets marked at time d(i, v)
+    and the last-marked nodes from i are exactly its farthest nodes. The
+    eccentricity theorem gives ecc(v) = max(d(v, a), d(v, b)) for either
+    endpoint of any fixed diameter, so acceptance checks d(i, answer[i]) ==
+    ecc(i); pairwise distances come from a BFS per distinct answer node (the
+    common few-distinct case) or binary-lifting LCA when answers are many."""
+    if not (isinstance(case_input, list) and case_input and isinstance(case_input[0], list)):
+        return False
+    edges = case_input[0]
+    node_count = len(edges) + 1
+    adjacency: list[list[int]] = [[] for _ in range(node_count)]
+    for edge in edges:
+        if not (isinstance(edge, list) and len(edge) == 2):
+            return False
+        first, second = edge
+        if not (_is_index(first) and _is_index(second)):
+            return False
+        if not (0 <= first < node_count and 0 <= second < node_count):
+            return False
+        adjacency[first].append(second)
+        adjacency[second].append(first)
+    if not isinstance(actual, list) or len(actual) != node_count:
+        return False
+    if any(not (_is_index(node) and 0 <= node < node_count) for node in actual):
+        return False
+
+    depths = _tree_depths(adjacency, 0)
+    if any(distance < 0 for distance in depths):
+        return False  # not a connected tree
+    endpoint = max(range(node_count), key=depths.__getitem__)
+    from_first = _tree_depths(adjacency, endpoint)
+    other = max(range(node_count), key=from_first.__getitem__)
+    from_other = _tree_depths(adjacency, other)
+    eccentricity = [max(from_first[node], from_other[node]) for node in range(node_count)]
+
+    distinct = set(actual)
+    if len(distinct) <= 32:
+        for answer in distinct:
+            distances = _tree_depths(adjacency, answer)
+            for node, choice in enumerate(actual):
+                if choice == answer and distances[node] != eccentricity[node]:
+                    return False
+        return True
+
+    # Many distinct answers: one binary-lifting LCA query per position
+    # (rooted at 0, whose BFS depths are already computed).
+    parent = [0] * node_count
+    seen = [False] * node_count
+    seen[0] = True
+    queue = [0]
+    for node in queue:
+        for neighbor in adjacency[node]:
+            if not seen[neighbor]:
+                seen[neighbor] = True
+                parent[neighbor] = node
+                queue.append(neighbor)
+    levels = max(1, (node_count - 1).bit_length())
+    ancestors = [parent]
+    for _ in range(1, levels):
+        previous = ancestors[-1]
+        ancestors.append([previous[previous[node]] for node in range(node_count)])
+
+    def lowest_common_ancestor(first: int, second: int) -> int:
+        if depths[first] < depths[second]:
+            first, second = second, first
+        difference = depths[first] - depths[second]
+        step = 0
+        while difference:
+            if difference & 1:
+                first = ancestors[step][first]
+            difference >>= 1
+            step += 1
+        if first == second:
+            return first
+        for step in range(levels - 1, -1, -1):
+            if ancestors[step][first] != ancestors[step][second]:
+                first = ancestors[step][first]
+                second = ancestors[step][second]
+        return parent[first]
+
+    for node, choice in enumerate(actual):
+        ancestor = lowest_common_ancestor(node, choice)
+        walked = depths[node] + depths[choice] - 2 * depths[ancestor]
+        if walked != eccentricity[node]:
+            return False
+    return True
+
+
 def _monotone_path_count(grid: list[list[str]]) -> int:
     """Right/down paths from (0, 0) to the bottom-right through '.' cells."""
     rows, columns = len(grid), len(grid[0])
@@ -376,6 +480,7 @@ REGISTRY = {
     "fizzbuzz": _validate_fizzbuzz,
     "knight_tour": _validate_knight_tour,
     "grid_layout": _validate_grid_layout,
+    "last_marked_nodes": _validate_last_marked_nodes,
     "grid_paths": _validate_grid_paths,
     "grid_k_paths": _validate_grid_k_paths,
     "grid_k_paths_free": _validate_grid_k_paths_free,

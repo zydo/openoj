@@ -13,8 +13,8 @@ The bank's live tree is `problems-adapt/`; `problems` is a **symlink** to
 it, so the served set can be swapped to any other layout/repo by moving
 one link. `problems-bettercode/` archives the LeetCode originals the
 adapted set derives from. `problems-extend/` is the second corpus: the
-crawled originals under ORIGINAL form (3,177 crawl-keyed bundles,
-complete except the 16 entries of `problems-extend/ROSTER-unfinished.json`;
+crawled originals under ORIGINAL form (3,178 crawl-keyed bundles,
+complete except the 15 entries of `problems-extend/ROSTER-unfinished.json`;
 see its README and `docs/AUTHORING-GUIDE.md`). Scrape origin:
 `~/code/lc-crawl` (raw) → `~/code/bettercode` (curated) →
 `problems-bettercode` (in-repo archive).

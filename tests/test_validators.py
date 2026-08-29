@@ -77,6 +77,54 @@ class GridLayoutValidatorTests(unittest.TestCase):
         self.assertFalse(accepts([[3, 1], [2, 3]], spec("grid_layout"), case_input))
 
 
+class LastMarkedNodesValidatorTests(unittest.TestCase):
+    # last_marked_nodes (3313): any farthest node per position.
+    STAR = [[0, 1], [0, 2], [0, 3], [0, 4]]
+
+    def test_accepts_the_lc_example_and_alternate_ties(self) -> None:
+        edges = [[0, 1], [0, 2]]
+        self.assertTrue(accepts([2, 2, 1], spec("last_marked_nodes"), [edges]))
+        # nodes[0] may also pick leaf 1 — "choose any one answer".
+        self.assertTrue(accepts([1, 2, 1], spec("last_marked_nodes"), [edges]))
+        self.assertTrue(accepts([1, 0], spec("last_marked_nodes"), [[[0, 1]]]))
+
+    def test_star_accepts_any_leaf_from_the_hub(self) -> None:
+        # The farthest set from the hub is ALL leaves, not just the two
+        # diameter endpoints this run happened to find.
+        self.assertTrue(
+            accepts([3, 2, 4, 1, 2], spec("last_marked_nodes"), [self.STAR])
+        )
+        self.assertTrue(
+            accepts([1, 2, 3, 4, 3], spec("last_marked_nodes"), [self.STAR])
+        )
+
+    def test_rejects_near_misses(self) -> None:
+        # hub naming itself, a non-farthest pick, wrong length, bad index.
+        self.assertFalse(
+            accepts([0, 2, 4, 1, 2], spec("last_marked_nodes"), [self.STAR])
+        )
+        self.assertFalse(
+            accepts([3, 3, 1, 0], spec("last_marked_nodes"), [[[0, 1], [1, 2], [2, 3]]])
+        )
+        self.assertFalse(
+            accepts([2, 1], spec("last_marked_nodes"), [[[0, 1], [0, 2]]])
+        )
+        self.assertFalse(
+            accepts([2, 2, 5], spec("last_marked_nodes"), [[[0, 1], [0, 2]]])
+        )
+
+    def test_many_distinct_answers_take_the_lca_path(self) -> None:
+        # 40-leaf star, each position naming a different leaf (all at
+        # distance 2 from each other): 40 distinct answers, so the LCA
+        # branch runs. The hub naming itself must still fail there.
+        edges = [[0, leaf] for leaf in range(1, 41)]
+        answer = [1] + [leaf % 40 + 1 for leaf in range(1, 41)]
+        self.assertTrue(accepts(answer, spec("last_marked_nodes"), [edges]))
+        broken = list(answer)
+        broken[0] = 0
+        self.assertFalse(accepts(broken, spec("last_marked_nodes"), [edges]))
+
+
 class GridPathsValidatorTests(unittest.TestCase):
     # grid_paths (3963): exactly one monotone path.
     def test_accepts_a_one_path_grid(self) -> None:
