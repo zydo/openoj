@@ -8,8 +8,8 @@ from .python3 import Python3Executor
 class ShellExecutor(Python3Executor):
     """POSIX-shell executor: the submission is a bash script.
 
-    The judged program is the script itself — no wrapper, no common
-    vocabulary. Case input is the raw text fed on stdin; the script's
+    The judged program is the script itself — no wrapper or assembled
+    bundle dependencies. Case input is the raw text fed on stdin; the script's
     stdout (trailing newlines stripped, see the harness) is the value the
     API compares under the invocation's mode. Calibration is inherited:
     the interpreter startup the harness adds dominates a shell run the

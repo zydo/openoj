@@ -493,7 +493,7 @@ public final class OpenOJJavaHarness {
         return result;
     }
 
-    /** The invocation's provided.oracle manifest, or null when the oracle is judge-built. */
+    /** The invocation's bundle-owned provided.oracle manifest, or null when absent. */
     @SuppressWarnings("unchecked")
     private static Map<String, Object> providedOracle(Map<String, Object> invocation) {
         Object provided = invocation.get("provided");

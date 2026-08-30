@@ -47,8 +47,7 @@ class CppExecutor(CompiledExecutor):
         structs = uses_struct_kinds(invocation)
         item_spec = struct_item_spec(invocation)
         # Graph and random-list nodes come from the problem's provided/
-        # sources (the class name rides on value_type.class); pre-assembly
-        # jobs fall back to the generic Node emission below.
+        # sources; value_type.class names each class for the codecs below.
         graph_class = provided_node_class(invocation, "graph")
         random_class = provided_node_class(invocation, "random_list")
         # The second wave keeps the provided-class model: open doubly chains
@@ -57,9 +56,8 @@ class CppExecutor(CompiledExecutor):
         doubly_class = provided_node_class(invocation, "doubly_list")
         doubly_node_class = provided_node_class(invocation, "doubly_list_node")
         random_tree_class = provided_node_class(invocation, "random_tree")
-        # Struct classes arrive as source (the bank's common library or the
-        # problem's provided/); pre-assembly jobs fall back to generated
-        # equivalents below.
+        # Manifest-named struct classes arrive from the problem's provided/
+        # source; the codecs below construct them by name.
         struct_specs: dict[str, dict[str, Any]] = {}
 
         def collect_structs(spec: Any) -> None:

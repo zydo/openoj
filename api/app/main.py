@@ -309,7 +309,7 @@ def _validate_language(problem_data: dict[str, Any], language: str) -> None:
 # Where each language's assembled sources live under a problem's own
 # provided/ directory (the judge's only well-known assembly path — see
 # docs/TRUST-BOUNDARIES.md).
-COMMON_DIRECTORIES = {
+PROVIDED_DIRECTORIES = {
     "python3": "python",
     "java": "java",
     "cpp": "cpp",
@@ -321,7 +321,7 @@ COMMON_DIRECTORIES = {
 
 
 def _assembly_sources(slug: str, language: str) -> dict[str, dict[str, str]]:
-    """The judge-assembled library sources for one submission.
+    """The bundle-provided sources assembled with one submission.
 
     Reads the problem's own provided/<language>/ files, so the runner
     compiles or runs one complete program: provided + submission. Every
@@ -330,7 +330,7 @@ def _assembly_sources(slug: str, language: str) -> dict[str, dict[str, str]]:
     predefined definitions of its own (docs/CODECS.md documents the
     required name and shape per wire kind).
     """
-    directory = COMMON_DIRECTORIES.get(language)
+    directory = PROVIDED_DIRECTORIES.get(language)
     if directory is None:
         return {}
     assembly: dict[str, dict[str, str]] = {"provided": {}}

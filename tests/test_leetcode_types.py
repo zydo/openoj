@@ -4,8 +4,8 @@ The judge owns no predefined data structures — every well-known class
 a wire needs is resolved from the SUBMISSION'S OWN module namespace
 (docs/CODECS.md). These tests prove exactly that: every class below is
 defined locally in this test file (mirroring a bundle's own
-provided/python/ sources, copied from common/python/types.py's and the
-narrow provided-class shapes), packaged into a throwaway module, and
+provided/python/ sources and narrow problem-specific class shapes),
+packaged into a throwaway module, and
 handed to leetcode_codecs' decode()/encode() the same way
 python_harness._load_solution assembles a real submission's namespace.
 """

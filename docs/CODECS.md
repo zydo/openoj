@@ -189,10 +189,10 @@ own class in the manifest and ships the sources in
   `doubly_list`, `doubly_list_node`, and `random_tree` in every typed
   renderer, and additionally for `special_tree` and `nary_tree` (the
   `nary_tree_nodes`/`nary_tree_ref` shapes) in Rust — the one renderer
-  whose common node shapes (`Box` children) cannot alias, so a leaf ring
-  or shared n-ary tree needs the bundle's own Rc-shared provided class;
-  the raw-pointer and JS-object renderers build the ring over the common
-  `TreeNode`/`Node` directly. Renderers re-decorate around the provided
+  whose conventional node shapes (`Box` children) cannot alias, so a leaf
+  ring or shared n-ary tree needs the bundle's own Rc-shared provided
+  class; the raw-pointer and JS-object renderers build the ring over the
+  bundle-provided `TreeNode`/`Node` directly. Renderers re-decorate around the provided
   name (`GraphNode*` in C++, `*GraphNode` in Go, `GraphNode | null` in
   TS, `Option<Rc<RefCell<GraphNode>>>` in Rust); legacy manifests without
   `class` fall back to `Node`.
@@ -203,14 +203,15 @@ own class in the manifest and ships the sources in
   serialize through the provided class's `neighbors` / `next`+`random`
   fields; `random_tree` through `left`/`right`/`random`.
 
-The second wave adds four shapes built on the common vocabulary plus one
-generic value:
+The second wave adds four shapes built on the wire-kind vocabulary above
+plus one generic value:
 
 - `special_tree` (LC 2773) decodes an ordinary `TreeNode` display, then
   ring-wires its leaves — collected BEFORE wiring, sorted by value — with
   `leaf.left = previous leaf`, `leaf.right = next leaf`, wrap-around
   (a single leaf self-loops both ways). The statement's property
-  (`v.left.right == v`) is judge-provided, not encoded in the wire.
+  (`v.left.right == v`) is constructed by the decoder, not encoded in
+  the wire.
 - `nary_tree_nodes` (LC 1506) decodes a plain n-ary display and hands the
   solution the node LIST (`std::vector<Node*>` / `[]*Node` /
   `Array<Node | null>` / `Vec<Rc<RefCell<Node>>>`) in level order — any
@@ -235,9 +236,9 @@ positional constructor). Declared field order is the positional order in
 every language; Go's reader builds the composite literal positionally, so
 the provided struct's field order must match the manifest exactly.
 
-Provided Rust sources share one module with `common.rs` and the wrapper,
-so they use fully-qualified paths (`std::rc::Rc<...>`) and carry no `use`
-lines; the submission's own `solution.rs` MAY import. The assembled Go
+Provided Rust sources share one compilation unit with the generated
+wrapper, so they use fully-qualified paths (`std::rc::Rc<...>`) and
+carry no `use` lines; the submission's own `solution.rs` MAY import. The assembled Go
 `NestedInteger` is pointer-based (`GetList() []*NestedInteger`, `Add`/
 `SetInteger` on pointer receivers) — Go solutions walk `*NestedInteger`
 items, mirroring LeetCode's own Go template.
@@ -456,7 +457,7 @@ comparison mode (`set`/`multiset`/`exact`).
 ## Shell judging (`type: "shell"`)
 
 The submission file is a bash script and nothing else — no wrapper, no
-common vocabulary, no assembled sources. Each case's input is the raw
+assembled bundle sources. Each case's input is the raw
 text fed on stdin verbatim (no JSON envelope); the script's captured
 stdout, trailing newlines stripped, is the judged value, compared under
 the invocation's mode — usually

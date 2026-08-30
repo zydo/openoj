@@ -116,7 +116,7 @@ function openojEncode(value, codec) {
 # unreachable; plain JS would not).
 NESTED_CODEC_HELPERS = """\
 // Nested JSON ([1,[4,[6]]], bare integers as integer holds) ->
-// the assembled common NestedInteger, mirroring the harness decode.
+// the bundle-provided NestedInteger, mirroring the harness decode.
 function openojNestedFromArray(value) {
     if (typeof value === "number") {
         return new NestedInteger(value);

@@ -120,7 +120,7 @@ class TypedExecutorTests(unittest.TestCase):
         with self.assertRaises(ExecutorError):
             type_spec({"kind": "linked_list", "items": {"kind": "string"}}, "Parameter 1")
 
-    def test_entrypoints_fall_back_to_the_shared_method_name(self) -> None:
+    def test_entrypoints_fall_back_to_the_language_neutral_method_name(self) -> None:
         methods = {}
         for language in ("cpp", "javascript", "typescript", "go", "rust"):
             _, _, methods[language] = function_signature(self.invocation, language)

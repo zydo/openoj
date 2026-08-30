@@ -77,10 +77,10 @@ formatter via the image.
   section the worst-to-best `solutions.md` ordering ends with. The judge
   runs exactly this reference (plus the submission) when scoring the
   time-cost percentage; the solutions page badges it.
-- Trust model for bundle-carried code (common/, provided/): see
-  `docs/TRUST-BOUNDARIES.md` — they are problem-set content, trusted like
-  cases.json, confined by the sandbox; assembly reads exactly two
-  well-known directories and nothing else.
+- Trust model for bundle-carried code (`provided/`): see
+  `docs/TRUST-BOUNDARIES.md` — it is problem-set content, trusted like
+  cases.json, confined by the sandbox; assembly reads exactly one
+  well-known directory and nothing else.
 
 ## Judge infrastructure (openoj/)
 
@@ -163,9 +163,9 @@ evidence — read it before touching cases.json or statement wording.
   `alt/normalize_meta.py`), the gates (`verify_solution.py`,
   `verify_corpus.py`, `verify_extend.py`), wave auditors
   (`audit_wave.py`, `regate_wave.py`), sweeps
-  (`add_common_version.py`, `designate_references.py`,
-  `reorder_audit.py`), the svg_* figure-audit pipeline, headless-UI
-  drivers (`stub-server.mjs`, `shot.mjs`, `session-e2e.mjs`).
+  (`designate_references.py`, `reorder_audit.py`), the svg_*
+  figure-audit pipeline, headless-UI drivers (`stub-server.mjs`,
+  `shot.mjs`, `session-e2e.mjs`).
 - openoj-problems `/.localonly/`: case-gen provenance for recently
   authored bundles, 2755/2759 partial scratch, finished-wave
   bookkeeping under `adapt_archive/` (see its README.md).

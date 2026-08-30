@@ -242,7 +242,7 @@ def _convert(spec: dict[str, Any], source: str) -> str:
     if kind == "nested":
         # Self-passing generic lambda: runtime recursion over the nested
         # JSON without a generation-time recursive _convert call. Emitted
-        # in main, after the assembled common declares NestedInteger.
+        # in main, after the bundle-provided source declares NestedInteger.
         return (
             f"[&](const OjValue& v) {{ auto openoj_build = [&](auto&& openoj_build, const OjValue& v) -> NestedInteger {{ "
             f"if (v.kind == OjValue::Int) return NestedInteger((long long)v.integer); "

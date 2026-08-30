@@ -365,7 +365,7 @@ def _convert(spec: dict[str, Any], source: str, class_name: str = "") -> str:
             f'if !ok {{ panic(`Parameter must be a {{"$ref": handle}} instance reference`) }}; return v }})()'
         )
     if kind == "nested":
-        # Self-recursive closure over the JSON shape. The assembled common
+        # Self-recursive closure over the JSON shape. The bundle-provided
         # NestedInteger is pointer-based with unexported fields; this code
         # is concatenated into the same package, so an integer hold is
         # built directly as NestedInteger{integer: &held}.

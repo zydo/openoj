@@ -51,8 +51,8 @@ def type_spec(value: Any, location: str) -> dict[str, Any]:
     if kind in _ITEM_KINDS:
         items = value.get("items")
         if items is None:
-            # Node payloads are 32-bit integers throughout the judge's
-            # common types; manifests may omit the implied items spec
+            # Node payloads conventionally use 32-bit integers; manifests
+            # may omit the implied items spec
             # (every codec-driven path — the harnesses — never needed it).
             items = {"kind": "integer", "bits": 32}
             value = {**value, "items": items}
@@ -749,8 +749,8 @@ def struct_item_spec(invocation: dict[str, Any]) -> dict[str, Any]:
 def provided_node_class(invocation: dict[str, Any], kind: str, default: str = "Node") -> str:
     """The class a graph or random_list value names in the wrapper and the
     starters: the using problem's provided/ source (LC 133/138 ship their
-    own node class — the shared vocabulary deliberately does not carry
-    one), falling back to the generic Node for legacy manifests."""
+    own node class), falling back to the conventional name Node for legacy
+    manifests that omit an explicit class name."""
     specs = [parameter.get("value_type") for parameter in invocation.get("parameters", [])]
     specs.append(invocation.get("return_type"))
     for spec in specs:

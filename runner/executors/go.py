@@ -45,9 +45,8 @@ READER_METHODS = {
     # nary_tree_ref reads inline in openojExecute like alias_list: the
     # value names a node inside an earlier parameter's decoded tree.
 }
-# Kinds that share one fallback node class (a bundle still uses a single
-# shape, but the aliases tie the ListNode/NodeWithNext declarations to every
-# wire kind that needs them).
+# Kinds that use the same bundle-provided node class: these aliases tie
+# ListNode/NodeWithNext codec paths to every wire kind that needs each shape.
 LIST_NODE_KINDS = {"list", "circular_list", "alias_list"}
 NEXT_NODE_KINDS = {"next_tree", "doubly_circular"}
 
@@ -81,7 +80,7 @@ def _read_expression(spec: dict[str, Any], reader: str = "openojReader") -> str:
         return f"{reader}.{READER_METHODS[kind]}()"
     if kind == "struct":
         # The class is the using problem's provided/ source; the reader
-        # carries a same-named method per generated fallback type.
+        # carries a same-named codec method for it.
         return f"{reader}.{spec['class']}()"
     if kind == "integer":
         return f"{reader}.int32()" if spec.get("bits", 32) == 32 else f"{reader}.int64()"

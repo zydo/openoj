@@ -309,7 +309,7 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         for _, content in sorted((assembly or {}).get("provided", {}).items())
         if _.endswith((".hpp", ".cpp", ".h"))
     )
-    # oj_from: converts common typed returns into OjValue
+    # oj_from converts supported typed returns into OjValue.
     oj_from = """
 static OjValue oj_from(long long value) { OjValue v; v.kind = OjValue::Int; v.integer = value; return v; }
 static OjValue oj_from(int value) { OjValue v; v.kind = OjValue::Int; v.integer = value; return v; }

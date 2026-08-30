@@ -1,5 +1,4 @@
 import textwrap
-import re
 from pathlib import Path
 from typing import Any
 
@@ -88,12 +87,12 @@ def _collect_structs(spec: Any, found: dict[str, dict[str, Any]]) -> None:
         _collect_structs(spec.get("items"), found)
 
 
-def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
-    """Return (prelude classes, reader codecs) for struct kinds."""
+def _struct_codecs(invocation: dict[str, Any]) -> tuple[str, str]:
+    """Return result-array helpers and codecs for bundle-provided structures."""
     structs = uses_struct_kinds(invocation)
     # Graph and random_list nodes are the using problem's provided/ class
-    # (LC 133/138 ship their own); the classes and codecs below render
-    # around that name via the placeholders replaced at the end.
+    # (LC 133/138 ship their own); the codecs below render around
+    # that name via the placeholders replaced at the end.
     graph_class = provided_node_class(invocation, "graph")
     random_class = provided_node_class(invocation, "random_list")
     # The second-wave pointer kinds name the using problem's provided/
@@ -108,7 +107,7 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
     for spec in invocation.get("parameters", []):
         value_type = spec.get("value_type") if isinstance(spec, dict) else None
         _collect_structs(value_type, struct_specs)
-    prelude = ""
+    result_helpers = ""
     codecs = (
         "    // Registry of input-side node references backing the clone/identity\n"
         "    // checks for graph, random_list, and alias_list returns: the judge\n"
@@ -116,14 +115,6 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
         "    // returns the input structure itself.\n"
         "    static inputNodes = new Set<unknown>();\n"
     )
-    if "list" in structs or "circular_list" in structs:
-        prelude += (
-            "class ListNode {\n"
-            "    val: number;\n"
-            "    next: ListNode | null;\n"
-            "    constructor(val?: number, next?: ListNode | null) { this.val = val ?? 0; this.next = next ?? null; }\n"
-            "}\n\n"
-        )
     if "list" in structs:
         codecs += (
             "    linkedList(): ListNode | null {\n"
@@ -177,16 +168,6 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "    }\n"
         )
     if "tree" in structs or "special_tree" in structs:
-        prelude += (
-            "class TreeNode {\n"
-            "    val: number;\n"
-            "    left: TreeNode | null;\n"
-            "    right: TreeNode | null;\n"
-            "    constructor(val?: number, left?: TreeNode | null, right?: TreeNode | null) {\n"
-            "        this.val = val ?? 0; this.left = left ?? null; this.right = right ?? null;\n"
-            "    }\n"
-            "}\n\n"
-        )
         codecs += (
             "    tree(): TreeNode | null {\n"
             "        const length = this.uint32();\n"
@@ -228,13 +209,6 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
     if "nary_tree" in structs or "nary_tree_nodes" in structs or "nary_tree_ref" in structs:
         # The DOM lib declares a global `Node`; the module marker at the top
         # of the assembled file shadows it for the whole compilation unit.
-        prelude += (
-            "class Node {\n"
-            "    val: number;\n"
-            "    children: Node[];\n"
-            "    constructor(val?: number, children?: Node[]) { this.val = val ?? 0; this.children = children ?? []; }\n"
-            "}\n\n"
-        )
         codecs += (
             "    naryTree(): Node | null {\n"
             "        const length = this.uint32();\n"
@@ -281,22 +255,6 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "    }\n"
         )
     if "quad_tree" in structs:
-        prelude += (
-            "class QuadNode {\n"
-            "    val: boolean;\n"
-            "    isLeaf: boolean;\n"
-            "    topLeft: QuadNode | null;\n"
-            "    topRight: QuadNode | null;\n"
-            "    bottomLeft: QuadNode | null;\n"
-            "    bottomRight: QuadNode | null;\n"
-            "    constructor(val?: boolean, isLeaf?: boolean, topLeft?: QuadNode | null, topRight?: QuadNode | null,\n"
-            "                bottomLeft?: QuadNode | null, bottomRight?: QuadNode | null) {\n"
-            "        this.val = val ?? false; this.isLeaf = isLeaf ?? false;\n"
-            "        this.topLeft = topLeft ?? null; this.topRight = topRight ?? null;\n"
-            "        this.bottomLeft = bottomLeft ?? null; this.bottomRight = bottomRight ?? null;\n"
-            "    }\n"
-            "}\n\n"
-        )
         codecs += (
             "    quadTree(): QuadNode | null {\n"
             "        this.need(1);\n"
@@ -333,19 +291,6 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "    }\n"
         )
     if "nested" in structs:
-        prelude += (
-            "class NestedInteger {\n"
-            "    private held = false;\n"
-            "    private integer = 0;\n"
-            "    private list: NestedInteger[] = [];\n"
-            "    constructor(value?: number) { if (value !== undefined) { this.held = true; this.integer = value; } }\n"
-            "    isInteger(): boolean { return this.held; }\n"
-            "    getInteger(): number { return this.integer; }\n"
-            "    setInteger(value: number): void { this.held = true; this.integer = value; this.list = []; }\n"
-            "    add(item: NestedInteger): void { this.held = false; this.list.push(item); }\n"
-            "    getList(): NestedInteger[] { return this.list; }\n"
-            "}\n\n"
-        )
         codecs += (
             "    nested(): NestedInteger {\n"
             "        this.need(1);\n"
@@ -361,19 +306,6 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "        if (value.isInteger()) return value.getInteger();\n"
             "        return value.getList().map(OpenOJReader.nestedJSON);\n"
             "    }\n"
-        )
-    if "next_tree" in structs or "doubly_circular" in structs:
-        prelude += (
-            "class NodeWithNext {\n"
-            "    val: number;\n"
-            "    left: NodeWithNext | null;\n"
-            "    right: NodeWithNext | null;\n"
-            "    next: NodeWithNext | null;\n"
-            "    parent: NodeWithNext | null;\n"
-            "    constructor(val?: number, left?: NodeWithNext | null, right?: NodeWithNext | null, next?: NodeWithNext | null) {\n"
-            "        this.val = val ?? 0; this.left = left ?? null; this.right = right ?? null; this.next = next ?? null; this.parent = null;\n"
-            "    }\n"
-            "}\n\n"
         )
     if "next_tree" in structs:
         codecs += (
@@ -463,17 +395,6 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "    }\n"
         )
     if "multi_list" in structs:
-        prelude += (
-            "class MultiListNode {\n"
-            "    val: number;\n"
-            "    prev: MultiListNode | null;\n"
-            "    next: MultiListNode | null;\n"
-            "    child: MultiListNode | null;\n"
-            "    constructor(val?: number, prev?: MultiListNode | null, next?: MultiListNode | null, child?: MultiListNode | null) {\n"
-            "        this.val = val ?? 0; this.prev = prev ?? null; this.next = next ?? null; this.child = child ?? null;\n"
-            "    }\n"
-            "}\n\n"
-        )
         codecs += (
             "    multiList(): MultiListNode | null {\n"
             "        // One chain: u32 n, then per node the value, a child flag,\n"
@@ -513,13 +434,6 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
     if "graph" in structs:
         # The class is the using problem's provided/ source (LC 133); the
         # placeholder becomes the manifest's class name below.
-        prelude += (
-            "class @@GRAPH_CLASS@@ {\n"
-            "    val: number;\n"
-            "    neighbors: @@GRAPH_CLASS@@[];\n"
-            "    constructor(val?: number, neighbors?: @@GRAPH_CLASS@@[]) { this.val = val ?? 0; this.neighbors = neighbors ?? []; }\n"
-            "}\n\n"
-        )
         codecs += (
             "    graph(): @@GRAPH_CLASS@@ | null {\n"
             "        const count = this.uint32();\n"
@@ -570,16 +484,6 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "    }\n"
         )
     if "random_list" in structs:
-        prelude += (
-            "class @@RANDOM_CLASS@@ {\n"
-            "    val: number;\n"
-            "    next: @@RANDOM_CLASS@@ | null;\n"
-            "    random: @@RANDOM_CLASS@@ | null;\n"
-            "    constructor(val?: number, next?: @@RANDOM_CLASS@@ | null, random?: @@RANDOM_CLASS@@ | null) {\n"
-            "        this.val = val ?? 0; this.next = next ?? null; this.random = random ?? null;\n"
-            "    }\n"
-            "}\n\n"
-        )
         codecs += (
             "    randomList(): @@RANDOM_CLASS@@ | null {\n"
             "        const count = this.uint32();\n"
@@ -625,16 +529,6 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
         # The class is the using problem's provided/ source (LC 3263/3294
         # ship their own doubly-linked node); the placeholder becomes the
         # manifest's class name below.
-        prelude += (
-            "class @@DOUBLY_CLASS@@ {\n"
-            "    val: number;\n"
-            "    prev: @@DOUBLY_CLASS@@ | null;\n"
-            "    next: @@DOUBLY_CLASS@@ | null;\n"
-            "    constructor(val?: number, prev?: @@DOUBLY_CLASS@@ | null, next?: @@DOUBLY_CLASS@@ | null) {\n"
-            "        this.val = val ?? 0; this.prev = prev ?? null; this.next = next ?? null;\n"
-            "    }\n"
-            "}\n\n"
-        )
         codecs += (
             "    doublyList(): @@DOUBLY_CLASS@@ | null {\n"
             "        // The LC 3263 wire: a plain value array decoding into an\n"
@@ -681,17 +575,6 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "    }\n"
         )
     if "random_tree" in structs:
-        prelude += (
-            "class @@RANDOM_TREE_CLASS@@ {\n"
-            "    val: number;\n"
-            "    left: @@RANDOM_TREE_CLASS@@ | null;\n"
-            "    right: @@RANDOM_TREE_CLASS@@ | null;\n"
-            "    random: @@RANDOM_TREE_CLASS@@ | null;\n"
-            "    constructor(val?: number) {\n"
-            "        this.val = val ?? 0; this.left = null; this.right = null; this.random = null;\n"
-            "    }\n"
-            "}\n\n"
-        )
         codecs += (
             "    randomTree(): @@RANDOM_TREE_CLASS@@ | null {\n"
             "        // The LC 1485 wire: a binary-tree level order whose\n"
@@ -884,27 +767,9 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
             "    }\n"
         )
     for name, spec in sorted(struct_specs.items()):
-        # Struct classes are the using problem's provided/ source; under
-        # assembly the bank supplies them and this fallback is stripped
-        # with the rest of the prelude classes.
+        # Construct the manifest-named class supplied by this bundle's
+        # provided/ source; the judge contributes only the decoder.
         fields = spec.get("fields") or []
-        members = "\n".join(
-            f"    {field['name']}: {typescript_type(field['value_type'])};"
-            for field in fields
-        )
-        params = ", ".join(
-            f"{field['name']}: {typescript_type(field['value_type'])}"
-            for field in fields
-        )
-        assignments = " ".join(
-            f"this.{field['name']} = {field['name']};" for field in fields
-        )
-        prelude += (
-            f"class {name} {{\n"
-            f"{members}\n"
-            f"    constructor({params}) {{ {assignments} }}\n"
-            "}\n\n"
-        )
         reads = ", ".join(
             _read_expression(field["value_type"], "this") for field in fields
         )
@@ -917,28 +782,26 @@ def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
     if return_type.get("kind") == "array":
         item_kind = (return_type.get("items") or {}).get("kind")
         if item_kind == "linked_list" and "list" in structs:
-            prelude += (
+            result_helpers += (
                 "function openojListNodeArrayJSON(values: Array<ListNode | null>): Array<Array<number>> {\n"
                 "    return values.map((value) => OpenOJReader.listNodeJSON(value));\n"
                 "}\n\n"
             )
         if item_kind == "binary_tree" and "tree" in structs:
-            prelude += (
+            result_helpers += (
                 "function openojTreeNodeArrayJSON(values: Array<TreeNode | null>): Array<Array<number | null>> {\n"
                 "    return values.map((value) => OpenOJReader.treeNodeJSON(value));\n"
                 "}\n\n"
             )
         if item_kind == "circular_list" and "circular_list" in structs:
-            prelude += (
+            result_helpers += (
                 "function openojCircularArrayJSON(values: Array<ListNode | null>): Array<Array<number>> {\n"
                 "    return values.map((value) => OpenOJReader.circularListJSON(value));\n"
                 "}\n\n"
             )
-    prelude = prelude.replace("@@GRAPH_CLASS@@", graph_class).replace("@@RANDOM_CLASS@@", random_class)
-    prelude = prelude.replace("@@DOUBLY_CLASS@@", doubly_class).replace("@@RANDOM_TREE_CLASS@@", random_tree_class)
     codecs = codecs.replace("@@GRAPH_CLASS@@", graph_class).replace("@@RANDOM_CLASS@@", random_class)
     codecs = codecs.replace("@@DOUBLY_CLASS@@", doubly_class).replace("@@RANDOM_TREE_CLASS@@", random_tree_class)
-    return prelude, codecs
+    return result_helpers, codecs
 
 
 def _result_wrapper(invocation: dict[str, Any]) -> str:
@@ -1012,16 +875,14 @@ class TypeScriptExecutor(CompiledExecutor):
         # Type declarations arrive entirely as source from the problem's
         # own provided/ (docs/CODECS.md: every wire kind names the class
         # its bundle must ship) — the judge never generates a fallback
-        # class definition of its own; only the wire-codec helper
-        # functions below survive the strip.
+        # class definition of its own; it contributes only wire codecs
+        # and result-conversion helpers.
         assembly_prelude = "".join(
             content + "\n"
             for name, content in sorted((assembly or {}).get("provided", {}).items())
             if name.endswith(".ts")
         )
-        struct_prelude, struct_codecs = _struct_prelude(invocation)
-        helpers = re.findall(r"function openoj\w+\([^)]*\): [^\n]*\{.*?\n\}", struct_prelude, re.S)
-        struct_prelude = "".join(helpers)
+        struct_helpers, struct_codecs = _struct_codecs(invocation)
         result_wrapper = _result_wrapper(invocation)
         # Alias splices need the aliased list's nodes; clone checks need
         # every input node registered — read the parameters with that
@@ -1169,7 +1030,7 @@ class TypeScriptExecutor(CompiledExecutor):
         # (lib.dom's `Node`) that would otherwise collide with a bare
         # `class Node` in script scope.
         source_path.write_text(
-            "export {};\n" + assembly_prelude + struct_prelude + code + "\n" + wrapper,
+            "export {};\n" + assembly_prelude + struct_helpers + code + "\n" + wrapper,
             encoding="utf-8",
         )
         source_path.chmod(0o444)

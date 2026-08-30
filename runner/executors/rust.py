@@ -102,9 +102,8 @@ class RustExecutor(CompiledExecutor):
             from .rust_interactive import prepare_interactive
             return prepare_interactive(self, job_root, scratch, code, invocation, assembly)
         parameters, return_type, method = function_signature(invocation, self.language)
-        # The assembled program: common-library and problem-provided source
-        # is prepended as one crate's leading items (types the submission
-        # then uses directly).
+        # The bundle's provided/ source is prepended as the crate's leading
+        # items, whose types the submission then uses directly.
         assembly_source = "".join(
             content + "\n"
             for name, content in sorted((assembly or {}).get("provided", {}).items())
@@ -116,8 +115,8 @@ class RustExecutor(CompiledExecutor):
         random_class = provided_node_class(invocation, "random_list")
         # Second-wave kinds resolve their node class exactly like
         # graph/random_list — the manifest's provided/ source. An Rc-shared
-        # chain, ring, or n-ary tree cannot be built over the common
-        # library's Box-children shapes.
+        # chain, ring, or n-ary tree cannot be built over the conventional
+        # Box-children shapes used by unrelated bundle-local classes.
         doubly_class = provided_node_class(
             invocation, "doubly_list" if "doubly_list" in structs else "doubly_list_node"
         )
@@ -1199,9 +1198,9 @@ class RustExecutor(CompiledExecutor):
             )
 
         def parameter_type(index: int, spec: dict[str, Any]) -> str:
-            # The shared-identity kinds render the manifest's provided
-            # class: an Rc-shared shape the common Box-children nodes
-            # cannot carry. Everything else goes through rust_parameter_type.
+            # Shared-identity kinds render the manifest's bundle-provided
+            # class: an Rc-backed shape that the conventional Box-children
+            # classes cannot carry. Everything else uses rust_parameter_type.
             kind = spec.get("kind")
             if kind == "special_tree":
                 return f"Option<std::rc::Rc<std::cell::RefCell<{special_class}>>>"

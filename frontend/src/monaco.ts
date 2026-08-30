@@ -202,14 +202,15 @@ function enhance(
   monaco.languages.setMonarchTokensProvider(languageId, grammar);
 }
 
-const JUDGE_TYPES = ["TreeNode", "ListNode", "Node", "GridMaster", "Solution"];
+// Names commonly exposed by a bundle or submission; syntax highlighting only.
+const BUNDLE_API_TYPES = ["TreeNode", "ListNode", "Node", "GridMaster", "Solution"];
 
 enhance("python", pythonLanguage as Grammar, {
   types: [
     "int", "float", "str", "bool", "bytes", "complex", "list", "tuple", "dict",
     "set", "frozenset", "object", "type", "List", "Dict", "Set", "Tuple",
     "Optional", "Iterable", "Iterator", "Sequence", "Mapping", "Any", "Union",
-    "Callable", "Deque", "Counter", "DefaultDict", ...JUDGE_TYPES,
+    "Callable", "Deque", "Counter", "DefaultDict", ...BUNDLE_API_TYPES,
   ],
   typeDeclarations: "class",
   functionDeclarations: "def",
@@ -224,7 +225,7 @@ enhance("java", javaLanguage as Grammar, {
     "LinkedHashMap", "Set", "HashSet", "TreeSet", "LinkedHashSet", "Deque",
     "ArrayDeque", "Queue", "PriorityQueue", "Stack", "Arrays", "Collections",
     "Math", "StringBuilder", "Comparator", "Optional", "Iterator", "Number",
-    ...JUDGE_TYPES,
+    ...BUNDLE_API_TYPES,
   ],
   typeDeclarations: "class|interface|enum|record",
   functionDeclarations: "(?!)",
@@ -238,7 +239,7 @@ enhance("cpp", cppLanguage as Grammar, {
     "vector", "map", "unordered_map", "set", "unordered_set", "multiset",
     "pair", "tuple", "deque", "queue", "priority_queue", "stack", "array",
     "list", "unique_ptr", "shared_ptr", "function", "optional",
-    ...JUDGE_TYPES,
+    ...BUNDLE_API_TYPES,
   ],
   typeDeclarations: "class|struct|union|enum",
   functionDeclarations: "(?!)",
@@ -250,7 +251,7 @@ enhance("go", goLanguage as Grammar, {
     "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16",
     "uint32", "uint64", "uintptr", "float32", "float64", "complex64",
     "complex128", "byte", "rune", "string", "bool", "error", "any",
-    ...JUDGE_TYPES,
+    ...BUNDLE_API_TYPES,
   ],
   typeDeclarations: "type",
   functionDeclarations: "func",
@@ -261,7 +262,7 @@ enhance("typescript", typescriptLanguage as Grammar, {
     "number", "string", "boolean", "void", "any", "unknown", "never",
     "object", "bigint", "symbol", "Array", "Map", "Set", "Promise", "Record",
     "Readonly", "Partial", "Date", "RegExp", "Math", "JSON", "BigInt",
-    ...JUDGE_TYPES,
+    ...BUNDLE_API_TYPES,
   ],
   typeDeclarations: "class|interface|enum|type",
   functionDeclarations: "function",
@@ -271,7 +272,7 @@ enhance("typescript", typescriptLanguage as Grammar, {
 enhance("javascript", javascriptLanguage as Grammar, {
   types: [
     "Array", "Map", "Set", "Promise", "Date", "RegExp", "Math", "JSON",
-    "Number", "String", "Boolean", "Object", "BigInt", ...JUDGE_TYPES,
+    "Number", "String", "Boolean", "Object", "BigInt", ...BUNDLE_API_TYPES,
   ],
   typeDeclarations: "class",
   functionDeclarations: "function",
@@ -284,7 +285,7 @@ enhance("rust", rustLanguage as Grammar, {
     "u128", "usize", "f32", "f64", "bool", "char", "str", "String", "Vec",
     "VecDeque", "HashMap", "HashSet", "BTreeMap", "BTreeSet", "BinaryHeap",
     "Option", "Result", "Box", "Rc", "RefCell", "Ordering", "Reverse",
-    ...JUDGE_TYPES,
+    ...BUNDLE_API_TYPES,
   ],
   typeDeclarations: "struct|enum|trait|impl|type",
   functionDeclarations: "fn",
