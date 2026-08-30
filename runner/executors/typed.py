@@ -10,17 +10,20 @@ from .base import ExecutorError
 SUPPORTED_KINDS = {
     "integer", "number", "boolean", "string", "array", "linked_list", "binary_tree",
     # Pointer-wired and recursive-union structures: every kind names a fixed
-    # class the judge either emits (pre-assembly jobs) or assembles from the
-    # bank's common library, plus a wire format in docs/CODECS.md.
+    # class name and shape (docs/CODECS.md), which the bundle's own
+    # provided/<language>/ source defines — the judge holds no predefined
+    # definition of its own.
     "nary_tree", "quad_tree", "nested", "next_tree", "circular_list",
     "doubly_circular", "multi_list", "alias_list", "graph", "random_list",
     "struct",
     # Second wave: open doubly chains (LC 3263/3294), binary trees with a
     # random pointer (LC 1485), leaf-ring specials (LC 2773), and the n-ary
     # node-list / node-ref pair (LC 1506/1516). "json" is the generic
-    # JSON-any value (JS/TS only).
+    # JSON-any value (JS/TS only). "instance" is design-replay only: a
+    # parameter receiving another live instance of the design class
+    # (LC 1570's dotProduct(vec)), carried on the wire as {"$ref": handle}.
     "doubly_list", "doubly_list_node", "random_tree", "special_tree",
-    "nary_tree_nodes", "nary_tree_ref", "json",
+    "nary_tree_nodes", "nary_tree_ref", "json", "instance",
 }
 
 # Kinds whose node payload is an integer and whose manifest may omit the
@@ -643,8 +646,9 @@ def rust_type(spec: dict[str, Any]) -> str:
             # as Rc<RefCell<>>: Box's single owner cannot express them.
             # QuadNode trees and NestedInteger stay fully owned. The paths
             # are fully qualified: this renderer feeds the wrapper, which
-            # must not depend on a submission's `use` lines (common.rs
-            # carries none either; starters may import the short names).
+            # must not depend on a submission's `use` lines (the bundle's
+            # own provided/rust/ source carries none either; starters may
+            # import the short names).
             "next_tree": "Option<std::rc::Rc<std::cell::RefCell<NodeWithNext>>>",
             "circular_list": "Option<std::rc::Rc<std::cell::RefCell<SharedListNode>>>",
             "doubly_circular": "Option<std::rc::Rc<std::cell::RefCell<NodeWithNext>>>",

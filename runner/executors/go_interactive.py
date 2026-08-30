@@ -360,11 +360,10 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         )
 
     provided_files = []
-    for part in ("common", "provided"):
-        for name, content in sorted((assembly or {}).get(part, {}).items()):
-            if name.endswith(".go"):
-                # separate-file assembly: each file keeps its own package clause
-                provided_files.append((name, content))
+    for name, content in sorted((assembly or {}).get("provided", {}).items()):
+        if name.endswith(".go"):
+            # separate-file assembly: each file keeps its own package clause
+            provided_files.append((name, content))
 
     main_source = (
         MAIN_TEMPLATE

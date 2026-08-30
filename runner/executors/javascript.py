@@ -90,10 +90,10 @@ def _collect_structs(spec: Any, found: dict[str, dict[str, Any]]) -> None:
 def _struct_prelude(invocation: dict[str, Any]) -> tuple[str, str]:
     """Return (prelude classes, reader codecs) for struct kinds.
 
-    Mirrors the TypeScript surface one-for-one minus annotations: under
-    assembly the bank's common/ supplies the classes and only the wire
-    helpers survive the strip, so this also covers pre-assembly jobs.
-    """
+    Mirrors the TypeScript surface one-for-one minus annotations. The
+    caller always strips the generated class definitions and keeps only
+    the wire-codec helper functions — the problem's own provided/ source
+    supplies the real classes (docs/CODECS.md)."""
     structs = uses_struct_kinds(invocation)
     graph_class = provided_node_class(invocation, "graph")
     random_class = provided_node_class(invocation, "random_list")
@@ -951,20 +951,19 @@ class JavaScriptExecutor(CompiledExecutor):
             from .js_interactive import prepare_interactive
             return prepare_interactive(self, job_root, scratch, code, invocation, assembly, is_typescript=False)
         parameters, _, method = function_signature(invocation, self.language)
-        # Assembled common/provided source replaces the emitted struct
-        # classes when present (pre-assembly jobs keep the emission).
+        # Class definitions arrive entirely as source from the problem's
+        # own provided/ (docs/CODECS.md: every wire kind names the class
+        # its bundle must ship) — the judge never generates a fallback
+        # class definition of its own; only the wire-codec helper
+        # functions below survive the strip.
         assembly_prelude = "".join(
             content + "\n"
-            for part in ("common", "provided")
-            for name, content in sorted((assembly or {}).get(part, {}).items())
+            for name, content in sorted((assembly or {}).get("provided", {}).items())
             if name.endswith(".js")
         )
         struct_prelude, struct_codecs = _struct_prelude(invocation)
-        if assembly_prelude:
-            # common/ provides the classes; keep the array-JSON helpers,
-            # which are wire codecs the library does not ship.
-            helpers = re.findall(r"function openoj\w+\([^)]*\) \{.*?\n\}", struct_prelude, re.S)
-            struct_prelude = "".join(helpers)
+        helpers = re.findall(r"function openoj\w+\([^)]*\) \{.*?\n\}", struct_prelude, re.S)
+        struct_prelude = "".join(helpers)
         result_wrapper = _result_wrapper(invocation)
         # Alias splices need the aliased list's nodes; clone checks need
         # every input node registered — read the parameters with that

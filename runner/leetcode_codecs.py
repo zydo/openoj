@@ -1,151 +1,42 @@
-"""LeetCode-compatible Python structures and JSON codecs.
+"""LeetCode-style wire codecs — decode/encode logic only, no type
+definitions.
 
-The wire representations follow the conventions in the user-provided sibling
-judge: linked lists are value arrays, binary trees are trimmed level-order
-arrays, and N-ary trees use ``null`` delimiters between child groups.
+Every problem owns its own data structures (docs/CODECS.md documents the
+per-kind required class name and shape); the judge knows wire formats and
+naming conventions, never definitions. A class-constructing helper here
+resolves the class from the SUBMISSION'S OWN assembled module namespace
+(``getattr(module, name)``) rather than building a judge-private stand-in
+— that module is the bundle's own ``provided/python/`` sources exec'd
+ahead of the submission (python_harness._load_solution). A missing or
+malformed class fails loudly, naming the class the bundle must provide.
+
+Every non-constructing helper (the ``_serialize_*``/``serialize_*``
+functions, and node-collecting walkers like ``graph_nodes``) stays
+class-free: it reads only ``.val``/``.next``/... attributes, so it works
+on ANY object with the right shape regardless of which class built it.
 """
 
-import sys
 from collections import deque
 from typing import Any
 
 
-class ListNode:
-    def __init__(self, val=0, next=None):
-        self.val = val
-        self.next = next
+def _cls(module: Any, name: str) -> Any:
+    value = getattr(module, name, None)
+    if value is None:
+        raise ValueError(
+            f"This problem's wire needs a {name!r} class; provide it in "
+            f"provided/python/ (see docs/CODECS.md for the required shape)"
+        )
+    return value
 
 
-class TreeNode:
-    def __init__(self, val=0, left=None, right=None):
-        self.val = val
-        self.left = left
-        self.right = right
+# ---- list_node / circular_list / alias_list -------------------------------
 
 
-class Node:
-    def __init__(self, val=None, children=None):
-        self.val = val
-        self.children = children if children is not None else []
-
-
-class QuadNode:
-    """The LC 427/558 quad-tree node."""
-
-    def __init__(self, val=False, isLeaf=False, topLeft=None, topRight=None,
-                 bottomLeft=None, bottomRight=None):
-        self.val = val
-        self.isLeaf = isLeaf
-        self.topLeft = topLeft
-        self.topRight = topRight
-        self.bottomLeft = bottomLeft
-        self.bottomRight = bottomRight
-
-
-class NestedInteger:
-    """The LC 339/341/364/385 nested-list API: an integer or a list of
-    NestedInteger."""
-
-    def __init__(self, value=None):
-        self._integer = None
-        self._list = []
-        if isinstance(value, int) and not isinstance(value, bool):
-            self.setInteger(value)
-
-    def isInteger(self):
-        return self._integer is not None
-
-    def getInteger(self):
-        return self._integer
-
-    def setInteger(self, value):
-        self._integer = value
-        self._list = []
-
-    def add(self, item):
-        self._integer = None
-        self._list.append(item)
-
-    def getList(self):
-        return self._list
-
-
-class NodeWithNext:
-    """A binary-tree node carrying the LC 116/117 ``next`` wire (with a
-    ``parent`` back-pointer for the LC 510 wire)."""
-
-    def __init__(self, val=0, left=None, right=None, next=None, parent=None):
-        self.val = val
-        self.left = left
-        self.right = right
-        self.next = next
-        self.parent = parent
-
-
-class MultiListNode:
-    """The LC 430 node: a doubly linked list whose nodes may carry a child
-    list."""
-
-    def __init__(self, val=0, prev=None, next=None, child=None):
-        self.val = val
-        self.prev = prev
-        self.next = next
-        self.child = child
-
-
-class GraphNode:
-    """The LC 133 node shape (each graph problem re-declares ``Node`` in its
-    provided/ sources; the harness decodes into this duck-compatible
-    class)."""
-
-    def __init__(self, val=0, neighbors=None):
-        self.val = val
-        self.neighbors = neighbors if neighbors is not None else []
-
-
-class RandomListNode:
-    """The LC 138 node shape (per-problem provided/ re-declares ``Node``;
-    the harness decodes into this duck-compatible class)."""
-
-    def __init__(self, val=0, next=None, random=None):
-        self.val = val
-        self.next = next
-        self.random = random
-
-
-class DoublyListNode:
-    """The LC 3263/3294 node shape (per-problem provided/ re-declares the
-    class; the harness decodes into this duck-compatible shape)."""
-
-    def __init__(self, val=0, prev=None, next=None):
-        self.val = val
-        self.prev = prev
-        self.next = next
-
-
-class RandomTreeNode:
-    """The LC 1485 node shape: a binary-tree node with a random pointer
-    (per-problem provided/ re-declares ``NodeCopy``; the harness decodes
-    into this duck-compatible class)."""
-
-    def __init__(self, val=0, left=None, right=None, random=None):
-        self.val = val
-        self.left = left
-        self.right = right
-        self.random = random
-
-
-class HtmlParser:
-    def __init__(self, url_to_urls):
-        self._map = url_to_urls
-
-    def getUrls(self, url):
-        return list(self._map.get(url, []))
-
-
-def _parse_list_node(data):
+def _parse_list_node(module: Any, data: Any) -> Any:
     if not data:
         return None
+    ListNode = _cls(module, "ListNode")
     head = ListNode(data[0])
     current = head
     for value in data[1:]:
@@ -154,7 +45,7 @@ def _parse_list_node(data):
     return head
 
 
-def _serialize_list_node(head):
+def _serialize_list_node(head: Any) -> list:
     values = []
     current = head
     while current:
@@ -163,9 +54,83 @@ def _serialize_list_node(head):
     return values
 
 
-def _parse_tree_node(data):
+def _parse_circular_list(module: Any, data: Any) -> Any:
+    head = _parse_list_node(module, data)
+    if head is not None:
+        tail = head
+        while tail.next is not None:
+            tail = tail.next
+        tail.next = head
+    return head
+
+
+def _serialize_circular_list(head: Any) -> list:
+    if head is None:
+        return []
+    values = [head.val]
+    current = head.next
+    for _ in range(1 << 20):
+        if current is None:
+            raise ValueError("Circular list is not closed")
+        if current is head:
+            return values
+        values.append(current.val)
+        current = current.next
+    raise ValueError("Circular list exceeds the walk bound")
+
+
+def parse_alias_list(module: Any, value: Any, head: Any) -> Any:
+    """Decode a prefix chain whose tail continues at the aliased list's node
+    ``value['splice_at']`` — genuine shared references (the LC 160 wire: the
+    prefix is list B's own part, the splice index is where it meets A)."""
+    if not isinstance(value, dict) or set(value) != {"values", "splice_at"}:
+        raise ValueError("alias_list input must carry values and splice_at")
+    values, splice_at = value["values"], value["splice_at"]
+    if not isinstance(values, list):
+        raise ValueError("alias_list values must be an array")
+    if isinstance(splice_at, bool) or not isinstance(splice_at, int) or splice_at < 0:
+        raise ValueError("alias_list splice_at must be a non-negative integer")
+    node = _parse_list_node(module, values) if values else None
+    if node is None:
+        return _alias_head(head, splice_at)
+    target = _alias_head(head, splice_at)
+    tail = node
+    while tail.next is not None:
+        tail = tail.next
+    tail.next = target
+    return node
+
+
+def _alias_head(head: Any, splice_at: int) -> Any:
+    target = head
+    for _ in range(splice_at):
+        if target is None:
+            raise ValueError("alias_list splice_at is past the aliased list")
+        target = target.next
+    return target
+
+
+def serialize_alias_list(node: Any, head: Any) -> list:
+    """The returned node must be a node of the aliased chain (identity); the
+    wire form is the values from it to the end. A null return is the LC 160
+    no-intersection verdict and serializes as an empty list."""
+    if node is None:
+        return []
+    current = head
+    while current is not None:
+        if current is node:
+            return _serialize_list_node(node)
+        current = current.next
+    raise ValueError("Returned node is not part of the aliased list")
+
+
+# ---- binary_tree ------------------------------------------------------
+
+
+def _parse_tree_node(module: Any, data: Any) -> Any:
     if not data:
         return None
+    TreeNode = _cls(module, "TreeNode")
     root = TreeNode(data[0])
     queue = deque([root])
     index = 1
@@ -182,7 +147,7 @@ def _parse_tree_node(data):
     return root
 
 
-def _serialize_tree_node(root):
+def _serialize_tree_node(root: Any) -> list:
     if root is None:
         return []
     output = []
@@ -199,9 +164,38 @@ def _serialize_tree_node(root):
     return output
 
 
-def _parse_nary_tree(data):
+def _parse_special_tree(module: Any, data: Any) -> Any:
+    """The LC 2773 wire: a binary-tree display whose leaves b1..bk (in
+    increasing value order) are ring-wired left to the previous and right
+    to the next leaf — the special property the statement grants, which
+    the display array itself cannot carry."""
+    root = _parse_tree_node(module, data)
+    if root is None:
+        return None
+    leaves = []
+    queue = deque([root])
+    while queue:
+        node = queue.popleft()
+        if node.left is None and node.right is None:
+            leaves.append(node)
+            continue
+        for child in (node.left, node.right):
+            if child is not None:
+                queue.append(child)
+    leaves.sort(key=lambda node: node.val)
+    for index, leaf in enumerate(leaves):
+        leaf.left = leaves[index - 1]
+        leaf.right = leaves[(index + 1) % len(leaves)]
+    return root
+
+
+# ---- nary_tree ----------------------------------------------------------
+
+
+def _parse_nary_tree(module: Any, data: Any) -> Any:
     if not data:
         return None
+    Node = _cls(module, "Node")
     root = Node(data[0])
     queue = deque([root])
     index = 2
@@ -216,7 +210,7 @@ def _parse_nary_tree(data):
     return root
 
 
-def _serialize_nary_tree(root):
+def _serialize_nary_tree(root: Any) -> list:
     if root is None:
         return []
     output = [root.val, None]
@@ -232,12 +226,47 @@ def _serialize_nary_tree(root):
     return output
 
 
-def _parse_quad_tree(data):
+def _parse_nary_tree_nodes(module: Any, value: Any) -> list:
+    """The LC 1506 wire: an n-ary display array decoded and handed over as
+    the list of its nodes (level order — any order is faithful, the
+    statement grants the solution an arbitrary permutation)."""
+    root = _parse_nary_tree(module, value)
+    if root is None:
+        return []
+    nodes = []
+    queue = deque([root])
+    while queue:
+        node = queue.popleft()
+        nodes.append(node)
+        queue.extend(node.children)
+    return nodes
+
+
+def parse_nary_tree_ref(value: Any, root: Any) -> Any:
+    """The LC 1516 wire: an integer naming a node of the already-decoded
+    aliased tree; the argument is that exact node object (shared
+    identity), found by its unique value."""
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node is None:
+            continue
+        if node.val == value:
+            return node
+        stack.extend(reversed(node.children))
+    raise ValueError("nary_tree_ref target value is not in the aliased tree")
+
+
+# ---- quad_tree ------------------------------------------------------------
+
+
+def _parse_quad_tree(module: Any, data: Any) -> Any:
     """LC display wire: a flat preorder of [isLeaf, val] pairs."""
     if data is None:
         return None
     if not isinstance(data, list):
         raise ValueError("quad_tree input must be a display array")
+    QuadNode = _cls(module, "QuadNode")
     cursor = 0
 
     def parse_node():
@@ -262,7 +291,7 @@ def _parse_quad_tree(data):
     return root
 
 
-def _serialize_quad_tree(node):
+def _serialize_quad_tree(node: Any) -> Any:
     # A non-leaf's val is the solution's to choose, so both sides normalize
     # it to 0 — the wire never carries an arbitrary internal val.
     if node is None:
@@ -278,26 +307,34 @@ def _serialize_quad_tree(node):
     ]
 
 
-def _parse_nested(data):
+# ---- nested -----------------------------------------------------------
+
+
+def _parse_nested(module: Any, data: Any) -> Any:
+    NestedInteger = _cls(module, "NestedInteger")
     if isinstance(data, int) and not isinstance(data, bool):
         return NestedInteger(data)
     node = NestedInteger()
     for item in data:
-        node.add(_parse_nested(item))
+        node.add(_parse_nested(module, item))
     return node
 
 
-def _serialize_nested(node):
+def _serialize_nested(node: Any) -> Any:
     if node.isInteger():
         return node.getInteger()
     return [_serialize_nested(item) for item in node.getList()]
 
 
-def _parse_next_tree(data):
+# ---- next_tree / doubly_circular -------------------------------------
+
+
+def _parse_next_tree(module: Any, data: Any) -> Any:
     # Binary-tree level order into NodeWithNext; parents are wired as a
     # courtesy to the LC 510 wire (116/117 solutions ignore them).
     if not data:
         return None
+    NodeWithNext = _cls(module, "NodeWithNext")
     root = NodeWithNext(data[0])
     queue = deque([root])
     index = 1
@@ -314,7 +351,7 @@ def _parse_next_tree(data):
     return root
 
 
-def _serialize_next_tree(root):
+def _serialize_next_tree(root: Any) -> list:
     # LC display wire: values with a null marker between adjacent levels,
     # trailing markers trimmed. Each level is read through the
     # solution-populated next chain; the next level starts at the first
@@ -340,32 +377,7 @@ def _serialize_next_tree(root):
     return output
 
 
-def _parse_circular_list(data):
-    head = _parse_list_node(data)
-    if head is not None:
-        tail = head
-        while tail.next is not None:
-            tail = tail.next
-        tail.next = head
-    return head
-
-
-def _serialize_circular_list(head):
-    if head is None:
-        return []
-    values = [head.val]
-    current = head.next
-    for _ in range(1 << 20):
-        if current is None:
-            raise ValueError("Circular list is not closed")
-        if current is head:
-            return values
-        values.append(current.val)
-        current = current.next
-    raise ValueError("Circular list exceeds the walk bound")
-
-
-def _serialize_doubly_circular(head):
+def _serialize_doubly_circular(head: Any) -> list:
     # LC 426 wire (left = prev, right = next): read the ring through right
     # and require every back-link along the way.
     if head is None:
@@ -388,7 +400,10 @@ def _serialize_doubly_circular(head):
     return values
 
 
-def _parse_multi_list(value):
+# ---- multi_list ---------------------------------------------------------
+
+
+def _parse_multi_list(module: Any, value: Any) -> Any:
     # A recursive chain object {"values": [...], "children": [null | chain
     # per slot]}: each child chain hangs off exactly one slot, so the LC 430
     # multilevel structure is unambiguous.
@@ -397,12 +412,13 @@ def _parse_multi_list(value):
     values, children = value["values"], value["children"]
     if len(children) != len(values):
         raise ValueError("multi_list children must match values slot for slot")
+    MultiListNode = _cls(module, "MultiListNode")
     nodes = []
     for index, val in enumerate(values):
         node = MultiListNode(val)
         child = children[index]
         if child is not None:
-            node.child = _parse_multi_list(child)
+            node.child = _parse_multi_list(module, child)
         nodes.append(node)
     for left, right in zip(nodes, nodes[1:]):
         left.next = right
@@ -410,7 +426,7 @@ def _parse_multi_list(value):
     return nodes[0] if nodes else None
 
 
-def _serialize_multi_list(head):
+def _serialize_multi_list(head: Any) -> list:
     values = []
     node = head
     previous = None
@@ -425,11 +441,15 @@ def _serialize_multi_list(head):
     raise ValueError("Flattened list exceeds the walk bound")
 
 
-def _parse_doubly_list(values):
+# ---- doubly_list / doubly_list_node (bundle-named class) -----------------
+
+
+def _parse_doubly_list(module: Any, values: Any, class_name: str) -> Any:
     """The LC 3263 wire: a plain value array decoding into an open chain
     with both directions wired."""
     if not isinstance(values, list):
         raise ValueError("doubly_list input must be a value array")
+    DoublyListNode = _cls(module, class_name)
     nodes = [DoublyListNode(value) for value in values]
     for left, right in zip(nodes, nodes[1:]):
         left.next = right
@@ -437,7 +457,7 @@ def _parse_doubly_list(values):
     return nodes[0] if nodes else None
 
 
-def _serialize_doubly_list(head):
+def _serialize_doubly_list(head: Any) -> list:
     # The forward walk must agree with every back-link, mirroring the
     # doubly_circular invariant on an open chain.
     values = []
@@ -454,12 +474,12 @@ def _serialize_doubly_list(head):
     raise ValueError("Doubly linked list exceeds the walk bound")
 
 
-def _parse_doubly_list_node(value):
+def _parse_doubly_list_node(module: Any, value: Any, class_name: str) -> Any:
     """The LC 3294 wire: ``{"values": [...], "node": v}`` decodes to the
     chain node whose value is v (values are unique per the constraints)."""
     if not isinstance(value, dict) or set(value) != {"values", "node"}:
         raise ValueError("doubly_list_node input must carry values and node")
-    head = _parse_doubly_list(value["values"])
+    head = _parse_doubly_list(module, value["values"], class_name)
     target = value["node"]
     node = head
     while node is not None:
@@ -469,63 +489,10 @@ def _parse_doubly_list_node(value):
     raise ValueError("doubly_list_node target value is not in the chain")
 
 
-def _parse_nary_tree_nodes(value):
-    """The LC 1506 wire: an n-ary display array decoded and handed over as
-    the list of its nodes (level order — any order is faithful, the
-    statement grants the solution an arbitrary permutation)."""
-    root = _parse_nary_tree(value)
-    if root is None:
-        return []
-    nodes = []
-    queue = deque([root])
-    while queue:
-        node = queue.popleft()
-        nodes.append(node)
-        queue.extend(node.children)
-    return nodes
+# ---- random_tree (bundle-named class) ------------------------------------
 
 
-def parse_nary_tree_ref(value, root):
-    """The LC 1516 wire: an integer naming a node of the already-decoded
-    aliased tree; the argument is that exact node object (shared
-    identity), found by its unique value."""
-    stack = [root]
-    while stack:
-        node = stack.pop()
-        if node is None:
-            continue
-        if node.val == value:
-            return node
-        stack.extend(reversed(node.children))
-    raise ValueError("nary_tree_ref target value is not in the aliased tree")
-
-
-def _parse_special_tree(data):
-    """The LC 2773 wire: a binary-tree display whose leaves b1..bk (in
-    increasing value order) are ring-wired left to the previous and right
-    to the next leaf — the special property the statement grants, which
-    the display array itself cannot carry."""
-    root = _parse_tree_node(data)
-    if root is None:
-        return None
-    leaves = []
-    queue = deque([root])
-    while queue:
-        node = queue.popleft()
-        if node.left is None and node.right is None:
-            leaves.append(node)
-            continue
-        for child in (node.left, node.right):
-            if child is not None:
-                queue.append(child)
-    leaves.sort(key=lambda node: node.val)
-    for index, leaf in enumerate(leaves):
-        leaf.left = leaves[index - 1]
-        leaf.right = leaves[(index + 1) % len(leaves)]
-    return root
-
-
-def _parse_random_tree(rows):
+def _parse_random_tree(module: Any, rows: Any, class_name: str) -> Any:
     """The LC 1485 wire: a binary-tree level order whose present slots are
     ``[val, randomIndex]`` rows — random_list's index addressing on a tree
     topology. The index counts present nodes in level order, from the
@@ -536,6 +503,7 @@ def _parse_random_tree(rows):
         return None
     if not isinstance(rows[0], list):
         raise ValueError("random_tree root must be a [val, random] row")
+    RandomTreeNode = _cls(module, class_name)
     root = RandomTreeNode(rows[0][0])
     order = [root]
     pending = [(root, rows[0][1])]
@@ -566,7 +534,7 @@ def _parse_random_tree(rows):
     return root
 
 
-def serialize_random_tree(root, input_nodes=()):
+def serialize_random_tree(root: Any, input_nodes: Any = ()) -> list:
     # Level order rows like the input side; the clone check forbids
     # returning (part of) the input tree, and every random pointer must
     # land inside the returned tree.
@@ -612,7 +580,7 @@ def serialize_random_tree(root, input_nodes=()):
     return encoded
 
 
-def binary_tree_nodes(root):
+def binary_tree_nodes(root: Any) -> list:
     """Every node reachable through left/right from a decoded tree (the
     input side of the random_tree clone check; random targets live inside
     the tree, so left/right reaches them all)."""
@@ -629,52 +597,11 @@ def binary_tree_nodes(root):
     return nodes
 
 
-def parse_alias_list(value, head):
-    """Decode a prefix chain whose tail continues at the aliased list's node
-    ``value['splice_at']`` — genuine shared references (the LC 160 wire: the
-    prefix is list B's own part, the splice index is where it meets A)."""
-    if not isinstance(value, dict) or set(value) != {"values", "splice_at"}:
-        raise ValueError("alias_list input must carry values and splice_at")
-    values, splice_at = value["values"], value["splice_at"]
-    if not isinstance(values, list):
-        raise ValueError("alias_list values must be an array")
-    if isinstance(splice_at, bool) or not isinstance(splice_at, int) or splice_at < 0:
-        raise ValueError("alias_list splice_at must be a non-negative integer")
-    node = _parse_list_node(values) if values else None
-    if node is None:
-        return _alias_head(head, splice_at)
-    target = _alias_head(head, splice_at)
-    tail = node
-    while tail.next is not None:
-        tail = tail.next
-    tail.next = target
-    return node
+# ---- graph (bundle-named class) ------------------------------------------
 
 
-def _alias_head(head, splice_at):
-    target = head
-    for _ in range(splice_at):
-        if target is None:
-            raise ValueError("alias_list splice_at is past the aliased list")
-        target = target.next
-    return target
-
-
-def serialize_alias_list(node, head):
-    """The returned node must be a node of the aliased chain (identity); the
-    wire form is the values from it to the end. A null return is the LC 160
-    no-intersection verdict and serializes as an empty list."""
-    if node is None:
-        return []
-    current = head
-    while current is not None:
-        if current is node:
-            return _serialize_list_node(node)
-        current = current.next
-    raise ValueError("Returned node is not part of the aliased list")
-
-
-def _parse_graph(rows):
+def _parse_graph(module: Any, rows: Any, class_name: str) -> Any:
+    GraphNode = _cls(module, class_name)
     nodes = [GraphNode(index + 1) for index in range(len(rows))]
     for node, neighbors in zip(nodes, rows):
         for value in neighbors:
@@ -684,7 +611,7 @@ def _parse_graph(rows):
     return nodes[0] if nodes else None
 
 
-def serialize_graph(result, input_nodes=()):
+def serialize_graph(result: Any, input_nodes: Any = ()) -> list:
     # BFS from the returned node, rows in val order, neighbor order kept;
     # a returned node that IS an input node means the graph was not cloned.
     if result is None:
@@ -706,36 +633,7 @@ def serialize_graph(result, input_nodes=()):
     return [[neighbor.val for neighbor in node.neighbors] for node in visited]
 
 
-def _parse_random_list(pairs):
-    nodes = [RandomListNode(pair[0]) for pair in pairs]
-    for node, pair in zip(nodes, pairs):
-        index = pair[1]
-        if index is not None:
-            if not 0 <= index < len(nodes):
-                raise ValueError("Random pointer target is out of range")
-            node.random = nodes[index]
-    for left, right in zip(nodes, nodes[1:]):
-        left.next = right
-    return nodes[0] if nodes else None
-
-
-def serialize_random_list(result, input_nodes=()):
-    nodes = []
-    marks = set()
-    node = result
-    while node is not None:
-        if id(node) in marks:
-            raise ValueError("Random list has a cycle in next")
-        marks.add(id(node))
-        nodes.append(node)
-        node = node.next
-    if any(id(node) in marks for node in input_nodes):
-        raise ValueError("Returned list shares nodes with the input list")
-    index_of = {id(node): index for index, node in enumerate(nodes)}
-    return [[node.val, index_of.get(id(node.random))] for node in nodes]
-
-
-def graph_nodes(head):
+def graph_nodes(head: Any) -> list:
     """Every node reachable from a decoded graph head (the input side of the
     clone check)."""
     visited = []
@@ -751,7 +649,40 @@ def graph_nodes(head):
     return visited
 
 
-def chain_nodes(head):
+# ---- random_list (bundle-named class) -------------------------------------
+
+
+def _parse_random_list(module: Any, pairs: Any, class_name: str) -> Any:
+    RandomListNode = _cls(module, class_name)
+    nodes = [RandomListNode(pair[0]) for pair in pairs]
+    for node, pair in zip(nodes, pairs):
+        index = pair[1]
+        if index is not None:
+            if not 0 <= index < len(nodes):
+                raise ValueError("Random pointer target is out of range")
+            node.random = nodes[index]
+    for left, right in zip(nodes, nodes[1:]):
+        left.next = right
+    return nodes[0] if nodes else None
+
+
+def serialize_random_list(result: Any, input_nodes: Any = ()) -> list:
+    nodes = []
+    marks = set()
+    node = result
+    while node is not None:
+        if id(node) in marks:
+            raise ValueError("Random list has a cycle in next")
+        marks.add(id(node))
+        nodes.append(node)
+        node = node.next
+    if any(id(node) in marks for node in input_nodes):
+        raise ValueError("Returned list shares nodes with the input list")
+    index_of = {id(node): index for index, node in enumerate(nodes)}
+    return [[node.val, index_of.get(id(node.random))] for node in nodes]
+
+
+def chain_nodes(head: Any) -> list:
     """The nodes of a decoded list chain."""
     nodes = []
     while head is not None:
@@ -760,53 +691,58 @@ def chain_nodes(head):
     return nodes
 
 
-def decode(value: Any, codec: str) -> Any:
+# ---- dispatch ---------------------------------------------------------
+
+# Kinds whose wire names a class explicitly (value_type["class"]), falling
+# back to the "Node" naming convention when the bundle omits it — mirrors
+# runner/executors/typed.py's _CLASS_KINDS / provided_node_class.
+CLASS_BEARING_CODECS = {"graph", "random_list", "doubly_list", "doubly_list_node", "random_tree"}
+
+
+def decode(value: Any, codec: str, module: Any, class_name: str | None = None) -> Any:
     if codec == "json":
         return value
     if codec == "list_node":
-        return _parse_list_node(value)
+        return _parse_list_node(module, value)
     if codec == "tree_node":
-        return _parse_tree_node(value)
+        return _parse_tree_node(module, value)
     if codec == "list_node_array":
-        return [_parse_list_node(item) for item in value]
+        return [_parse_list_node(module, item) for item in value]
     if codec == "tree_node_array":
-        return [_parse_tree_node(item) for item in value]
+        return [_parse_tree_node(module, item) for item in value]
     if codec == "nary_tree":
-        return _parse_nary_tree(value)
+        return _parse_nary_tree(module, value)
     if codec == "quad_tree":
-        return _parse_quad_tree(value)
+        return _parse_quad_tree(module, value)
     if codec == "nested":
-        return _parse_nested(value)
+        return _parse_nested(module, value)
     if codec == "next_tree":
-        return _parse_next_tree(value)
+        return _parse_next_tree(module, value)
     if codec == "circular_list":
-        return _parse_circular_list(value)
+        return _parse_circular_list(module, value)
     if codec == "multi_list":
-        return _parse_multi_list(value)
+        return _parse_multi_list(module, value)
     if codec == "graph":
-        return _parse_graph(value)
+        return _parse_graph(module, value, class_name or "Node")
     if codec == "random_list":
-        return _parse_random_list(value)
+        return _parse_random_list(module, value, class_name or "Node")
     if codec == "doubly_list":
-        return _parse_doubly_list(value)
+        return _parse_doubly_list(module, value, class_name or "Node")
     if codec == "doubly_list_node":
-        return _parse_doubly_list_node(value)
+        return _parse_doubly_list_node(module, value, class_name or "Node")
     if codec == "nary_tree_nodes":
-        return _parse_nary_tree_nodes(value)
+        return _parse_nary_tree_nodes(module, value)
     if codec == "special_tree":
-        return _parse_special_tree(value)
+        return _parse_special_tree(module, value)
     if codec == "random_tree":
-        return _parse_random_tree(value)
-    if codec == "html_parser":
-        urls = value["urls"]
-        mapping = {url: [] for url in urls}
-        for left, right in value["edges"]:
-            mapping[urls[left]].append(urls[right])
-        return HtmlParser(mapping)
+        return _parse_random_tree(module, value, class_name or "Node")
     raise ValueError(f"Unsupported input codec: {codec}")
 
 
 def encode(value: Any, codec: str) -> Any:
+    """Serialization never constructs a class — every codec here reads
+    only the shared attribute shape, so it runs on any object regardless
+    of which bundle's class built it."""
     if codec == "json":
         return value
     if codec == "list_node":
@@ -836,19 +772,3 @@ def encode(value: Any, codec: str) -> Any:
     if codec == "doubly_list":
         return _serialize_doubly_list(value)
     raise ValueError(f"Unsupported output codec: {codec}")
-
-
-# The judge protocol line prefers the dedicated protocol fd so submission
-# code cannot forge verdicts on stdout; it falls back to stdout when the fd
-# is absent (local authoring tooling runs harnesses without it).
-PROTOCOL_FD = 63
-
-
-def emit_protocol(line: str) -> None:
-    import os
-
-    payload = (line + "\n").encode("utf-8")
-    try:
-        os.write(PROTOCOL_FD, payload)
-    except OSError:
-        sys.stdout.write(line + "\n")

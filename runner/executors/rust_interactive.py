@@ -169,10 +169,16 @@ fn openoj_json_f64(value: f64) -> String {
 }
 fn openoj_json_str(value: &str) -> String { openoj_json(&OjValue::Str(value.to_string())) }
 fn openoj_json_bool(value: bool) -> String { value.to_string() }
+"""
 
-// Builds the common NestedInteger from a JSON-shaped OjValue: an integer
-// hold, or a list hold whose children recurse. Module-level item, so it
-// resolves NestedInteger from the assembled common regardless of order.
+# Only emitted when the invocation actually uses a "nested" parameter or
+# return value — NestedInteger is the bundle's own provided/rust/ type
+# (docs/CODECS.md), not a judge-owned definition, so this helper must not
+# reference it unconditionally.
+NESTED_HELPERS = """\
+// Builds NestedInteger from a JSON-shaped OjValue: an integer hold, or a
+// list hold whose children recurse. Module-level item, so it resolves
+// NestedInteger from the assembled provided/ source regardless of order.
 fn openoj_nested_build(value: &OjValue) -> Result<NestedInteger, String> {
     match value {
         OjValue::Int(v) => i32::try_from(*v).map(NestedInteger::with_integer).map_err(|_| "Integer out of range".to_string()),
@@ -352,11 +358,13 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
     )
     convert_lines = []
     auxiliary_args = []
+    needs_nested = False
     for index, key in enumerate(auxiliary_keys):
         spec = specs.get(key)
         if spec is None:
             raise ExecutorError(f"Auxiliary key {key!r} has no invocation parameter type")
         spec = type_spec(spec, key)
+        needs_nested = needs_nested or spec["kind"] == "nested"
         convert_lines.append(
             f"    let openoj_aux_{index}: {_rust_type(spec)} = {_convert(spec, f'&openoj_value_{len(construct_keys) + index}')};"
         )
@@ -428,8 +436,7 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
 
     provided_source = "".join(
         content + "\n"
-        for part in ("common", "provided")
-        for _, content in sorted((assembly or {}).get(part, {}).items())
+        for _, content in sorted((assembly or {}).get("provided", {}).items())
         if _.endswith(".rs")
     )
     # The bank's Rust submissions are `impl Solution` blocks without a
@@ -444,7 +451,11 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         .replace("@ORACLE_ARGS@", oracle_args)
         .replace("@CALL_BLOCK@", call_block)
     )
-    source = WRAPPER_HEAD + "\n" + provided_source + code + "\n" + main_source
+    source = (
+        WRAPPER_HEAD + "\n"
+        + (NESTED_HELPERS + "\n" if needs_nested else "")
+        + provided_source + code + "\n" + main_source
+    )
     source_path = job_root / "main.rs"
     executable = job_root / "solution"
     source_path.write_text(source, encoding="utf-8")

@@ -306,9 +306,9 @@ def _validate_language(problem_data: dict[str, Any], language: str) -> None:
         raise HTTPException(status_code=400, detail="Language runner is not enabled yet")
 
 
-# Where each language's assembled sources live under the problem set:
-# the shared common/ library and a problem's provided/ directory both
-# mirror these names.
+# Where each language's assembled sources live under a problem's own
+# provided/ directory (the judge's only well-known assembly path — see
+# docs/TRUST-BOUNDARIES.md).
 COMMON_DIRECTORIES = {
     "python3": "python",
     "java": "java",
@@ -323,31 +323,18 @@ COMMON_DIRECTORIES = {
 def _assembly_sources(slug: str, language: str) -> dict[str, dict[str, str]]:
     """The judge-assembled library sources for one submission.
 
-    Reads the problem set's common/<language>/ files plus the problem's
-    own provided/<language>/ files, so the runner compiles or runs one
-    complete program: common + provided + submission (openoj-problems'
-    common/README.md is the contract).
+    Reads the problem's own provided/<language>/ files, so the runner
+    compiles or runs one complete program: provided + submission. Every
+    well-known data structure a bundle's wire needs (ListNode, TreeNode,
+    ...) is the bundle's OWN provided/ source — the judge holds no
+    predefined definitions of its own (docs/CODECS.md documents the
+    required name and shape per wire kind).
     """
     directory = COMMON_DIRECTORIES.get(language)
     if directory is None:
         return {}
-    # per-bundle half of the versioned common-harness contract: refuse to
-    # assemble a bundle that targets a newer common/ than the set ships
-    problems_module.assert_common_contract(slug)
-    assembly: dict[str, dict[str, str]] = {"common": {}, "provided": {}}
+    assembly: dict[str, dict[str, str]] = {"provided": {}}
     try:
-        # common/ lives at the problem-set repo root; PROBLEMS_DIR may be
-        # that root itself (local dir) or its problems/ subtree (fetched
-        # checkout), so probe both rather than guess.
-        candidates = (
-            problems_module.PROBLEMS_DIR / "common" / directory,
-            problems_module.PROBLEMS_DIR.parent / "common" / directory,
-        )
-        common_dir = next((c for c in candidates if c.is_dir()), candidates[0])
-        if common_dir.is_dir():
-            for path in sorted(common_dir.iterdir()):
-                if path.is_file():
-                    assembly["common"][path.name] = path.read_text(encoding="utf-8")
         # directory candidates ARE the bundle; flat-file candidates are a
         # bundle-format single file whose parent carries no provided/ anyway
         bundle = problems_module.safe_problem_path(slug)

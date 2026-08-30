@@ -152,10 +152,47 @@ func main() {
 	}
 	constructorRow, _ := params[0].([]any)
 	solution := New@CLASS_NAME@(constructorRow)
+	// Named instances ({"new": handle} actions) live here for the whole
+	// replay; $ref arguments and "on" targets resolve through it. The
+	// primary instance from params[0] is registered when actions[0] names
+	// it, and stays the default target otherwise.
+	instances := map[string]*@CLASS_NAME@{}
+	if first, isObject := actions[0].(map[string]any); isObject {
+		if handleValue, has := first["new"]; has {
+			handle, isHandle := handleValue.(string)
+			if !isHandle || handle == "" {
+				panic("Design new action needs a string handle")
+			}
+			if _, exists := instances[handle]; exists {
+				panic("Duplicate design instance handle: " + handle)
+			}
+			instances[handle] = solution
+		}
+	}
 	outputs := []any{nil}
 	var previous any
 	for step := 1; step < len(actions); step++ {
 		action := actions[step]
+		// A {"new": handle} action constructs another instance of the
+		// design class from this step's params row; constructors return
+		// nothing, so the recorded slot is nil.
+		if row, isObject := action.(map[string]any); isObject {
+			if handleValue, has := row["new"]; has {
+				handle, isHandle := handleValue.(string)
+				if !isHandle || handle == "" {
+					panic("Design new action needs a string handle")
+				}
+				if _, exists := instances[handle]; exists {
+					panic("Duplicate design instance handle: " + handle)
+				}
+				newRow, _ := params[step].([]any)
+				instances[handle] = New@CLASS_NAME@(newRow)
+				outputs = append(outputs, nil)
+				previous = nil
+				continue
+			}
+		}
+		target := solution
 		repeat := int64(1)
 		if row, isObject := action.(map[string]any); isObject {
 			if callValue, has := row["call"]; has {
@@ -165,6 +202,17 @@ func main() {
 				if number, isNumber := repeatValue.(int64); isNumber {
 					repeat = number
 				}
+			}
+			if onValue, has := row["on"]; has {
+				handle, isHandle := onValue.(string)
+				if !isHandle {
+					panic("Design on action needs a string handle")
+				}
+				instance, exists := instances[handle]
+				if !exists {
+					panic("Unknown design instance handle: " + handle)
+				}
+				target = instance
 			}
 		}
 		name, isName := action.(string)
@@ -179,19 +227,31 @@ func main() {
 					callArguments = append(callArguments, previous)
 					continue
 				}
+				if reference, exists := pipe["$ref"]; exists {
+					handle, isHandle := reference.(string)
+					if !isHandle {
+						panic("Design $ref argument must be a string handle")
+					}
+					instance, known := instances[handle]
+					if !known {
+						panic("Unknown design instance handle: " + handle)
+					}
+					callArguments = append(callArguments, instance)
+					continue
+				}
 			}
 			callArguments = append(callArguments, argument)
 		}
 		if repeat > 1 {
 			frequencies := map[string]int{}
 			for trial := int64(0); trial < repeat; trial++ {
-				result := dispatch@CLASS_NAME@(solution, name, callArguments)
+				result := dispatch@CLASS_NAME@(target, name, callArguments)
 				frequencies[openojJSON(result)]++
 			}
 			outputs = append(outputs, frequencies)
 			previous = frequencies
 		} else {
-			result := dispatch@CLASS_NAME@(solution, name, callArguments)
+			result := dispatch@CLASS_NAME@(target, name, callArguments)
 			outputs = append(outputs, result)
 			previous = result
 		}
@@ -281,7 +341,7 @@ func openojDesignTreeArray(root *TreeNode) []any {
 """
 
 
-def _convert(spec: dict[str, Any], source: str) -> str:
+def _convert(spec: dict[str, Any], source: str, class_name: str = "") -> str:
     kind = spec["kind"]
     if kind == "integer":
         bits = spec.get("bits", 32)
@@ -296,6 +356,14 @@ def _convert(spec: dict[str, Any], source: str) -> str:
         return f'(func() string {{ v, ok := {source}.(string); if !ok {{ panic("Expected a string") }}; return v }})()'
     if kind == "binary_tree":
         return f"openojDesignTree({source})"
+    if kind == "instance":
+        # A live design object resolved in main from a {"$ref": handle}
+        # marker: the value crossing here is already the *Class itself
+        # (backticks because the message carries double quotes).
+        return (
+            f'(func() *{class_name} {{ v, ok := {source}.(*{class_name}); '
+            f'if !ok {{ panic(`Parameter must be a {{"$ref": handle}} instance reference`) }}; return v }})()'
+        )
     if kind == "nested":
         # Self-recursive closure over the JSON shape. The assembled common
         # NestedInteger is pointer-based with unexported fields; this code
@@ -308,7 +376,7 @@ def _convert(spec: dict[str, Any], source: str) -> str:
             f'default: panic("Expected a nested list") }} }}; return openojBuild({source}) }})()'
         )
     if kind == "array":
-        inner = _convert(spec["items"], "item")
+        inner = _convert(spec["items"], "item", class_name)
         return (
             f'(func() []{go_type(spec["items"])} {{ row, ok := {source}.([]any); if !ok {{ panic("Expected an array") }}; '
             f'out := make([]{go_type(spec["items"])}, 0, len(row)); '
@@ -340,7 +408,7 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         ]
         needs_tree = needs_tree or any(spec["kind"] == "binary_tree" for spec in specs)
         args = ", ".join(
-            _convert(spec, f"callArguments[{index}]") for index, spec in enumerate(specs)
+            _convert(spec, f"callArguments[{index}]", class_name) for index, spec in enumerate(specs)
         )
         returns = method.get("return_type") is not None and method["return_type"].get("kind") != "void"
         call = f"solution.{go_name}({args})"
@@ -362,7 +430,7 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
     # own constructor (NewXTyped) — the Go analogue of a design class
     # constructor, kept in the assembled source beside the struct.
     if constructor_specs:
-        typed = ", ".join(_convert(spec, f"row[{index}]") for index, spec in enumerate(constructor_specs))
+        typed = ", ".join(_convert(spec, f"row[{index}]", class_name) for index, spec in enumerate(constructor_specs))
         constructor_shim = (
             f"func New{class_name}(row []any) *{class_name} {{\n"
             f"\treturn New{class_name}Typed({typed})\n"
@@ -376,8 +444,7 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
 
     provided_source = "".join(
         strip_package(content) + "\n"
-        for part in ("common", "provided")
-        for _, content in sorted((assembly or {}).get(part, {}).items())
+        for _, content in sorted((assembly or {}).get("provided", {}).items())
         if _.endswith(".go")
     )
 

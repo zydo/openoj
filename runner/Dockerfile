@@ -58,7 +58,7 @@ COPY --from=typescript-toolchain \
     /usr/local/lib/node_modules/sql-formatter
 RUN ln -s /usr/local/lib/node_modules/typescript/bin/tsc /usr/local/bin/tsc \
     && ln -s /usr/local/lib/node_modules/prettier/bin/prettier.cjs /usr/local/bin/prettier
-COPY worker.py python_harness.py sql_harness.py shell_harness.py leetcode_types.py privileges.py formatters.py ./
+COPY worker.py python_harness.py sql_harness.py shell_harness.py leetcode_codecs.py protocol.py privileges.py formatters.py ./
 COPY cli.py ./
 RUN printf '#!/bin/sh\nexec python3 /runner/cli.py "$@"\n' > /usr/local/bin/openoj && chmod +x /usr/local/bin/openoj
 COPY compiler_sandbox.py runtime_sandbox.py ./
@@ -72,13 +72,6 @@ RUN mkdir -p /runner/java-classes /runner/benchmarks \
         -g:none \
         -d /runner/java-classes \
         /runner/java/OpenOJJavaHarness.java \
-        /runner/java/ListNode.java \
-        /runner/java/TreeNode.java \
-        /runner/java/Node.java \
-        /runner/java/QuadNode.java \
-        /runner/java/NestedInteger.java \
-        /runner/java/NodeWithNext.java \
-        /runner/java/MultiListNode.java \
         && \
     g++ -std=c++20 -O2 \
         -o /runner/benchmarks/cpp /runner/benchmark-sources/benchmark.cpp \

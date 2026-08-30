@@ -638,6 +638,70 @@ public final class OpenOJJavaHarness {
         return encodeCodec(result, returnCodec);
     }
 
+    /**
+     * The well-known class this codec's wire names, resolved from the
+     * problem's own assembled classpath (never a judge-owned definition —
+     * see docs/CODECS.md for the required name and shape per kind). A
+     * missing class fails loudly, naming what the bundle must provide.
+     */
+    private static Class<?> wellKnownClass(String name) {
+        try {
+            return Class.forName(name);
+        } catch (ClassNotFoundException missing) {
+            throw new IllegalArgumentException(
+                "This problem's wire needs a '" + name + "' class; provide it in provided/java/ "
+                    + "(see docs/CODECS.md for the required shape)");
+        }
+    }
+
+    /** The preferred scalar-value constructor (int val), falling back to a
+     * no-arg constructor for {@code newNode} to finish via field access —
+     * the same fallback graph/random_list construction already uses. */
+    private static Constructor<?> scalarConstructor(Class<?> nodeClass) throws NoSuchMethodException {
+        Constructor<?> ctor;
+        try {
+            ctor = nodeClass.getDeclaredConstructor(int.class);
+        } catch (NoSuchMethodException noScalarCtor) {
+            ctor = nodeClass.getDeclaredConstructor();
+        }
+        ctor.setAccessible(true);
+        return ctor;
+    }
+
+    /** An optional field a shape may or may not carry (NodeWithNext's
+     * ``parent`` back-pointer is a courtesy the LC 116/117 wire never
+     * requires — only LC 510 reads it). */
+    private static java.lang.reflect.Field optionalField(Class<?> nodeClass, String name) {
+        try {
+            return nodeClass.getField(name);
+        } catch (NoSuchFieldException missing) {
+            return null;
+        }
+    }
+
+    /** Read a required field off any object by reflection — the read side
+     * of every codec here never constructs, so it works on a return value
+     * built by ANY class with the right shape, not just the one decode()
+     * built. A missing field fails loudly, naming what is missing. */
+    private static Object fieldValue(Object object, String field) {
+        try {
+            return object.getClass().getField(field).get(object);
+        } catch (NoSuchFieldException | IllegalAccessException error) {
+            throw new IllegalArgumentException(
+                "Return value's class " + object.getClass().getSimpleName()
+                    + " is missing the required field '" + field + "'");
+        }
+    }
+
+    private static Object newNaryNode(Constructor<?> ctor, java.lang.reflect.Field valField,
+            java.lang.reflect.Field childrenField, int value) throws Exception {
+        Object node = newNode(ctor, valField, value);
+        if (childrenField.get(node) == null) {
+            childrenField.set(node, new ArrayList<>());
+        }
+        return node;
+    }
+
     private static Object decodeCodec(Object value, String codec) throws Exception {
         if ("json".equals(codec)) {
             return value;
@@ -647,14 +711,18 @@ public final class OpenOJJavaHarness {
                 return null;
             }
             List<Object> values = asList(value, "list_node input must be an array");
-            ListNode head = null;
-            ListNode current = null;
+            Class<?> nodeClass = wellKnownClass("ListNode");
+            Constructor<?> ctor = scalarConstructor(nodeClass);
+            java.lang.reflect.Field valField = nodeClass.getField("val");
+            java.lang.reflect.Field nextField = nodeClass.getField("next");
+            Object head = null;
+            Object current = null;
             for (Object item : values) {
-                ListNode node = new ListNode(numberValue(item).intValue());
+                Object node = newNode(ctor, valField, numberValue(item).intValue());
                 if (current == null) {
                     head = node;
                 } else {
-                    current.next = node;
+                    nextField.set(current, node);
                 }
                 current = node;
             }
@@ -668,28 +736,32 @@ public final class OpenOJJavaHarness {
             if (values.isEmpty() || values.get(0) == null) {
                 return null;
             }
-            TreeNode root = new TreeNode(numberValue(values.get(0)).intValue());
+            Class<?> nodeClass = wellKnownClass("TreeNode");
+            Constructor<?> ctor = scalarConstructor(nodeClass);
+            java.lang.reflect.Field valField = nodeClass.getField("val");
+            java.lang.reflect.Field leftField = nodeClass.getField("left");
+            java.lang.reflect.Field rightField = nodeClass.getField("right");
+            Object root = newNode(ctor, valField, numberValue(values.get(0)).intValue());
             // Null children are skipped below, so a growable list doubles as the BFS queue.
             List<Object> pending = new ArrayList<>();
             pending.add(root);
             int readIndex = 1;
             int writeIndex = 0;
             while (writeIndex < pending.size() && readIndex < values.size()) {
-                Object entry = pending.get(writeIndex++);
-                if (!(entry instanceof TreeNode node)) {
-                    continue;
-                }
+                Object node = pending.get(writeIndex++);
                 if (readIndex < values.size()) {
                     if (values.get(readIndex) != null) {
-                        node.left = new TreeNode(numberValue(values.get(readIndex)).intValue());
-                        pending.add(node.left);
+                        Object left = newNode(ctor, valField, numberValue(values.get(readIndex)).intValue());
+                        leftField.set(node, left);
+                        pending.add(left);
                     }
                     readIndex++;
                 }
                 if (readIndex < values.size()) {
                     if (values.get(readIndex) != null) {
-                        node.right = new TreeNode(numberValue(values.get(readIndex)).intValue());
-                        pending.add(node.right);
+                        Object right = newNode(ctor, valField, numberValue(values.get(readIndex)).intValue());
+                        rightField.set(node, right);
+                        pending.add(right);
                     }
                     readIndex++;
                 }
@@ -712,16 +784,22 @@ public final class OpenOJJavaHarness {
             if (values.isEmpty()) {
                 return null;
             }
-            Node root = new Node(numberValue(values.get(0)).intValue(), new ArrayList<>());
-            List<Node> pending = new ArrayList<>();
+            Class<?> nodeClass = wellKnownClass("Node");
+            Constructor<?> ctor = scalarConstructor(nodeClass);
+            java.lang.reflect.Field valField = nodeClass.getField("val");
+            java.lang.reflect.Field childrenField = nodeClass.getField("children");
+            Object root = newNaryNode(ctor, valField, childrenField, numberValue(values.get(0)).intValue());
+            List<Object> pending = new ArrayList<>();
             pending.add(root);
             int readIndex = 2;
             int writeIndex = 0;
             while (writeIndex < pending.size() && readIndex < values.size()) {
-                Node parent = pending.get(writeIndex++);
+                Object parent = pending.get(writeIndex++);
+                @SuppressWarnings("unchecked")
+                List<Object> parentChildren = (List<Object>) childrenField.get(parent);
                 while (readIndex < values.size() && values.get(readIndex) != null) {
-                    Node child = new Node(numberValue(values.get(readIndex)).intValue(), new ArrayList<>());
-                    parent.children.add(child);
+                    Object child = newNaryNode(ctor, valField, childrenField, numberValue(values.get(readIndex)).intValue());
+                    parentChildren.add(child);
                     pending.add(child);
                     readIndex++;
                 }
@@ -743,26 +821,38 @@ public final class OpenOJJavaHarness {
             if (values.isEmpty() || values.get(0) == null) {
                 return null;
             }
-            NodeWithNext root = new NodeWithNext(numberValue(values.get(0)).intValue());
-            List<NodeWithNext> pending = new ArrayList<>();
+            Class<?> nodeClass = wellKnownClass("NodeWithNext");
+            Constructor<?> ctor = scalarConstructor(nodeClass);
+            java.lang.reflect.Field valField = nodeClass.getField("val");
+            java.lang.reflect.Field leftField = nodeClass.getField("left");
+            java.lang.reflect.Field rightField = nodeClass.getField("right");
+            java.lang.reflect.Field parentField = optionalField(nodeClass, "parent");
+            Object root = newNode(ctor, valField, numberValue(values.get(0)).intValue());
+            List<Object> pending = new ArrayList<>();
             pending.add(root);
             int readIndex = 1;
             int writeIndex = 0;
             while (writeIndex < pending.size() && readIndex < values.size()) {
-                NodeWithNext node = pending.get(writeIndex++);
+                Object node = pending.get(writeIndex++);
                 if (readIndex < values.size()) {
                     if (values.get(readIndex) != null) {
-                        node.left = new NodeWithNext(numberValue(values.get(readIndex)).intValue());
-                        node.left.parent = node;
-                        pending.add(node.left);
+                        Object left = newNode(ctor, valField, numberValue(values.get(readIndex)).intValue());
+                        leftField.set(node, left);
+                        if (parentField != null) {
+                            parentField.set(left, node);
+                        }
+                        pending.add(left);
                     }
                     readIndex++;
                 }
                 if (readIndex < values.size()) {
                     if (values.get(readIndex) != null) {
-                        node.right = new NodeWithNext(numberValue(values.get(readIndex)).intValue());
-                        node.right.parent = node;
-                        pending.add(node.right);
+                        Object right = newNode(ctor, valField, numberValue(values.get(readIndex)).intValue());
+                        rightField.set(node, right);
+                        if (parentField != null) {
+                            parentField.set(right, node);
+                        }
+                        pending.add(right);
                     }
                     readIndex++;
                 }
@@ -774,19 +864,23 @@ public final class OpenOJJavaHarness {
                 return null;
             }
             List<Object> values = asList(value, "circular_list input must be an array");
-            ListNode head = null;
-            ListNode current = null;
+            Class<?> nodeClass = wellKnownClass("ListNode");
+            Constructor<?> ctor = scalarConstructor(nodeClass);
+            java.lang.reflect.Field valField = nodeClass.getField("val");
+            java.lang.reflect.Field nextField = nodeClass.getField("next");
+            Object head = null;
+            Object current = null;
             for (Object item : values) {
-                ListNode node = new ListNode(numberValue(item).intValue());
+                Object node = newNode(ctor, valField, numberValue(item).intValue());
                 if (current == null) {
                     head = node;
                 } else {
-                    current.next = node;
+                    nextField.set(current, node);
                 }
                 current = node;
             }
             if (current != null) {
-                current.next = head;
+                nextField.set(current, head);
             }
             return head;
         }
@@ -797,16 +891,19 @@ public final class OpenOJJavaHarness {
             // The LC 1506 wire: an n-ary display array decoded and handed
             // over as the list of its nodes (level order — any order is
             // faithful, the statement grants an arbitrary permutation).
-            Node root = (Node) decodeCodec(value, "nary_tree");
+            Object root = decodeCodec(value, "nary_tree");
             List<Object> nodes = new ArrayList<>();
             if (root != null) {
-                List<Node> queue = new ArrayList<>();
+                java.lang.reflect.Field childrenField = root.getClass().getField("children");
+                List<Object> queue = new ArrayList<>();
                 queue.add(root);
                 int index = 0;
                 while (index < queue.size()) {
-                    Node node = queue.get(index++);
+                    Object node = queue.get(index++);
                     nodes.add(node);
-                    queue.addAll(node.children);
+                    @SuppressWarnings("unchecked")
+                    List<Object> children = (List<Object>) childrenField.get(node);
+                    queue.addAll(children);
                 }
             }
             return nodes;
@@ -819,32 +916,49 @@ public final class OpenOJJavaHarness {
             if (value == null) {
                 return null;
             }
-            TreeNode root = (TreeNode) decodeCodec(value, "tree_node");
+            Object root = decodeCodec(value, "tree_node");
             if (root == null) {
                 return null;
             }
-            List<TreeNode> leaves = new ArrayList<>();
-            List<TreeNode> queue = new ArrayList<>();
+            Class<?> nodeClass = root.getClass();
+            java.lang.reflect.Field valField = nodeClass.getField("val");
+            java.lang.reflect.Field leftField = nodeClass.getField("left");
+            java.lang.reflect.Field rightField = nodeClass.getField("right");
+            List<Object> leaves = new ArrayList<>();
+            List<Object> queue = new ArrayList<>();
             queue.add(root);
             int index = 0;
             while (index < queue.size()) {
-                TreeNode node = queue.get(index++);
-                if (node.left == null && node.right == null) {
+                Object node = queue.get(index++);
+                Object left = leftField.get(node);
+                Object right = rightField.get(node);
+                if (left == null && right == null) {
                     leaves.add(node);
                 } else {
-                    if (node.left != null) {
-                        queue.add(node.left);
+                    if (left != null) {
+                        queue.add(left);
                     }
-                    if (node.right != null) {
-                        queue.add(node.right);
+                    if (right != null) {
+                        queue.add(right);
                     }
                 }
             }
-            leaves.sort(java.util.Comparator.comparingInt(leaf -> leaf.val));
+            // Insertion sort by val: leaf counts are small, and this avoids
+            // a checked-exception-throwing comparator.
+            for (int i = 1; i < leaves.size(); i++) {
+                Object key = leaves.get(i);
+                int keyVal = (Integer) valField.get(key);
+                int j = i - 1;
+                while (j >= 0 && (Integer) valField.get(leaves.get(j)) > keyVal) {
+                    leaves.set(j + 1, leaves.get(j));
+                    j--;
+                }
+                leaves.set(j + 1, key);
+            }
             int count = leaves.size();
             for (int position = 0; position < count; position++) {
-                leaves.get(position).left = leaves.get((position - 1 + count) % count);
-                leaves.get(position).right = leaves.get((position + 1) % count);
+                leftField.set(leaves.get(position), leaves.get((position - 1 + count) % count));
+                rightField.set(leaves.get(position), leaves.get((position + 1) % count));
             }
             return root;
         }
@@ -854,7 +968,7 @@ public final class OpenOJJavaHarness {
         throw new IllegalArgumentException("Java executor does not support codec: " + codec);
     }
 
-    private static Object encodeCodec(Object value, String codec) {
+    private static Object encodeCodec(Object value, String codec) throws Exception {
         if ("json".equals(codec)) {
             return value;
         }
@@ -864,32 +978,25 @@ public final class OpenOJJavaHarness {
             if (value == null) {
                 return null;
             }
-            if (!(value instanceof QuadNode node)) {
-                throw new IllegalArgumentException("quad_tree return value must be a QuadNode");
-            }
-            return encodeQuadTree(node);
+            return encodeQuadTree(value);
         }
         if (value == null) {
             // Every other executor serializes a missing head or root as [].
             return List.of();
         }
         if ("list_node".equals(codec)) {
-            if (!(value instanceof ListNode node)) {
-                throw new IllegalArgumentException("list_node return value must be a ListNode");
-            }
             List<Object> values = new ArrayList<>();
-            for (ListNode current = node; current != null; current = current.next) {
-                values.add(current.val);
+            Object current = value;
+            while (current != null) {
+                values.add(fieldValue(current, "val"));
+                current = fieldValue(current, "next");
             }
             return values;
         }
         if ("tree_node".equals(codec)) {
-            if (!(value instanceof TreeNode root)) {
-                throw new IllegalArgumentException("tree_node return value must be a TreeNode");
-            }
             List<Object> values = new ArrayList<>();
             List<Object> queue = new ArrayList<>();
-            queue.add(root);
+            queue.add(value);
             int index = 0;
             while (index < queue.size()) {
                 Object entry = queue.get(index++);
@@ -897,10 +1004,9 @@ public final class OpenOJJavaHarness {
                     values.add(null);
                     continue;
                 }
-                TreeNode node = (TreeNode) entry;
-                values.add(node.val);
-                queue.add(node.left);
-                queue.add(node.right);
+                values.add(fieldValue(entry, "val"));
+                queue.add(fieldValue(entry, "left"));
+                queue.add(fieldValue(entry, "right"));
             }
             while (!values.isEmpty() && values.get(values.size() - 1) == null) {
                 values.remove(values.size() - 1);
@@ -917,56 +1023,48 @@ public final class OpenOJJavaHarness {
             return values;
         }
         if ("nary_tree".equals(codec)) {
-            if (!(value instanceof Node root)) {
-                throw new IllegalArgumentException("nary_tree return value must be a Node");
-            }
             List<Object> output = new ArrayList<>();
-            if (root != null) {
-                output.add(root.val);
+            output.add(fieldValue(value, "val"));
+            output.add(null);
+            List<Object> queue = new ArrayList<>();
+            queue.add(value);
+            int index = 0;
+            while (index < queue.size()) {
+                Object parent = queue.get(index++);
+                @SuppressWarnings("unchecked")
+                List<Object> children = (List<Object>) fieldValue(parent, "children");
+                for (Object child : children) {
+                    output.add(fieldValue(child, "val"));
+                    queue.add(child);
+                }
                 output.add(null);
-                List<Node> queue = new ArrayList<>();
-                queue.add(root);
-                int index = 0;
-                while (index < queue.size()) {
-                    Node parent = queue.get(index++);
-                    for (Node child : parent.children) {
-                        output.add(child.val);
-                        queue.add(child);
-                    }
-                    output.add(null);
-                }
-                while (!output.isEmpty() && output.get(output.size() - 1) == null) {
-                    output.remove(output.size() - 1);
-                }
+            }
+            while (!output.isEmpty() && output.get(output.size() - 1) == null) {
+                output.remove(output.size() - 1);
             }
             return output;
         }
         if ("nested".equals(codec)) {
-            if (!(value instanceof NestedInteger node)) {
-                throw new IllegalArgumentException("nested return value must be a NestedInteger");
-            }
-            return encodeNested(node);
+            return encodeNested(value);
         }
         if ("next_tree".equals(codec)) {
-            if (!(value instanceof NodeWithNext root)) {
-                throw new IllegalArgumentException("next_tree return value must be a NodeWithNext");
-            }
             // LC display wire: values with a null marker between adjacent
             // levels, trailing markers trimmed. Each level is read through
             // the solution-populated next chain; the next level starts at
             // the first child found anywhere in this level (left or right
             // — the level's first node need not have a left child).
             List<Object> output = new ArrayList<>();
-            NodeWithNext level = root;
+            Object level = value;
             while (level != null) {
-                NodeWithNext nextLevel = null;
-                NodeWithNext node = level;
+                Object nextLevel = null;
+                Object node = level;
                 while (node != null) {
-                    output.add(node.val);
+                    output.add(fieldValue(node, "val"));
                     if (nextLevel == null) {
-                        nextLevel = node.left != null ? node.left : node.right;
+                        Object left = fieldValue(node, "left");
+                        nextLevel = left != null ? left : fieldValue(node, "right");
                     }
-                    node = node.next;
+                    node = fieldValue(node, "next");
                 }
                 output.add(null);
                 level = nextLevel;
@@ -977,43 +1075,31 @@ public final class OpenOJJavaHarness {
             return output;
         }
         if ("circular_list".equals(codec)) {
-            if (!(value instanceof ListNode head)) {
-                throw new IllegalArgumentException("circular_list return value must be a ListNode");
-            }
             List<Object> output = new ArrayList<>();
-            if (head != null) {
-                output.add(head.val);
-                ListNode current = head.next;
-                for (int i = 0; i < (1 << 20); i++) {
-                    if (current == null) {
-                        throw new IllegalArgumentException("Circular list is not closed");
-                    }
-                    if (current == head) {
-                        return output;
-                    }
-                    output.add(current.val);
-                    current = current.next;
+            output.add(fieldValue(value, "val"));
+            Object current = fieldValue(value, "next");
+            for (int i = 0; i < (1 << 20); i++) {
+                if (current == null) {
+                    throw new IllegalArgumentException("Circular list is not closed");
                 }
-                throw new IllegalArgumentException("Circular list exceeds the walk bound");
+                if (current == value) {
+                    return output;
+                }
+                output.add(fieldValue(current, "val"));
+                current = fieldValue(current, "next");
             }
-            return output;
+            throw new IllegalArgumentException("Circular list exceeds the walk bound");
         }
         if ("doubly_circular".equals(codec)) {
-            if (!(value instanceof NodeWithNext head)) {
-                throw new IllegalArgumentException("doubly_circular return value must be a NodeWithNext");
-            }
-            return serializeDoublyCircular(head);
+            return serializeDoublyCircular(value);
         }
         if ("multi_list".equals(codec)) {
-            if (!(value instanceof MultiListNode head)) {
-                throw new IllegalArgumentException("multi_list return value must be a MultiListNode");
-            }
-            return serializeMultiList(head);
+            return serializeMultiList(value);
         }
         throw new IllegalArgumentException("Java executor does not support codec: " + codec);
     }
 
-    private static List<Object> encodeQuadTree(QuadNode node) {
+    private static Object encodeQuadTree(Object node) throws Exception {
         // LC display wire: a flat preorder of [isLeaf, val] pairs. A
         // non-leaf's val is the solution's to choose, so both sides
         // normalize it to 0 — the wire never carries an arbitrary
@@ -1026,32 +1112,50 @@ public final class OpenOJJavaHarness {
         return output;
     }
 
-    private static void appendQuadTree(QuadNode node, List<Object> output) {
-        if (node.isLeaf) {
-            output.add(List.of(1, node.val ? 1 : 0));
+    private static void appendQuadTree(Object node, List<Object> output) throws Exception {
+        boolean isLeaf = (Boolean) fieldValue(node, "isLeaf");
+        if (isLeaf) {
+            boolean val = (Boolean) fieldValue(node, "val");
+            output.add(List.of(1, val ? 1 : 0));
             return;
         }
         output.add(List.of(0, 0));
-        appendQuadTree(node.topLeft, output);
-        appendQuadTree(node.topRight, output);
-        appendQuadTree(node.bottomLeft, output);
-        appendQuadTree(node.bottomRight, output);
+        appendQuadTree(fieldValue(node, "topLeft"), output);
+        appendQuadTree(fieldValue(node, "topRight"), output);
+        appendQuadTree(fieldValue(node, "bottomLeft"), output);
+        appendQuadTree(fieldValue(node, "bottomRight"), output);
     }
 
-    private static Object decodeQuadTree(Object value) {
+    private static Object decodeQuadTree(Object value) throws Exception {
         if (value == null) {
             return null;
         }
         List<Object> data = asList(value, "quad_tree input must be a display array");
+        Class<?> nodeClass = wellKnownClass("QuadNode");
         int[] cursor = {0};
-        QuadNode root = parseQuadNode(data, cursor);
+        Object root = parseQuadNode(nodeClass, data, cursor);
         if (cursor[0] != data.size()) {
             throw new IllegalArgumentException("quad_tree wire has trailing entries");
         }
         return root;
     }
 
-    private static QuadNode parseQuadNode(List<Object> data, int[] cursor) {
+    private static Object newQuadNode(Class<?> nodeClass, boolean val, boolean isLeaf) throws Exception {
+        try {
+            Constructor<?> ctor = nodeClass.getDeclaredConstructor(boolean.class, boolean.class);
+            ctor.setAccessible(true);
+            return ctor.newInstance(val, isLeaf);
+        } catch (NoSuchMethodException missing) {
+            Constructor<?> ctor = nodeClass.getDeclaredConstructor();
+            ctor.setAccessible(true);
+            Object node = ctor.newInstance();
+            nodeClass.getField("val").set(node, val);
+            nodeClass.getField("isLeaf").set(node, isLeaf);
+            return node;
+        }
+    }
+
+    private static Object parseQuadNode(Class<?> nodeClass, List<Object> data, int[] cursor) throws Exception {
         if (cursor[0] >= data.size()) {
             throw new IllegalArgumentException("quad_tree wire ended without a node");
         }
@@ -1061,12 +1165,12 @@ public final class OpenOJJavaHarness {
         }
         boolean isLeaf = quadFlag(pair.get(0), "isLeaf");
         boolean val = quadFlag(pair.get(1), "val");
-        QuadNode node = new QuadNode(val, isLeaf);
+        Object node = newQuadNode(nodeClass, val, isLeaf);
         if (!isLeaf) {
-            node.topLeft = parseQuadNode(data, cursor);
-            node.topRight = parseQuadNode(data, cursor);
-            node.bottomLeft = parseQuadNode(data, cursor);
-            node.bottomRight = parseQuadNode(data, cursor);
+            nodeClass.getField("topLeft").set(node, parseQuadNode(nodeClass, data, cursor));
+            nodeClass.getField("topRight").set(node, parseQuadNode(nodeClass, data, cursor));
+            nodeClass.getField("bottomLeft").set(node, parseQuadNode(nodeClass, data, cursor));
+            nodeClass.getField("bottomRight").set(node, parseQuadNode(nodeClass, data, cursor));
         }
         return node;
     }
@@ -1081,28 +1185,47 @@ public final class OpenOJJavaHarness {
         throw new IllegalArgumentException("quad_tree " + field + " must be 0 or 1");
     }
 
-    private static Object decodeNested(Object value) {
+    private static Object decodeNested(Object value) throws Exception {
+        Class<?> nodeClass = wellKnownClass("NestedInteger");
         if (value instanceof Boolean || !(value instanceof Number)) {
             if (!(value instanceof List<?>)) {
                 throw new IllegalArgumentException("nested input must be an int or nested arrays");
             }
-            NestedInteger node = new NestedInteger();
+            Constructor<?> ctor = nodeClass.getDeclaredConstructor();
+            ctor.setAccessible(true);
+            Object node = ctor.newInstance();
+            Method add = nodeClass.getMethod("add", nodeClass);
             for (Object item : (List<?>) value) {
-                node.add((NestedInteger) decodeNested(item));
+                add.invoke(node, decodeNested(item));
             }
             return node;
         }
-        return new NestedInteger(((Number) value).intValue());
+        int scalar = ((Number) value).intValue();
+        try {
+            Constructor<?> ctor = nodeClass.getDeclaredConstructor(int.class);
+            ctor.setAccessible(true);
+            return ctor.newInstance(scalar);
+        } catch (NoSuchMethodException missing) {
+            Constructor<?> ctor = nodeClass.getDeclaredConstructor();
+            ctor.setAccessible(true);
+            Object node = ctor.newInstance();
+            nodeClass.getMethod("setInteger", int.class).invoke(node, scalar);
+            return node;
+        }
     }
 
-    private static Object encodeNested(NestedInteger node) {
+    private static Object encodeNested(Object node) throws Exception {
         // Natural nested-arrays JSON: an integer hold is the integer
         // itself, a list hold the array of its encoded children.
-        if (node.isInteger()) {
-            return node.getInteger();
+        Class<?> nodeClass = node.getClass();
+        boolean isInteger = (Boolean) nodeClass.getMethod("isInteger").invoke(node);
+        if (isInteger) {
+            return nodeClass.getMethod("getInteger").invoke(node);
         }
         List<Object> output = new ArrayList<>();
-        for (NestedInteger item : node.getList()) {
+        @SuppressWarnings("unchecked")
+        List<Object> items = (List<Object>) nodeClass.getMethod("getList").invoke(node);
+        for (Object item : items) {
             output.add(encodeNested(item));
         }
         return output;
@@ -1123,33 +1246,39 @@ public final class OpenOJJavaHarness {
         if (values.size() != children.size()) {
             throw new IllegalArgumentException("multi_list children must match values slot for slot");
         }
-        List<MultiListNode> nodes = new ArrayList<>();
+        Class<?> nodeClass = wellKnownClass("MultiListNode");
+        Constructor<?> ctor = scalarConstructor(nodeClass);
+        java.lang.reflect.Field valField = nodeClass.getField("val");
+        java.lang.reflect.Field prevField = nodeClass.getField("prev");
+        java.lang.reflect.Field nextField = nodeClass.getField("next");
+        java.lang.reflect.Field childField = nodeClass.getField("child");
+        List<Object> nodes = new ArrayList<>();
         for (int index = 0; index < values.size(); index++) {
-            MultiListNode node = new MultiListNode(numberValue(values.get(index)).intValue());
+            Object node = newNode(ctor, valField, numberValue(values.get(index)).intValue());
             Object child = children.get(index);
             if (child != null) {
-                node.child = (MultiListNode) decodeMultiList(child);
+                childField.set(node, decodeMultiList(child));
             }
             nodes.add(node);
         }
         for (int index = 1; index < nodes.size(); index++) {
-            nodes.get(index - 1).next = nodes.get(index);
-            nodes.get(index).prev = nodes.get(index - 1);
+            nextField.set(nodes.get(index - 1), nodes.get(index));
+            prevField.set(nodes.get(index), nodes.get(index - 1));
         }
         return nodes.isEmpty() ? null : nodes.get(0);
     }
 
-    private static List<Object> serializeMultiList(MultiListNode head) {
+    private static List<Object> serializeMultiList(Object head) {
         List<Object> output = new ArrayList<>();
-        MultiListNode node = head;
-        MultiListNode previous = null;
+        Object node = head;
+        Object previous = null;
         for (int i = 0; i < (1 << 20) && node != null; i++) {
-            if (node.prev != previous || node.child != null) {
+            if (fieldValue(node, "prev") != previous || fieldValue(node, "child") != null) {
                 throw new IllegalArgumentException("Flattened list is not properly linked");
             }
-            output.add(node.val);
+            output.add(fieldValue(node, "val"));
             previous = node;
-            node = node.next;
+            node = fieldValue(node, "next");
         }
         if (node != null) {
             throw new IllegalArgumentException("Flattened list exceeds the walk bound");
@@ -1157,29 +1286,29 @@ public final class OpenOJJavaHarness {
         return output;
     }
 
-    private static List<Object> serializeDoublyCircular(NodeWithNext head) {
+    private static List<Object> serializeDoublyCircular(Object head) {
         // LC 426 wire (left = prev, right = next): read the ring through
         // right and require every back-link along the way.
         List<Object> output = new ArrayList<>();
         if (head == null) {
             return output;
         }
-        output.add(head.val);
-        NodeWithNext previous = head;
-        NodeWithNext current = head.right;
+        output.add(fieldValue(head, "val"));
+        Object previous = head;
+        Object current = fieldValue(head, "right");
         for (int i = 0; i < (1 << 20); i++) {
-            if (current == null || current.left != previous) {
+            if (current == null || fieldValue(current, "left") != previous) {
                 throw new IllegalArgumentException("Doubly linked list is not properly linked");
             }
             if (current == head) {
-                if (head.left != previous) {
+                if (fieldValue(head, "left") != previous) {
                     throw new IllegalArgumentException("Doubly linked list is not properly linked");
                 }
                 return output;
             }
-            output.add(current.val);
+            output.add(fieldValue(current, "val"));
             previous = current;
-            current = current.right;
+            current = fieldValue(current, "right");
         }
         throw new IllegalArgumentException("Doubly linked list exceeds the walk bound");
     }
@@ -1498,26 +1627,28 @@ public final class OpenOJJavaHarness {
         return output;
     }
 
-    private static Node decodeNaryTreeRef(Object value, Object aliasedRoot) {
+    private static Object decodeNaryTreeRef(Object value, Object aliasedRoot) throws Exception {
         if (!(value instanceof Number target)) {
             throw new IllegalArgumentException("nary_tree_ref input must be a node value");
         }
-        Node found = findNaryNode(aliasedRoot, target.intValue());
+        Object found = findNaryNode(aliasedRoot, target.intValue());
         if (found == null) {
             throw new IllegalArgumentException("nary_tree_ref target value is not in the aliased tree");
         }
         return found;
     }
 
-    private static Node findNaryNode(Object node, int target) {
-        if (!(node instanceof Node cast)) {
+    private static Object findNaryNode(Object node, int target) {
+        if (node == null) {
             return null;
         }
-        if (cast.val == target) {
-            return cast;
+        if ((Integer) fieldValue(node, "val") == target) {
+            return node;
         }
-        for (Node child : cast.children) {
-            Node found = findNaryNode(child, target);
+        @SuppressWarnings("unchecked")
+        List<Object> children = (List<Object>) fieldValue(node, "children");
+        for (Object child : children) {
+            Object found = findNaryNode(child, target);
             if (found != null) {
                 return found;
             }
@@ -1792,7 +1923,7 @@ public final class OpenOJJavaHarness {
         }
     }
 
-    private static Object decodeAliasList(Object value, Object aliasedHead) {
+    private static Object decodeAliasList(Object value, Object aliasedHead) throws Exception {
         if (!(value instanceof Map)) {
             throw new IllegalArgumentException("alias_list input must carry values and splice_at");
         }
@@ -1806,29 +1937,33 @@ public final class OpenOJJavaHarness {
         if (spliceAt < 0) {
             throw new IllegalArgumentException("alias_list splice_at must be non-negative");
         }
-        ListNode target = (ListNode) aliasedHead;
+        Object target = aliasedHead;
         for (int index = 0; index < spliceAt; index++) {
             if (target == null) {
                 throw new IllegalArgumentException("alias_list splice_at is past the aliased list");
             }
-            target = target.next;
+            target = fieldValue(target, "next");
         }
         if (rawValues == null || (rawValues instanceof List<?> && ((List<?>) rawValues).isEmpty())) {
             return target;
         }
         List<Object> values = asList(rawValues, "alias_list values must be an array");
-        ListNode head = null;
-        ListNode current = null;
+        Class<?> nodeClass = wellKnownClass("ListNode");
+        Constructor<?> ctor = scalarConstructor(nodeClass);
+        java.lang.reflect.Field valField = nodeClass.getField("val");
+        java.lang.reflect.Field nextField = nodeClass.getField("next");
+        Object head = null;
+        Object current = null;
         for (Object item : values) {
-            ListNode node = new ListNode(numberValue(item).intValue());
+            Object node = newNode(ctor, valField, numberValue(item).intValue());
             if (current == null) {
                 head = node;
             } else {
-                current.next = node;
+                nextField.set(current, node);
             }
             current = node;
         }
-        current.next = target;
+        nextField.set(current, target);
         return head;
     }
 
@@ -1837,12 +1972,11 @@ public final class OpenOJJavaHarness {
         if (node == null) {
             return List.of();
         }
-        ListNode head = (ListNode) aliasedHead;
-        for (ListNode current = head; current != null; current = current.next) {
+        for (Object current = aliasedHead; current != null; current = fieldValue(current, "next")) {
             if (current == node) {
                 List<Object> values = new ArrayList<>();
-                for (ListNode walk = (ListNode) node; walk != null; walk = walk.next) {
-                    values.add(walk.val);
+                for (Object walk = node; walk != null; walk = fieldValue(walk, "next")) {
+                    values.add(fieldValue(walk, "val"));
                 }
                 return values;
             }
@@ -1917,7 +2051,19 @@ public final class OpenOJJavaHarness {
             throw propagate(error.getTargetException());
         }
 
+        // Named instances ({"new": handle} actions) live here for the whole
+        // replay; $ref arguments and "on" targets resolve through it. The
+        // primary instance from params[0] is registered when actions[0]
+        // names it, and stays the default target otherwise.
+        Map<String, Object> instances = new LinkedHashMap<>();
+        String primaryHandle = null;
+        Object primary = instance;
+        if (actions.get(0) instanceof Map<?, ?> firstAction && firstAction.get("new") != null) {
+            primaryHandle = asString(firstAction.get("new"), "Design new action needs a string handle");
+            instances.put(primaryHandle, primary);
+        }
         Map<String, Object[]> codecs = methodCodecs(invocation);
+        Map<String, List<String>> parameterKinds = methodParameterKinds(invocation);
         List<Object> output = new ArrayList<>();
         output.add(null);
         // Raw (undecoded, unencoded) returns feed piped arguments, so a piped
@@ -1925,16 +2071,48 @@ public final class OpenOJJavaHarness {
         List<Object> rawOutput = new ArrayList<>();
         rawOutput.add(null);
         for (int index = 1; index < actions.size(); index++) {
+            Object actionSpec = actions.get(index);
+            // A {"new": handle} action constructs another instance of the
+            // design class from this step's params row; constructors return
+            // nothing, so the recorded slot is null.
+            if (actionSpec instanceof Map<?, ?> newAction && newAction.get("new") != null) {
+                String handle = asString(newAction.get("new"), "Design new action needs a string handle");
+                if (instances.containsKey(handle)) {
+                    throw new IllegalArgumentException("Duplicate design instance handle " + handle);
+                }
+                List<Object> row = asList(params.get(index), "Constructor params must be a list");
+                decodeConstructorRow(invocation, row);
+                InvocationPlan<Constructor<?>> plan = findConstructor(targetClass, row);
+                Object built;
+                try {
+                    built = plan.executable().newInstance(plan.arguments());
+                } catch (InvocationTargetException error) {
+                    throw propagate(error.getTargetException());
+                }
+                instances.put(handle, built);
+                output.add(null);
+                rawOutput.add(null);
+                continue;
+            }
             String methodName;
             int repeat = 1;
-            // A repeated action ({"call": name, "repeat": K}) is a randomized
-            // method under statistical judging: invoke K times, report the
-            // frequency table keyed by the canonical JSON of each value.
-            if (actions.get(index) instanceof Map<?, ?> actionMap) {
+            Object target = primary;
+            // A repeated action ({"call": name, "repeat": K, "on": handle})
+            // is a randomized method under statistical judging: invoke K
+            // times, report the frequency table keyed by the canonical JSON
+            // of each value.
+            if (actionSpec instanceof Map<?, ?> actionMap) {
                 methodName = asString(actionMap.get("call"), "Repeated action needs a call name");
                 Object repeatSpec = actionMap.get("repeat");
                 if (repeatSpec != null) {
                     repeat = numberValue(repeatSpec).intValue();
+                }
+                if (actionMap.get("on") != null) {
+                    String handle = asString(actionMap.get("on"), "Design on action needs a string handle");
+                    target = instances.get(handle);
+                    if (target == null) {
+                        throw new IllegalArgumentException("Unknown design instance handle " + handle);
+                    }
                 }
             } else {
                 methodName = asString(actions.get(index), "Design action must be a string");
@@ -1943,13 +2121,30 @@ public final class OpenOJJavaHarness {
             @SuppressWarnings("unchecked")
             List<String> parameterCodecs = (List<String>) methodCodec[0];
             String returnCodec = methodCodec[1].toString();
+            List<String> kinds = parameterKinds.getOrDefault(methodName, List.of());
             List<Object> methodArguments = asList(params.get(index), "Method params must be a list");
             for (int slot = 0; slot < methodArguments.size(); slot++) {
                 Object argument = methodArguments.get(slot);
-                // {"$prev": i} feeds action i's own return value straight back
-                // in, so a round-trip pair is judged without pinning the
-                // intermediate format.
-                if (argument instanceof Map<?, ?> pipe && pipe.size() == 1 && pipe.get("$prev") != null) {
+                boolean expectsInstance = slot < kinds.size() && "instance".equals(kinds.get(slot));
+                boolean isReference = argument instanceof Map<?, ?> reference
+                    && reference.size() == 1 && reference.get("$ref") instanceof String;
+                if (isReference || expectsInstance) {
+                    if (!isReference || !expectsInstance) {
+                        throw new IllegalArgumentException(
+                            "Design action " + index + " parameter " + (slot + 1)
+                                + ": {\"$ref\": handle} instance references are only valid on an instance parameter"
+                        );
+                    }
+                    String handle = (String) ((Map<?, ?>) argument).get("$ref");
+                    Object referenced = instances.get(handle);
+                    if (referenced == null) {
+                        throw new IllegalArgumentException("Unknown design instance handle " + handle);
+                    }
+                    methodArguments.set(slot, referenced);
+                } else if (argument instanceof Map<?, ?> pipe && pipe.size() == 1 && pipe.get("$prev") != null) {
+                    // {"$prev": i} feeds action i's own return value straight
+                    // back in, so a round-trip pair is judged without pinning
+                    // the intermediate format.
                     methodArguments.set(slot, rawOutput.get(numberValue(pipe.get("$prev")).intValue()));
                 } else if (slot < parameterCodecs.size()) {
                     methodArguments.set(slot, decodeCodec(argument, parameterCodecs.get(slot)));
@@ -1959,7 +2154,7 @@ public final class OpenOJJavaHarness {
             if (repeat <= 1) {
                 Object value;
                 try {
-                    value = methodPlan.executable().invoke(instance, methodPlan.arguments());
+                    value = methodPlan.executable().invoke(target, methodPlan.arguments());
                 } catch (InvocationTargetException error) {
                     throw propagate(error.getTargetException());
                 }
@@ -1971,7 +2166,7 @@ public final class OpenOJJavaHarness {
             Object last = null;
             for (int draw = 0; draw < repeat; draw++) {
                 try {
-                    last = methodPlan.executable().invoke(instance, methodPlan.arguments());
+                    last = methodPlan.executable().invoke(target, methodPlan.arguments());
                 } catch (InvocationTargetException error) {
                     throw propagate(error.getTargetException());
                 }
@@ -1982,6 +2177,51 @@ public final class OpenOJJavaHarness {
             output.add(counts);
         }
         return output;
+    }
+
+    /** Per-method parameter kinds from the manifest, so an "instance"
+     * parameter (another live object of the design class) is recognized
+     * while decoding a method row. */
+    private static Map<String, List<String>> methodParameterKinds(Map<String, Object> invocation) {
+        Map<String, List<String>> table = new LinkedHashMap<>();
+        if (!(invocation.get("methods") instanceof List<?> methods)) {
+            return table;
+        }
+        for (Object entry : methods) {
+            if (!(entry instanceof Map<?, ?> method)) {
+                continue;
+            }
+            List<String> kinds = new ArrayList<>();
+            if (method.get("parameters") instanceof List<?> parameters) {
+                for (Object parameter : parameters) {
+                    String kind = "json";
+                    if (parameter instanceof Map<?, ?> spec
+                        && spec.get("value_type") instanceof Map<?, ?> value
+                        && value.get("kind") != null) {
+                        kind = value.get("kind").toString();
+                    }
+                    kinds.add(kind);
+                }
+            }
+            table.put(asString(method.get("name"), "Method name must be a string"), kinds);
+        }
+        return table;
+    }
+
+    /** Decode one {"new": handle} constructor row in place through the
+     * constructor's declared codecs (same rule as params[0]). */
+    private static void decodeConstructorRow(Map<String, Object> invocation, List<Object> row) throws Exception {
+        if (!(invocation.get("constructor") instanceof Map<?, ?> constructorSpec)
+            || !(constructorSpec.get("parameters") instanceof List<?> constructorParameters)) {
+            return;
+        }
+        for (int slot = 0; slot < row.size() && slot < constructorParameters.size(); slot++) {
+            String codec = "json";
+            if (constructorParameters.get(slot) instanceof Map<?, ?> spec && spec.get("codec") != null) {
+                codec = spec.get("codec").toString();
+            }
+            row.set(slot, decodeCodec(row.get(slot), codec));
+        }
     }
 
     private static InvocationPlan<Method> findMethod(

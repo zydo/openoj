@@ -28,7 +28,7 @@ class ShellExecutor(Python3Executor):
         limits: dict[str, Any],
         assembly: dict[str, dict[str, str]] | None = None,
     ) -> PreparedProgram:
-        if any((assembly or {}).get(part) for part in ("common", "provided")):
+        if (assembly or {}).get("provided"):
             raise ExecutorError("shell submissions take no assembled sources")
         source_path = job_root / "solution.sh"
         source_path.write_text(code, encoding="utf-8")

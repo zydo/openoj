@@ -1,17 +1,24 @@
 # Trust boundaries of the judging pipeline
 
 Who is trusted with what, stated deliberately. This document exists
-because the bundle-carried-code move (the `common/` library and
-per-problem `provided/` sources assembled into every submission) made a
-previously implicit assumption explicit; writing it down is the point.
+because the bundle-carried-code move (per-problem `provided/` sources
+assembled into every submission) made a previously implicit assumption
+explicit; writing it down is the point.
+
+The judge holds no predefined data structures of its own — every
+well-known type a bundle's wire needs (`ListNode`, `TreeNode`, ...) is
+that bundle's own `provided/` source, self-contained. There used to be
+a second, shared `common/` library assembled into every submission
+unconditionally; it is gone (docs/CODECS.md documents the wire→class
+convention that replaced it). Assembly now reads exactly one
+well-known directory.
 
 ## The layers
 
 | code | origin | runs | trust class |
 | --- | --- | --- | --- |
 | runner harness, executors, codecs | the openoj repo (`runner/`) | inside the sandbox, beside the submission | **framework** — trusted absolutely, versioned with the repo |
-| `common/` shared types | the problems repo (`openoj-problems/common/`) | inside the sandbox, compiled/executed with every submission | **problem-set content** — trusted like `cases.json` |
-| `provided/<language>/` oracles & helpers | each problem bundle (`problems/<key>/provided/`) | inside the sandbox, beside the submission | **problem-set content** — same trust as the bundle's own cases |
+| `provided/<language>/` types, oracles & helpers | each problem bundle (`problems/<key>/provided/`) | inside the sandbox, beside the submission | **problem-set content** — same trust as the bundle's own cases |
 | the submission | a solver | inside the sandbox, unprivileged | **untrusted** |
 | output validators | the openoj repo (`api/app/validators.py`) | in the API process, after the run | **framework** — same tier as the judge itself |
 
@@ -40,10 +47,10 @@ the query budget and the case's ordinary limits:
 ## What "trusted like cases.json" means
 
 Testcase data has always been problem-author-controlled and has always
-run inside (or directly driven) the sandbox. `common/` and `provided/`
-sources occupy exactly that position: they are authored in the problems
-repo, reviewed with it, and versioned with it. A malicious author of
-problem content can already shape case data; giving that same author a
+run inside (or directly driven) the sandbox. `provided/` sources
+occupy exactly that position: they are authored in the problems repo,
+reviewed with it, and versioned with it. A malicious author of problem
+content can already shape case data; giving that same author a
 compiled class does not cross a new boundary — but it does raise the
 stakes, which is why this is written down rather than inherited.
 
@@ -57,9 +64,9 @@ Concretely, the existing protections all still apply:
   the worker, the host, or other jobs;
 - the framework itself (`runner/`) never executes anything from the
   problems repo beyond what the executors explicitly assemble, and the
-  assembly surface is exactly: `common/<language>/` and
-  `problems/<key>/provided/<language>/` files, concatenated or
-  compiled — never arbitrary paths, never build scripts.
+  assembly surface is exactly `problems/<key>/provided/<language>/`
+  files, concatenated or compiled — never arbitrary paths, never build
+  scripts, never a second shared directory.
 
 ## What is deliberately NOT done (yet)
 
@@ -73,18 +80,18 @@ Concretely, the existing protections all still apply:
 ## Where the boundary is enforced in code
 
 - `api/app/main.py` `_assembly_sources` — the only place the judge
-  request is populated with library sources; it reads exactly two
-  well-known directories and nothing else.
+  request is populated with library sources; it reads exactly one
+  well-known directory (`provided/<language>/`) and nothing else.
 - `runner/executors/*_interactive.py`, `*_design.py` — assembly is
   concatenation/compilation of the received sources; no path from the
   request is ever executed or included by reference.
 - `runner/compiler_sandbox.py` / `runtime_sandbox.py` — the privilege
   split between compiler, runtime, and supervisor.
-- `api/app/problems.py` `assert_common_contract` + `runner/cli.py` — the
-  versioned common-harness contract: every bundle's `problem.json`
-  declares the common version it targets, and a bundle declaring
-  anything newer than the set's `common/` is refused before a single
-  source is assembled.
+- `runner/leetcode_codecs.py` (Python) and `OpenOJJavaHarness`'s
+  reflective codecs (Java) — the two harnesses that are not per-job
+  generated source resolve every well-known class from the submission's
+  own assembled namespace/classpath at decode/encode time; neither
+  holds a definition of its own.
 - `api/app/judge.py` + `api/app/validators.py` — validator dispatch:
   names only cross the boundary (a case's expected slot carries
   `{"mode": "validator", "name": ...}`), never validator code; the

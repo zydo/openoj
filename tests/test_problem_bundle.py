@@ -9,8 +9,7 @@ from api.app.problems import ProblemError, load_reference_solution, parse_proble
 BUNDLE = {
     "problem.json": json.dumps(
         {
-            "schema_version": 1,
-            "common_version": 1,
+            "schema_version": 2,
             "reference_solution": "",
             "id": 1,
             "slug": "demo-problem",
@@ -71,15 +70,9 @@ class ProblemBundleTests(unittest.TestCase):
     def parse(self, **overrides):
         return parse_problem_bundle(write_bundle(self.root, **overrides))
 
-    def test_bundle_requires_common_version(self):
+    def test_bundle_rejects_unsupported_schema_version(self):
         problem = json.loads(BUNDLE["problem.json"])
-        del problem["common_version"]
-        with self.assertRaises(ProblemError):
-            self.parse(**{"problem.json": json.dumps(problem)})
-
-    def test_bundle_rejects_non_integer_common_version(self):
-        problem = json.loads(BUNDLE["problem.json"])
-        problem["common_version"] = "1"
+        problem["schema_version"] = 1
         with self.assertRaises(ProblemError):
             self.parse(**{"problem.json": json.dumps(problem)})
 

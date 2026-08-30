@@ -10,8 +10,7 @@ def _bundle_files(reference: str = "", with_canonical: bool = True, with_variant
     files = {
         "problem.json": json.dumps(
             {
-                "schema_version": 1,
-                "common_version": 1,
+                "schema_version": 2,
                 "reference_solution": reference,
                 "id": 2,
                 "slug": "demo-two",

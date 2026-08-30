@@ -12,9 +12,8 @@ alias openoj='docker run --rm --user 0:0 \
   -v /path/to/my-bundle:/bundle:rw ghcr.io/zydo/openoj:v0.1.0 openoj'
 ```
 
-`/tools` is a checkout of the problems repo (its `common/` library and
-`scripts/gen_starters.py` are the standard); `/bundle` is the problem
-directory you are authoring.
+`/tools` is a checkout of the problems repo (its `scripts/gen_starters.py`
+is the standard); `/bundle` is the problem directory you are authoring.
 
 ## 1. Write the statement
 
@@ -102,10 +101,10 @@ openoj judge /bundle
 ```
 
 `judge` runs **every** `solution.*` through the real executors — same
-toolchain, same assembly of the common library and your `provided/`
-sources, same comparison semantics as a solver's live submission — and
-prints per-case pass/fail per language. **Only when every solution in
-every language passes every case is the problem successfully created.**
+toolchain, same assembly of your `provided/` sources, same comparison
+semantics as a solver's live submission — and prints per-case pass/fail
+per language. **Only when every solution in every language passes every
+case is the problem successfully created.**
 
 A failing case is a real verdict: read the status (`wrong_answer`,
 `runtime_error`, `time_limit_exceeded`), fix the artifact — solution,

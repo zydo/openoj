@@ -107,8 +107,7 @@ class RustExecutor(CompiledExecutor):
         # then uses directly).
         assembly_source = "".join(
             content + "\n"
-            for part in ("common", "provided")
-            for name, content in sorted((assembly or {}).get(part, {}).items())
+            for name, content in sorted((assembly or {}).get("provided", {}).items())
             if name.endswith(".rs")
         )
         structs = uses_struct_kinds(invocation)

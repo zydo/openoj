@@ -374,7 +374,6 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
         problem_data,
         {
             "schema_version",
-            "common_version",
             "reference_solution",
             "id",
             "slug",
@@ -386,17 +385,8 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
         },
         "problem.json",
     )
-    if problem_data["schema_version"] != 1:
+    if problem_data["schema_version"] != 2:
         raise ProblemError("Unsupported problem bundle schema version")
-    if (
-        not isinstance(problem_data["common_version"], int)
-        or isinstance(problem_data["common_version"], bool)
-        or problem_data["common_version"] < 1
-    ):
-        raise ProblemError(
-            "problem.json common_version must be a positive integer "
-            "(the common-library version it targets; see common/VERSION.json)"
-        )
     # The designated time-cost reference: "" names the canonical solution.*,
     # a variant slug names solution_<variant>.* — always the optimal
     # approach, the one the worst-to-best guide ends with.
@@ -593,46 +583,6 @@ def safe_problem_path(slug: str) -> Path:
     if len(matches) != 1:
         raise ProblemError("Problem not found" if not matches else "Duplicate problem slug")
     return matches[0]
-
-
-def common_contract_version() -> Optional[int]:
-    """The common/VERSION.json contract version of the active problem set,
-    or None when the set predates the versioned contract (no common/, or an
-    unreadable VERSION.json — legacy sets are judged as they always were)."""
-    for root in (PROBLEMS_DIR, PROBLEMS_DIR.parent):
-        version_file = root / "common" / "VERSION.json"
-        if version_file.is_file():
-            try:
-                return int(json.loads(version_file.read_text(encoding="utf-8"))["version"])
-            except (OSError, ValueError, KeyError, TypeError):
-                return None
-    return None
-
-
-def assert_common_contract(slug: str) -> None:
-    """The per-bundle half of the versioned common-harness contract.
-
-    Every bundle's problem.json declares the common-library version it was
-    authored against ('common_version'); a bundle may not target a version
-    newer than the common/ its problem set ships. Flat single-file problems
-    carry no provided/ sources and no declaration, so they are exempt."""
-    shipped = common_contract_version()
-    if shipped is None:
-        return
-    bundle = safe_problem_path(slug)
-    if not bundle.is_dir():
-        return
-    try:
-        declared = json.loads((bundle / "problem.json").read_text(encoding="utf-8")).get("common_version")
-    except (OSError, ValueError):
-        raise ProblemError("problem.json is unreadable; cannot check the common-harness contract")
-    if not isinstance(declared, int) or isinstance(declared, bool) or declared < 1:
-        raise ProblemError(
-            "problem.json must declare a positive integer 'common_version' "
-            "(the common-library version it targets; see common/VERSION.json)"
-        )
-    if declared > shipped:
-        raise ProblemError(f"this bundle targets common harness v{declared}, but the problem set ships v{shipped}")
 
 
 def load_problem(slug: str) -> dict[str, Any]:

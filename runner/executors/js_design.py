@@ -85,17 +85,17 @@ function openojJSON(value) {
 }
 """
 
-CODEC_HELPERS = """\
+CODEC_DISPATCH = """\
 // Codec-aware argument/result conversion, mirroring the harness's
 // decode/encode (python_harness._invoke_design). Only the tree codecs
-// transform; json is the identity.
+// transform; json is the identity. The branches below are trimmed to the
+// codecs this invocation actually declares — TypeScript resolves every
+// name at compile time regardless of reachability, so a branch calling
+// an omitted helper (for a type the bundle never asked for) would fail
+// to compile even though it can never run.
 function openojDecode(value, codec) {
-    if (codec === "tree_node") {
-        return openojTreeFromArray(value);
-    }
-    if (codec === "nested") {
-        return openojNestedFromArray(value);
-    }
+@TREE_DECODE_BRANCH@
+@NESTED_DECODE_BRANCH@
     return value;
 }
 
@@ -103,15 +103,18 @@ function openojEncode(value, codec) {
     if (value === undefined) {
         return null;
     }
-    if (codec === "tree_node") {
-        return openojTreeToArray(value);
-    }
-    if (codec === "nested") {
-        return openojNestedToArray(value);
-    }
+@TREE_ENCODE_BRANCH@
+@NESTED_ENCODE_BRANCH@
     return value;
 }
+"""
 
+# Only emitted when the invocation actually uses the "nested" codec —
+# NestedInteger is the bundle's own provided/ type (docs/CODECS.md), not
+# a judge-owned definition, so this helper must not reference it
+# unconditionally (TypeScript's compile-time check catches it even when
+# unreachable; plain JS would not).
+NESTED_CODEC_HELPERS = """\
 // Nested JSON ([1,[4,[6]]], bare integers as integer holds) ->
 // the assembled common NestedInteger, mirroring the harness decode.
 function openojNestedFromArray(value) {
@@ -139,7 +142,12 @@ function openojNestedToArray(node) {
     }
     return node.getList().map(openojNestedToArray);
 }
+"""
 
+# Only emitted when the invocation actually uses the "tree_node" codec —
+# TreeNode is the bundle's own provided/ type, not a judge-owned
+# definition; see the NESTED_CODEC_HELPERS note above.
+TREE_CODEC_HELPERS = """\
 // Level-order array (nulls for absent children) -> TreeNode tree, two
 // slots consumed per queued node exactly like the harness's codec.
 function openojTreeFromArray(slots) {
@@ -213,26 +221,74 @@ async function main() {
     const constructorCodecs = @CTOR_CODECS@;
     const methodCodecs = @METHOD_CODECS@;
     const returnCodecs = @RETURN_CODECS@;
+    const methodKinds = @METHOD_KINDS@;
+    const decodeConstructorRow = (row) => row.map((argument, index) => openojDecode(argument, constructorCodecs[index] || "json"));
     const constructorArguments = params[0].map((argument, index) => openojDecode(argument, constructorCodecs[index] || "json"));
     const solution = new @CLASS_NAME@(...constructorArguments);
+    // Named instances ({"new": handle} actions) live here for the whole
+    // replay; $ref arguments and "on" targets resolve through it. The
+    // primary instance from params[0] is registered when actions[0] names
+    // it, and stays the default target otherwise.
+    const instances = new Map();
+    const register = (handle, instance) => {
+        if (typeof handle !== "string" || handle === "" || instances.has(handle)) {
+            throw new Error("Duplicate or invalid design instance handle: " + handle);
+        }
+        instances.set(handle, instance);
+    };
+    if (actions[0] !== null && typeof actions[0] === "object" && !Array.isArray(actions[0]) && "new" in actions[0]) {
+        register(actions[0].new, solution);
+    }
     const outputs = [null];
     let previous = null;
     for (let step = 1; step < actions.length; step++) {
         let action = actions[step];
+        // A {"new": handle} action constructs another instance of the
+        // design class from this step's params row; constructors return
+        // nothing, so the recorded slot is null.
+        if (action !== null && typeof action === "object" && !Array.isArray(action) && "new" in action) {
+            register(action.new, new @CLASS_NAME@(...decodeConstructorRow(params[step])));
+            outputs.push(null);
+            previous = null;
+            continue;
+        }
+        let target = solution;
         let repeat = 1;
         if (action !== null && typeof action === "object" && !Array.isArray(action)) {
             repeat = Number(action.repeat || 1);
+            if ("on" in action) {
+                if (!instances.has(action.on)) {
+                    throw new Error("Unknown design instance handle: " + action.on);
+                }
+                target = instances.get(action.on);
+            }
             action = action.call;
         }
         const rawArguments = params[step];
         const codecs = methodCodecs[action] || [];
+        const kinds = methodKinds[action] || [];
         // A piped argument ({"$prev": ...}) crosses as the previous call's
-        // live object, not its wire form; everything else decodes through
-        // its parameter codec (python_harness._invoke_design).
+        // live object, not its wire form; an instance reference
+        // ({"$ref": handle}) resolves to the named live instance; everything
+        // else decodes through its parameter codec
+        // (python_harness._invoke_design).
         const decodedArguments = rawArguments.map((argument, index) => {
             if (argument !== null && typeof argument === "object" && !Array.isArray(argument)
                     && Object.keys(argument).length === 1 && "$prev" in argument) {
                 return previous;
+            }
+            const isReference = argument !== null && typeof argument === "object" && !Array.isArray(argument)
+                    && Object.keys(argument).length === 1 && "$ref" in argument;
+            const expectsInstance = kinds[index] === "instance";
+            if (isReference || expectsInstance) {
+                if (!isReference || !expectsInstance) {
+                    throw new Error("Design action " + step + " parameter " + (index + 1)
+                        + ': {"$ref": handle} instance references are only valid on an instance parameter');
+                }
+                if (!instances.has(argument.$ref)) {
+                    throw new Error("Unknown design instance handle: " + argument.$ref);
+                }
+                return instances.get(argument.$ref);
             }
             return openojDecode(argument, codecs[index] || "json");
         });
@@ -241,7 +297,7 @@ async function main() {
             const frequencies = new Map();
             let last = null;
             for (let trial = 0; trial < repeat; trial++) {
-                last = solution[action](...decodedArguments);
+                last = target[action](...decodedArguments);
                 const key = openojJSON(openojEncode(last, returnCodec));
                 frequencies.set(key, (frequencies.get(key) || 0) + 1);
             }
@@ -250,7 +306,7 @@ async function main() {
             outputs.push(table);
             previous = last;
         } else {
-            const rawResult = solution[action](...decodedArguments);
+            const rawResult = target[action](...decodedArguments);
             outputs.push(openojEncode(rawResult, returnCodec));
             previous = rawResult;
         }
@@ -272,10 +328,14 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         raise ExecutorError("Invalid design entry class")
 
     # Codec tables (python_harness._invoke_design's per-method codec map):
-    # each argument is decoded from its wire form, each result encoded back.
+    # each argument is decoded from its wire form, each result encoded back;
+    # the kinds table carries each parameter's value_type kind so an
+    # "instance" parameter (a live design object by {"$ref": handle}) is
+    # recognized while decoding.
     constructor = invocation.get("constructor", {}).get("parameters", [])
     constructor_codecs = [p.get("codec", "json") for p in constructor if isinstance(p, dict)]
     method_codecs: dict[str, list[str]] = {}
+    method_kinds: dict[str, list[str]] = {}
     return_codecs: dict[str, str] = {}
     for method in invocation.get("methods", []):
         if not isinstance(method, dict) or not isinstance(method.get("name"), str):
@@ -283,12 +343,46 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         method_codecs[method["name"]] = [
             p.get("codec", "json") for p in method.get("parameters", []) if isinstance(p, dict)
         ]
+        method_kinds[method["name"]] = [
+            (p.get("value_type") or {}).get("kind", "json")
+            for p in method.get("parameters", [])
+            if isinstance(p, dict)
+        ]
         return_codecs[method["name"]] = method.get("return_codec", "json")
+
+    all_codecs = list(constructor_codecs) + [return_codecs.get(name, "json") for name in method_codecs]
+    for codecs in method_codecs.values():
+        all_codecs.extend(codecs)
+    needs_tree = "tree_node" in all_codecs
+    needs_nested = "nested" in all_codecs
+    codec_dispatch = (
+        CODEC_DISPATCH
+        .replace(
+            "@TREE_DECODE_BRANCH@",
+            '    if (codec === "tree_node") {\n        return openojTreeFromArray(value);\n    }' if needs_tree else "",
+        )
+        .replace(
+            "@NESTED_DECODE_BRANCH@",
+            '    if (codec === "nested") {\n        return openojNestedFromArray(value);\n    }' if needs_nested else "",
+        )
+        .replace(
+            "@TREE_ENCODE_BRANCH@",
+            '    if (codec === "tree_node") {\n        return openojTreeToArray(value);\n    }' if needs_tree else "",
+        )
+        .replace(
+            "@NESTED_ENCODE_BRANCH@",
+            '    if (codec === "nested") {\n        return openojNestedToArray(value);\n    }' if needs_nested else "",
+        )
+    )
+    codec_helpers = (
+        codec_dispatch
+        + (NESTED_CODEC_HELPERS if needs_nested else "")
+        + (TREE_CODEC_HELPERS if needs_tree else "")
+    )
 
     provided_source = "".join(
         content + "\n"
-        for part in ("common", "provided")
-        for name, content in sorted((assembly or {}).get(part, {}).items())
+        for name, content in sorted((assembly or {}).get("provided", {}).items())
         if name.endswith(".ts" if is_typescript else ".js")
     )
     main_source = (
@@ -297,6 +391,7 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         .replace("@CTOR_CODECS@", json.dumps(constructor_codecs))
         .replace("@METHOD_CODECS@", json.dumps(method_codecs))
         .replace("@RETURN_CODECS@", json.dumps(return_codecs))
+        .replace("@METHOD_KINDS@", json.dumps(method_kinds))
     )
     if not is_typescript:
         main_source = main_source.replace("...(constructorArguments as any[]))", "...constructorArguments)")
@@ -306,15 +401,20 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
             f"new {class_name}(...constructorArguments);",
             f"new ({class_name} as any)(...constructorArguments);",
         )
+        main_source = main_source.replace(
+            f"new {class_name}(...decodeConstructorRow(params[step]))",
+            f"new ({class_name} as any)(...decodeConstructorRow(params[step]))",
+        )
         main_source = main_source.replace(".map((argument, index) => {", ".map((argument: any, index: number) => {")
-        main_source = main_source.replace("solution[action](...decodedArguments)", "(solution[action] as any)(...decodedArguments)")
+        main_source = main_source.replace("target[action](...decodedArguments)", "(target[action] as any)(...decodedArguments)")
     if is_typescript:
-        # The codec helpers reference ListNode/TreeNode, whose real
-        # classes live in common/typescript/types.ts — the common source
-        # must precede the wrapper for those references to resolve.
-        source = provided_source + "\n" + WRAPPER_HEAD + "\n" + CODEC_HELPERS + "\n" + code + "\n" + main_source
+        # Emitted codec helpers may reference TreeNode/NestedInteger,
+        # whose real classes live in the bundle's own provided/typescript/
+        # — that source must precede the wrapper for those references to
+        # resolve.
+        source = provided_source + "\n" + WRAPPER_HEAD + "\n" + codec_helpers + "\n" + code + "\n" + main_source
     else:
-        source = WRAPPER_HEAD + "\n" + CODEC_HELPERS + "\n" + provided_source + code + "\n" + main_source
+        source = WRAPPER_HEAD + "\n" + codec_helpers + "\n" + provided_source + code + "\n" + main_source
     if is_typescript:
         source = (
             'declare const require: (name: string) => any;\n'
@@ -341,6 +441,9 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         ).replace(
             '        const constructorArguments = params[0];',
             '        const constructorArguments: any[] = params[0];',
+        ).replace(
+            '        let target = solution;',
+            '        let target: any = solution;',
         )
 
     suffix = "ts" if is_typescript else "js"

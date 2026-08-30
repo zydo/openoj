@@ -43,11 +43,11 @@ class LanguageExecutor(Protocol):
         """Write/compile source and return the command used for each testcase.
 
         ``assembly`` carries the judge-assembled library sources that make
-        one complete program with the submission: ``{"common": {filename:
-        content}, "provided": {filename: content}}`` from the problem
-        set's common/ library and the problem's provided/ directory. It
-        is None/empty for jobs that predate the assembly model (the
-        built-in fallback types then apply).
+        one complete program with the submission: ``{"provided": {filename:
+        content}}`` from the problem's own provided/ directory — the only
+        well-known assembly path (docs/TRUST-BOUNDARIES.md). Every data
+        structure a bundle's wire needs is the bundle's own definition;
+        the judge holds none of its own.
         """
         ...
 

@@ -245,8 +245,7 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
 
     provided_source = "".join(
         content + "\n"
-        for part in ("common", "provided")
-        for name, content in sorted((assembly or {}).get(part, {}).items())
+        for name, content in sorted((assembly or {}).get("provided", {}).items())
         if name.endswith(".ts" if is_typescript else ".js")
     )
     main_source = (

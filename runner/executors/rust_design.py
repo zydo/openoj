@@ -1,8 +1,10 @@
 """Design-kind wrapper generation for Rust.
 
 Same protocol as js_design.py (reference: python_harness._invoke_design):
-actions + params, instance from params[0], $prev piping, randomized
-actions as frequency tables. The case travels as one tagged stream. The
+actions + params, instance from params[0] (plus {"new": handle}
+actions for further named instances, LC 1570's two-object wire), $prev
+piping, randomized actions as frequency tables. The case travels as one
+tagged stream. The
 wrapper decodes into the OjValue enum and replays through a generated
 dispatch match calling typed methods, with per-spec converters identical
 to the interactive module's. The submission's design class is a plain
@@ -17,7 +19,7 @@ from typing import Any
 
 from .base import ExecutorError, PreparedProgram
 from .typed import rust_type, type_spec
-from .rust_interactive import WRAPPER_HEAD, _convert, _rust_type
+from .rust_interactive import NESTED_HELPERS, WRAPPER_HEAD, _convert, _rust_type
 
 TREE_HELPERS = """\
 // tree_node codec decode: level-order OjValue array (Null for absent
@@ -112,43 +114,114 @@ fn openoj_run() -> Result<String, String> {
         return Err("Design input requires equally sized actions and params".to_string());
     }
     let constructor_row = match &params[0] { OjValue::Array(v) => v.clone(), _ => vec![] };
-@CONSTRUCTOR_CONVERT@
-    let mut solution = @CLASS_NAME@::new(@CONSTRUCTOR_ARGS@);
+    let primary = openoj_construct_@CLASS_NAME@(&constructor_row)?;
+    // Named instances ({"new": handle} actions) live here for the whole
+    // replay; $ref arguments and "on" targets resolve through it. Boxes
+    // keep the objects alive; handles map to raw pointers, the module's
+    // established pattern for structures more than one caller reaches.
+    // The primary instance from params[0] is registered when actions[0]
+    // names it, and stays the default target otherwise.
+    let mut alive: Vec<Box<@CLASS_NAME@>> = Vec::new();
+    let mut instances: Vec<(String, *mut @CLASS_NAME@)> = Vec::new();
+    alive.push(Box::new(primary));
+    let primary_pointer: *mut @CLASS_NAME@ = alive.last_mut().unwrap().as_mut() as *mut _;
+    if let OjValue::Object(fields) = &actions[0] {
+        for (key, item) in fields {
+            if key == "new" {
+                if let OjValue::Str(handle) = item {
+                    if handle.is_empty() || instances.iter().any(|(name, _)| name == handle) {
+                        return Err(format!("Duplicate or invalid design instance handle: {}", handle));
+                    }
+                    instances.push((handle.clone(), primary_pointer));
+                }
+            }
+        }
+    }
     let mut outputs: Vec<OjValue> = vec![OjValue::Null];
     let mut previous = OjValue::Null;
     for step in 1..actions.len() {
-        let (name, repeat) = match &actions[step] {
-            OjValue::Str(v) => (v.clone(), 1i64),
-            OjValue::Object(fields) => {
-                let mut call = String::new();
-                let mut count = 1i64;
-                for (key, item) in fields {
-                    if key == "call" {
-                        if let OjValue::Str(v) = item { call = v.clone(); }
-                    }
-                    if key == "repeat" {
-                        if let OjValue::Int(v) = item { count = *v; }
+        // A {"new": handle} action constructs another instance of the
+        // design class from this step's params row; constructors return
+        // nothing, so the recorded slot is null.
+        if let OjValue::Object(fields) = &actions[step] {
+            let mut new_handle: Option<String> = None;
+            for (key, item) in fields {
+                if key == "new" {
+                    if let OjValue::Str(handle) = item {
+                        new_handle = Some(handle.clone());
                     }
                 }
-                (call, count)
+            }
+            if let Some(handle) = new_handle {
+                if handle.is_empty() || instances.iter().any(|(name, _)| name == &handle) {
+                    return Err(format!("Duplicate or invalid design instance handle: {}", handle));
+                }
+                let row = match &params[step] { OjValue::Array(v) => v.clone(), _ => vec![] };
+                alive.push(Box::new(openoj_construct_@CLASS_NAME@(&row)?));
+                let pointer: *mut @CLASS_NAME@ = alive.last_mut().unwrap().as_mut() as *mut _;
+                instances.push((handle, pointer));
+                outputs.push(OjValue::Null);
+                previous = OjValue::Null;
+                continue;
+            }
+        }
+        let mut name = String::new();
+        let mut repeat = 1i64;
+        let mut on_handle: Option<String> = None;
+        match &actions[step] {
+            OjValue::Str(v) => name = v.clone(),
+            OjValue::Object(fields) => {
+                for (key, item) in fields {
+                    if key == "call" {
+                        if let OjValue::Str(v) = item { name = v.clone(); }
+                    }
+                    if key == "repeat" {
+                        if let OjValue::Int(v) = item { repeat = *v; }
+                    }
+                    if key == "on" {
+                        if let OjValue::Str(v) = item { on_handle = Some(v.clone()); }
+                    }
+                }
             }
             _ => return Err("Design action must be a string".to_string()),
-        };
+        }
+        let mut target = primary_pointer;
+        if let Some(handle) = &on_handle {
+            match instances.iter().find(|(name, _)| name == handle) {
+                Some((_, pointer)) => target = *pointer,
+                None => return Err(format!("Unknown design instance handle: {}", handle)),
+            }
+        }
         let raw_arguments = match &params[step] { OjValue::Array(v) => v.clone(), _ => vec![] };
         let mut call_arguments: Vec<OjValue> = Vec::with_capacity(raw_arguments.len());
-        for argument in &raw_arguments {
+        // Live instances ride this parallel slot vector: a {"$ref": handle}
+        // argument resolves to its pointer here, and the dispatch hands it
+        // over as &mut through the design class itself.
+        let mut instance_arguments: Vec<*mut @CLASS_NAME@> = vec![std::ptr::null_mut(); raw_arguments.len()];
+        for (slot, argument) in raw_arguments.iter().enumerate() {
             if let OjValue::Object(fields) = argument {
                 if fields.len() == 1 && fields[0].0 == "$prev" {
                     call_arguments.push(previous.clone());
                     continue;
                 }
+                if fields.len() == 1 && fields[0].0 == "$ref" {
+                    if let OjValue::Str(handle) = &fields[0].1 {
+                        match instances.iter().find(|(name, _)| name == handle) {
+                            Some((_, pointer)) => instance_arguments[slot] = *pointer,
+                            None => return Err(format!("Unknown design instance handle: {}", handle)),
+                        }
+                        call_arguments.push(argument.clone());
+                        continue;
+                    }
+                }
             }
             call_arguments.push(argument.clone());
         }
+        let solution: &mut @CLASS_NAME@ = unsafe { &mut *target };
         if repeat > 1 {
             let mut frequencies: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
             for _trial in 0..repeat {
-                let result = dispatch_@CLASS_NAME@(&mut solution, &name, &call_arguments)?;
+                let result = dispatch_@CLASS_NAME@(solution, &name, &call_arguments, &instance_arguments)?;
                 *frequencies.entry(openoj_json(&result)).or_insert(0) += 1;
             }
             let table = OjValue::Object(frequencies.into_iter().map(|(key, count)| {
@@ -157,7 +230,7 @@ fn openoj_run() -> Result<String, String> {
             outputs.push(table.clone());
             previous = table;
         } else {
-            let result = dispatch_@CLASS_NAME@(&mut solution, &name, &call_arguments)?;
+            let result = dispatch_@CLASS_NAME@(solution, &name, &call_arguments, &instance_arguments)?;
             outputs.push(result.clone());
             previous = result;
         }
@@ -190,11 +263,19 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
 
     constructor_convert = []
     needs_tree = any(spec["kind"] == "binary_tree" for spec in constructor_specs)
+    needs_nested = any(spec["kind"] == "nested" for spec in constructor_specs)
     for index, spec in enumerate(constructor_specs):
         constructor_convert.append(
-            f"    let openoj_ctor_{index}: {_rust_type(spec)} = {_design_convert(spec, f'&constructor_row[{index}]')};"
+            f"    let openoj_ctor_{index}: {_rust_type(spec)} = {_design_convert(spec, f'&row[{index}]')};"
         )
     constructor_args = ", ".join(f"openoj_ctor_{index}" for index in range(len(constructor_specs)))
+    # Construction is one generated helper so params[0] and any {"new":
+    # handle} action build instances through the same conversion.
+    construct_helper = (
+        f"fn openoj_construct_{class_name}(row: &[OjValue]) -> Result<{class_name}, String> {{\n"
+        + "\n".join(constructor_convert)
+        + f"\n    Ok({class_name}::new({constructor_args}))\n}}\n"
+    )
 
     dispatch_arms = []
     for method in invocation.get("methods", []):
@@ -205,14 +286,22 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
             for index, p in enumerate(method.get("parameters", []))
         ]
         needs_tree = needs_tree or any(spec["kind"] == "binary_tree" for spec in specs)
+        needs_nested = needs_nested or any(spec["kind"] == "nested" for spec in specs)
         args = ", ".join(
-            _design_convert(spec, f"&call_arguments[{index}]") for index, spec in enumerate(specs)
+            (f"unsafe {{ &mut *instance_arguments[{index}] }}"
+             if spec["kind"] == "instance"
+             else _design_convert(spec, f"&call_arguments[{index}]"))
+            for index, spec in enumerate(specs)
         )
         returns_tree = (
             method.get("return_type") is not None
             and method["return_type"].get("kind") == "binary_tree"
         )
         needs_tree = needs_tree or returns_tree
+        needs_nested = needs_nested or (
+            method.get("return_type") is not None
+            and method["return_type"].get("kind") == "nested"
+        )
         if returns_tree:
             dispatch_arms.append(
                 f'        "{name}" => Ok(openoj_design_tree_value(solution.{rust_name}({args}))),'
@@ -220,7 +309,8 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         else:
             dispatch_arms.append(f'        "{name}" => Ok(OjValue::oj_from(solution.{rust_name}({args}))),')
     dispatch = (
-        f"fn dispatch_{class_name}(solution: &mut {class_name}, name: &str, call_arguments: &[OjValue]) -> Result<OjValue, String> {{\n"
+        f"fn dispatch_{class_name}(solution: &mut {class_name}, name: &str, call_arguments: &[OjValue], "
+        f"instance_arguments: &[*mut {class_name}]) -> Result<OjValue, String> {{\n"
         "    match name {\n"
         + "\n".join(dispatch_arms)
         + f'\n        _ => Err(format!("Unknown design method: {{}}", name)),\n    }}\n}}\n'
@@ -245,20 +335,17 @@ impl OjFrom<Vec<Vec<i64>>> for OjValue { fn oj_from(rows: Vec<Vec<i64>>) -> OjVa
 
     provided_source = "".join(
         content + "\n"
-        for part in ("common", "provided")
-        for _, content in sorted((assembly or {}).get(part, {}).items())
+        for _, content in sorted((assembly or {}).get("provided", {}).items())
         if _.endswith(".rs")
     )
     code = re.sub(r"^\s*(?:pub )?struct Solution;\s*$\n?", "", code, flags=re.M)
 
     source = (
         WRAPPER_HEAD + "\n" + oj_from + "\n" + provided_source
-        + (TREE_HELPERS + "\n" if needs_tree else "") + code + "\n"
-        + dispatch + "\n"
-        + (MAIN_TEMPLATE
-           .replace("@CONSTRUCTOR_CONVERT@", "\n".join(constructor_convert))
-           .replace("@CONSTRUCTOR_ARGS@", constructor_args)
-           .replace("@CLASS_NAME@", class_name))
+        + (TREE_HELPERS + "\n" if needs_tree else "")
+        + (NESTED_HELPERS + "\n" if needs_nested else "") + code + "\n"
+        + construct_helper + "\n" + dispatch + "\n"
+        + MAIN_TEMPLATE.replace("@CLASS_NAME@", class_name)
     )
     source_path = job_root / "main.rs"
     executable = job_root / "solution"

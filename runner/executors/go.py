@@ -141,24 +141,18 @@ class GoExecutor(CompiledExecutor):
         random_tree_class = provided_node_class(invocation, "random_tree")
         item_type = go_type(struct_item_spec(invocation))
         item_expression = _read_expression(struct_item_spec(invocation), "reader")
-        # The assembled program compiles as one package: common-library and
-        # problem-provided sources land beside main.go as their own files
-        # (each already declares `package main`). When they are present the
-        # per-invocation type emission below is suppressed.
-        assembled_types = False
+        # The assembled program compiles as one package: the problem's own
+        # provided/ sources (every well-known structure a bundle's wire
+        # needs — docs/CODECS.md) land beside main.go as their own files
+        # (each already declares `package main`).
         assembly_paths = []
-        for part in ("common", "provided"):
-            for name, content in sorted((assembly or {}).get(part, {}).items()):
-                if not name.endswith(".go"):
-                    continue
-                part_path = job_root / f"{part}_{name}"
-                part_path.write_text(content, encoding="utf-8")
-                part_path.chmod(0o444)
-                assembly_paths.append(str(part_path))
-                assembled_types = True
-        # Struct classes arrive as source (the bank's common library or the
-        # problem's provided/); pre-assembly jobs fall back to generated
-        # equivalents below.
+        for name, content in sorted((assembly or {}).get("provided", {}).items()):
+            if not name.endswith(".go"):
+                continue
+            part_path = job_root / f"provided_{name}"
+            part_path.write_text(content, encoding="utf-8")
+            part_path.chmod(0o444)
+            assembly_paths.append(str(part_path))
         struct_specs: dict[str, dict[str, Any]] = {}
 
         def collect_structs(spec: Any) -> None:
@@ -172,170 +166,16 @@ class GoExecutor(CompiledExecutor):
         for spec in parameters:
             collect_structs(spec)
 
+        # Struct definitions arrive entirely as source from the problem's
+        # own provided/ (docs/CODECS.md: every wire kind names the class
+        # its bundle must ship) — the judge never generates a fallback
+        # definition of its own. struct_codecs below generates only the
+        # WIRE CODECS (reader methods, JSON conversion), which reference
+        # these types by name and compile against whatever the assembly
+        # provides.
         struct_decls = ""
         struct_codecs = ""
         result_conversion = "openojIdentity"
-        if not assembled_types and structs & LIST_NODE_KINDS:
-            struct_decls += textwrap.dedent(
-                f"""
-                type ListNode struct {{
-                    Val  {item_type}
-                    Next *ListNode
-                }}
-
-                """
-            )
-        if not assembled_types and structs & {"tree", "special_tree"}:
-            struct_decls += textwrap.dedent(
-                f"""
-                type TreeNode struct {{
-                    Val   {item_type}
-                    Left  *TreeNode
-                    Right *TreeNode
-                }}
-
-                """
-            )
-        if not assembled_types and structs & {"nary_tree", "nary_tree_nodes", "nary_tree_ref"}:
-            struct_decls += textwrap.dedent(
-                f"""
-                type Node struct {{
-                    Val      {item_type}
-                    Children []*Node
-                }}
-
-                """
-            )
-        if not assembled_types and "quad_tree" in structs:
-            struct_decls += textwrap.dedent(
-                """
-                type QuadNode struct {
-                    Val         bool
-                    IsLeaf      bool
-                    TopLeft     *QuadNode
-                    TopRight    *QuadNode
-                    BottomLeft  *QuadNode
-                    BottomRight *QuadNode
-                }
-
-                """
-            )
-        if not assembled_types and "nested" in structs:
-            struct_decls += textwrap.dedent(
-                """
-                type NestedInteger struct {
-                    integer  *int
-                    children []*NestedInteger
-                }
-
-                func NewNestedInteger(value int) NestedInteger {
-                    held := value
-                    return NestedInteger{integer: &held}
-                }
-                func (value NestedInteger) IsInteger() bool { return value.integer != nil }
-                func (value NestedInteger) GetInteger() int { return *value.integer }
-                func (value NestedInteger) GetList() []*NestedInteger { return value.children }
-                func (value *NestedInteger) SetInteger(newValue int) {
-                    held := newValue
-                    value.integer = &held
-                    value.children = nil
-                }
-                func (value *NestedInteger) Add(item NestedInteger) {
-                    value.integer = nil
-                    value.children = append(value.children, &item)
-                }
-
-                """
-            )
-        if not assembled_types and structs & NEXT_NODE_KINDS:
-            struct_decls += textwrap.dedent(
-                f"""
-                type NodeWithNext struct {{
-                    Val    {item_type}
-                    Left   *NodeWithNext
-                    Right  *NodeWithNext
-                    Next   *NodeWithNext
-                    Parent *NodeWithNext
-                }}
-
-                """
-            )
-        if not assembled_types and "multi_list" in structs:
-            struct_decls += textwrap.dedent(
-                f"""
-                type MultiListNode struct {{
-                    Val   {item_type}
-                    Prev  *MultiListNode
-                    Next  *MultiListNode
-                    Child *MultiListNode
-                }}
-
-                """
-            )
-        if not assembled_types and "graph" in structs:
-            struct_decls += textwrap.dedent(
-                f"""
-                type {graph_class} struct {{
-                    Val       {item_type}
-                    Neighbors []*{graph_class}
-                }}
-
-                """
-            )
-        if not assembled_types and "random_list" in structs:
-            struct_decls += textwrap.dedent(
-                f"""
-                type {random_class} struct {{
-                    Val    {item_type}
-                    Next   *{random_class}
-                    Random *{random_class}
-                }}
-
-                """
-            )
-        if not assembled_types and structs & {"doubly_list", "doubly_list_node"}:
-            # One open-chain shape per problem; both wire kinds decorate
-            # the same provided class, so deduplicate while keeping order.
-            for chain_class in dict.fromkeys(
-                name
-                for name, kind in (
-                    (doubly_class, "doubly_list"),
-                    (doubly_node_class, "doubly_list_node"),
-                )
-                if kind in structs
-            ):
-                struct_decls += textwrap.dedent(
-                    f"""
-                    type {chain_class} struct {{
-                        Val  {item_type}
-                        Prev *{chain_class}
-                        Next *{chain_class}
-                    }}
-
-                    """
-                )
-        if not assembled_types and "random_tree" in structs:
-            struct_decls += textwrap.dedent(
-                f"""
-                type {random_tree_class} struct {{
-                    Val    {item_type}
-                    Left   *{random_tree_class}
-                    Right  *{random_tree_class}
-                    Random *{random_tree_class}
-                }}
-
-                """
-            )
-        if not assembled_types:
-            for name, spec in sorted(struct_specs.items()):
-                fields = spec.get("fields") or []
-                width = max(len(field["name"]) for field in fields) + 1
-                body = "".join(
-                    f"    {field['name'].ljust(width)}{go_type(field['value_type'])}\n"
-                    for field in fields
-                )
-                struct_decls += f"type {name} struct {{\n{body}}}\n\n"
-
         if "list" in structs:
             struct_codecs += textwrap.dedent(
                 f"""

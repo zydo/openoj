@@ -131,18 +131,56 @@ templates).
 
 ## Wrapper types and the provided-class contract
 
-The problem set's `common/` library (`common/VERSION.json`, version 2)
-declares `ListNode`, `TreeNode`, `Node` (n-ary), `QuadNode`,
-`NestedInteger`, `NodeWithNext` (`val/left/right/next/parent`), and
-`MultiListNode` (`val/prev/next/child`) — assembled into every submission
-by the judge: executed into the python module namespace, compiled in the
-same java package, concatenated into the typed languages' translation
-units. Generated starters reference the names bare; solutions never
-define them; the editor never shows the implementations.
+**Every well-known data structure a bundle's wire touches is that
+bundle's own definition.** The judge holds no predefined data
+structures of its own — no shared library is assembled into a
+submission. Assembly reads exactly one well-known path,
+`provided/<language>/`, and nothing else (`docs/TRUST-BOUNDARIES.md`).
+This is deliberate, not an oversight: it keeps authoring simple (no
+"is there already a matching structure?" search before writing one),
+avoids naming collisions between bundles that use the same display
+name for structurally different shapes (a singly linked `Node` in one
+problem, a doubly linked `Node` in another), and keeps every language's
+import/include story flat — a bundle's own `provided/` files, nothing
+resolved from a repo-root package.
 
-Graph (LC 133) and random list (LC 138) nodes are deliberately NOT in
-`common/`: every bundle that needs them names its own class in the
-manifest and ships the sources in `provided/<language>/`:
+A wire kind or codec that needs a class names it by convention, and
+the bundle must ship a matching definition in every language it
+offers:
+
+| kind / codec | required class | shape |
+|---|---|---|
+| `linked_list`, `list_node(_array)`, `circular_list(_array)`, `alias_list` | `ListNode` | `val`, `next` |
+| `binary_tree`, `tree_node(_array)`, `special_tree` | `TreeNode` | `val`, `left`, `right` |
+| `nary_tree`, `nary_tree_nodes`, `nary_tree_ref` | `Node` | `val`, `children` |
+| `quad_tree` | `QuadNode` | `val`, `isLeaf`, `topLeft`, `topRight`, `bottomLeft`, `bottomRight` |
+| `nested` | `NestedInteger` | `isInteger`/`getInteger`/`setInteger`/`add`/`getList` |
+| `next_tree` | `NodeWithNext` | `val`, `left`, `right`, `next` (+`parent` for LC 510) |
+| `doubly_circular` | `NodeWithNext` | same shape, LC 426 ring (`left`=prev, `right`=next) |
+| `multi_list` | `MultiListNode` | `val`, `prev`, `next`, `child` |
+
+Copy these shapes from an exemplar bundle that already uses the kind
+(the authoring guide points at one per kind) — never hand-invent a
+shape, and never share one class across two bundles. A bundle whose
+wire needs a class it doesn't provide fails loudly at judge time,
+naming the missing class and pointing at this table.
+
+Java resolves each class reflectively (`Class.forName`, then
+constructor/field/method reflection) against the compiled job's own
+classpath — the compiled submission's classes always shadow anything
+else on the path. The Python harness resolves each class from the
+submission's own loaded module namespace (`getattr(module, name)`).
+The five compiled/generated-wrapper languages (C++, Go, Rust,
+JavaScript, TypeScript) reference every class purely by name in
+generated wire-codec source, compiled or run in the same unit as
+whatever the bundle's `provided/` defines — the generator itself never
+emits a fallback definition.
+
+Graph (LC 133) and random list (LC 138) nodes carry their OWN
+bundle-chosen name (not a fixed convention) because their identity is
+part of the LeetCode contract: every bundle that needs them names its
+own class in the manifest and ships the sources in
+`provided/<language>/`:
 
     "value_type": {"kind": "graph", "items": {"kind": "integer", "bits": 32},
                    "class": "GraphNode"}
@@ -246,6 +284,38 @@ tail bucket. Exact and statistical slots mix freely in one case, so
 `insert`/`remove` stay exactly judged alongside a sampled `getRandom`.
 Case authors should size `repeat` so each bucket expects a few hundred
 draws or more.
+
+### Multiple instances (`{"new": handle}`, `"on"`, `{"$ref": handle}`)
+
+LeetCode's sparse-vector pair (LC 1570) constructs **two** submitted
+objects and calls one with the other, so the replay can name instances:
+
+```json
+{
+    "input": {
+        "actions": [{"new": "v1"}, {"new": "v2"}, {"call": "dotProduct", "on": "v1"}],
+        "params": [[[1, 0, 0, 2, 3]], [[0, 3, 0, 4, 0]], [{"$ref": "v2"}]]
+    },
+    "expected": [null, null, 8]
+}
+```
+
+- `actions[0]` may be `{"new": "v1"}` instead of the class-name string:
+  the params[0] instance is registered under `v1`. Both forms construct
+  the primary instance; absent `"on"`, every method call targets it.
+- Any later `{"new": "v2"}` action constructs another instance from that
+  step's params row and records `null` (constructors return nothing).
+- `{"call": "dotProduct", "on": "v1"}` dispatches on the named instance;
+  the field composes with `"repeat"`.
+- An argument `{"$ref": "v2"}` passes the live object itself. It is only
+  valid on a parameter whose `value_type` is `{"kind": "instance"}` —
+  another instance of the design class. No object ever crosses the wire:
+  only the handle name does, and the language wrapper resolves it.
+
+Duplicate handles, unknown handles in `"on"`/`$ref`, and a `$ref` marker
+(or a plain value) reaching an `instance` parameter are hard errors in
+every language. Existing single-instance cases are untouched — the plain
+string action forms keep their meaning.
 
 ## Interactive problems (`type: "interactive"`)
 

@@ -25,9 +25,12 @@ proved.
   truncations, renumber scrape artifacts like `1a.`/`2b.`).
 - Tags VERBATIM from the crawl's Topics row (`—` => `[]`). Read the
   FULL constraints section before writing.
-- problem.json: schema_version 1, common_version 1 — except bundles
-  using any common-v2 node kind declare `"common_version": 2`.
-  `reference_solution` stays "" (one solution; no variants in extend);
+- problem.json: schema_version 2. Every well-known data structure the
+  wire needs (ListNode, TreeNode, ...) is copy-pasted into the bundle's
+  own `provided/<language>/` from an exemplar bundle using the same
+  kind (docs/CODECS.md has the wire→class→shape table) — never a shared
+  library, never hand-invented. `reference_solution` stays "" (one
+  solution; no variants in extend);
   difficulty "" always (hardness pass still pending — see the bank's
   problems-extend README).
 - Hidden cases >= 12 with named coverage; an independent ORACLE
@@ -88,9 +91,11 @@ Per-class laws that most often bite (details in CODECS.md):
   `parent`.
 - `graph` returns normalize (rows in value order, neighbors sorted) and
   are clone-checked — never return an input node.
-- graph/random_list/struct need per-bundle `provided/<language>/`
-  classes for ALL typed languages (go/ts/js/rust included); rust
-  provided sources use fully-qualified paths, no `use` lines.
+- Every well-known kind — not just graph/random_list/struct — needs
+  per-bundle `provided/<language>/` classes for every offered language
+  (go/ts/js/rust/cpp/java/python all included); the judge holds no
+  shared definitions of its own (docs/CODECS.md's wire→class table).
+  Rust provided sources use fully-qualified paths, no `use` lines.
 - Any-valid-output problems: name a judge-side validator
   (`{"mode": "validator", "name": ...}`) from the
   `api/app/validators.py` registry — validators are judge code, never

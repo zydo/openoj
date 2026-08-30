@@ -85,7 +85,7 @@ class ShellExecutorTests(unittest.TestCase):
                 "printf 'ok\\n'\n",
                 {"type": "shell", "comparison": "exact"},
                 {"output_kb": 7},
-                {"common": {}, "provided": {}},
+                {"provided": {}},
             )
             self.assertEqual("7", program.environment["OPENOJ_OUTPUT_KB"])
             self.assertEqual("solution.sh", Path(program.command[-1]).name)
@@ -101,7 +101,7 @@ class ShellExecutorTests(unittest.TestCase):
                     "true\n",
                     {"type": "shell"},
                     {},
-                    {"common": {"helper.sh": "true\n"}, "provided": {}},
+                    {"provided": {"helper.sh": "true\n"}},
                 )
 
 

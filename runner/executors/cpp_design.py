@@ -1,8 +1,10 @@
 """Design-kind wrapper generation for C++.
 
 Same protocol as js_design.py (reference: python_harness._invoke_design):
-actions + params, instance from params[0], $prev piping, randomized
-actions as frequency tables. The case travels as one tagged stream. The
+actions + params, instance from params[0] (plus {"new": handle}
+actions for further named instances, LC 1570's two-object wire), $prev
+piping, randomized actions as frequency tables. The case travels as one
+tagged stream. The
 wrapper decodes into OjValue and replays through a generated dispatch
 switch calling typed methods, with per-spec converters identical to the
 interactive module's.
@@ -111,33 +113,93 @@ int main() {
         const std::vector<OjValue>& actions = actions_value.items;
         const std::vector<OjValue>& params = params_value.items;
         std::vector<OjValue> constructor_row = params[0].kind == OjValue::Array ? params[0].items : std::vector<OjValue>{};
-@CONSTRUCTOR_CONVERT@
-        // Braces, not parentheses: `X solution();` with no constructor
-        // arguments would declare a function (most vexing parse).
-        @CLASS_NAME@ solution{@CONSTRUCTOR_ARGS@};
+        @CLASS_NAME@* solution = openoj_construct_@CLASS_NAME@(constructor_row);
+        // Named instances ({"new": handle} actions) live here for the whole
+        // replay; $ref arguments and "on" targets resolve through it. The
+        // primary instance from params[0] is registered when actions[0]
+        // names it, and stays the default target otherwise.
+        std::map<std::string, @CLASS_NAME@*> instances;
+        if (actions[0].kind == OjValue::Object) {
+            for (const auto& field : actions[0].fields) {
+                if (field.first == "new" && field.second.kind == OjValue::String) {
+                    if (field.second.text.empty() || instances.count(field.second.text)) {
+                        throw std::runtime_error("Duplicate or invalid design instance handle: " + field.second.text);
+                    }
+                    instances[field.second.text] = solution;
+                }
+            }
+        }
         std::vector<OjValue> outputs;
         outputs.push_back(OjValue());
         OjValue previous;
         for (size_t step = 1; step < actions.size(); ++step) {
+            // A {"new": handle} action constructs another instance of the
+            // design class from this step's params row; constructors return
+            // nothing, so the recorded slot is null.
+            if (actions[step].kind == OjValue::Object) {
+                bool is_new = false;
+                std::string new_handle;
+                for (const auto& field : actions[step].fields) {
+                    if (field.first == "new") {
+                        is_new = true;
+                        if (field.second.kind == OjValue::String) new_handle = field.second.text;
+                    }
+                }
+                if (is_new) {
+                    if (new_handle.empty() || instances.count(new_handle)) {
+                        throw std::runtime_error("Duplicate or invalid design instance handle: " + new_handle);
+                    }
+                    std::vector<OjValue> row = params[step].kind == OjValue::Array ? params[step].items : std::vector<OjValue>{};
+                    instances[new_handle] = openoj_construct_@CLASS_NAME@(row);
+                    outputs.push_back(OjValue());
+                    previous = OjValue();
+                    continue;
+                }
+            }
             std::string name;
             long long repeat = 1;
+            std::string on_handle;
+            bool has_on = false;
             if (actions[step].kind == OjValue::Object) {
                 for (const auto& field : actions[step].fields) {
                     if (field.first == "call" && field.second.kind == OjValue::String) name = field.second.text;
                     if (field.first == "repeat" && field.second.kind == OjValue::Int) repeat = field.second.integer;
+                    if (field.first == "on" && field.second.kind == OjValue::String) { on_handle = field.second.text; has_on = true; }
                 }
             } else if (actions[step].kind == OjValue::String) {
                 name = actions[step].text;
             } else {
                 throw std::runtime_error("Design action must be a string");
             }
+            @CLASS_NAME@* target = solution;
+            if (has_on) {
+                auto found = instances.find(on_handle);
+                if (found == instances.end()) {
+                    throw std::runtime_error("Unknown design instance handle: " + on_handle);
+                }
+                target = found->second;
+            }
             std::vector<OjValue> raw_arguments = params[step].kind == OjValue::Array ? params[step].items : std::vector<OjValue>{};
             std::vector<OjValue> call_arguments;
             call_arguments.reserve(raw_arguments.size());
-            for (const OjValue& argument : raw_arguments) {
+            // Live instances ride this parallel slot vector: a {"$ref":
+            // handle} argument resolves to its pointer here, and the
+            // dispatch reads it through the null-guarded helper instead of
+            // converting the wire object.
+            std::vector<@CLASS_NAME@*> instance_arguments(raw_arguments.size(), nullptr);
+            for (size_t slot = 0; slot < raw_arguments.size(); ++slot) {
+                const OjValue& argument = raw_arguments[slot];
                 if (argument.kind == OjValue::Object && argument.fields.size() == 1
                     && argument.fields[0].first == "$prev") {
                     call_arguments.push_back(previous);
+                } else if (argument.kind == OjValue::Object && argument.fields.size() == 1
+                    && argument.fields[0].first == "$ref") {
+                    auto found = instances.find(argument.fields[0].second.text);
+                    if (found == instances.end()) {
+                        throw std::runtime_error("Unknown design instance handle: " + argument.fields[0].second.text);
+                    }
+                    instance_arguments[slot] = found->second;
+                    call_arguments.push_back(argument);
                 } else {
                     call_arguments.push_back(argument);
                 }
@@ -145,7 +207,7 @@ int main() {
             if (repeat > 1) {
                 std::map<std::string, long long> frequencies;
                 for (long long trial = 0; trial < repeat; ++trial) {
-                    OjValue result = dispatch@CLASS_NAME@(solution, name, call_arguments);
+                    OjValue result = dispatch@CLASS_NAME@(*target, name, call_arguments, instance_arguments);
                     frequencies[openoj_json(result)] += 1;
                 }
                 OjValue table;
@@ -159,7 +221,7 @@ int main() {
                 outputs.push_back(table);
                 previous = table;
             } else {
-                OjValue result = dispatch@CLASS_NAME@(solution, name, call_arguments);
+                OjValue result = dispatch@CLASS_NAME@(*target, name, call_arguments, instance_arguments);
                 outputs.push_back(result);
                 previous = result;
             }
@@ -190,9 +252,23 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
     constructor_convert = []
     for index, spec in enumerate(constructor_specs):
         constructor_convert.append(
-            f"        {_design_type(spec)} openoj_ctor_{index} = {_design_convert(spec, f'constructor_row[{index}]')};"
+            f"        {_design_type(spec)} openoj_ctor_{index} = {_design_convert(spec, f'row[{index}]')};"
         )
     constructor_args = ", ".join(f"openoj_ctor_{index}" for index in range(len(constructor_specs)))
+    # Construction is one generated helper so params[0] and any {"new":
+    # handle} action build instances through the same conversion.
+    constructor_helper = (
+        f"static {class_name}* openoj_construct_{class_name}(const std::vector<OjValue>& row) {{\n"
+        + "\n".join(constructor_convert)
+        + f"\n    return new {class_name}({constructor_args});\n}}\n"
+        # Null-guarded live-instance handover: instance parameters ride the
+        # parallel pointer vector main fills from {"$ref": handle} markers.
+        + f"\nstatic {class_name}& openoj_instance_{class_name}({class_name}* pointer) {{\n"
+        + '    if (pointer == nullptr) {\n'
+        + '        throw std::runtime_error("Parameter must be a {\\"$ref\\": handle} instance reference");\n'
+        + "    }\n"
+        + "    return *pointer;\n}\n"
+    )
 
     needs_tree = any(spec["kind"] == "binary_tree" for spec in constructor_specs)
     dispatch_cases = []
@@ -205,7 +281,10 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         ]
         needs_tree = needs_tree or any(spec["kind"] == "binary_tree" for spec in specs)
         args = ", ".join(
-            _design_convert(spec, f"call_arguments[{index}]") for index, spec in enumerate(specs)
+            f"openoj_instance_{class_name}(instance_arguments[{index}])"
+            if spec["kind"] == "instance"
+            else _design_convert(spec, f"call_arguments[{index}]")
+            for index, spec in enumerate(specs)
         )
         returns = method.get("return_type")
         is_void = returns is None or returns.get("kind") == "void"
@@ -219,15 +298,15 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
             + " }"
         )
     dispatch = (
-        f"static OjValue dispatch{class_name}({class_name}& solution, const std::string& name, const std::vector<OjValue>& call_arguments) {{\n"
+        f"static OjValue dispatch{class_name}({class_name}& solution, const std::string& name, "
+        f"const std::vector<OjValue>& call_arguments, const std::vector<{class_name}*>& instance_arguments) {{\n"
         + "\n".join(dispatch_cases)
         + f'\n            throw std::runtime_error("Unknown design method: " + name);\n        }}\n'
     )
 
     provided_source = "".join(
         content + "\n"
-        for part in ("common", "provided")
-        for _, content in sorted((assembly or {}).get(part, {}).items())
+        for _, content in sorted((assembly or {}).get("provided", {}).items())
         if _.endswith((".hpp", ".cpp", ".h"))
     )
     # oj_from: converts common typed returns into OjValue
@@ -249,11 +328,9 @@ template <typename T> static OjValue oj_from(const std::vector<T>& values) {
         + oj_from + "\n"
         + provided_source + (TREE_HELPERS + "\n" if needs_tree else "")
         + code + "\n"
+        + constructor_helper + "\n"
         + dispatch + "\n"
-        + MAIN_TEMPLATE
-            .replace("@CONSTRUCTOR_CONVERT@", "\n".join(constructor_convert))
-            .replace("@CONSTRUCTOR_ARGS@", constructor_args)
-            .replace("@CLASS_NAME@", class_name)
+        + MAIN_TEMPLATE.replace("@CLASS_NAME@", class_name)
     )
     source_path = job_root / "main.cpp"
     executable = job_root / "solution"

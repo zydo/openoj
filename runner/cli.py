@@ -176,9 +176,11 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
     cases = json.loads((bundle / "cases.json").read_text(encoding="utf-8"))
     all_cases = cases.get("public", []) + cases.get("hidden", [])
 
-    # Judge-assembly: the common library plus the bundle's provided/
-    # sources compile/run with the submission, exactly as a live judge
-    # job would assemble them.
+    # Judge-assembly: the bundle's own provided/ sources compile/run with
+    # the submission, exactly as a live judge job would assemble them.
+    # Every well-known data structure a bundle's wire needs is the
+    # bundle's OWN provided/ source — the judge holds no predefined
+    # definitions of its own (docs/CODECS.md).
     LANGUAGE_DIRECTORIES = {
         "python3": "python",
         "java": "java",
@@ -188,38 +190,7 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
         "typescript": "typescript",
         "javascript": "javascript",
     }
-    assembly: dict[str, dict[str, str]] = {"common": {}, "provided": {}}
-    tools = next((c for c in TOOLS_CANDIDATES if (c / "scripts" / "gen_starters.py").exists()), None)
-    # versioned common-harness contract: the checkout's declared version
-    # must match what this image understands (see common/VERSION.json)
-    if tools is not None:
-        version_file = tools / "common" / "VERSION.json"
-        if version_file.is_file():
-            contract = json.loads(version_file.read_text(encoding="utf-8"))
-            if contract.get("schema") != 1:
-                raise SystemExit(
-                    f"common harness schema {contract.get('schema')!r} is newer than this image understands; update the image"
-                )
-            print(f"common harness v{contract.get('version')}")
-            # the per-bundle half: every problem.json declares the common
-            # version it was authored against; it may not exceed the checkout's
-            declared = problem.get("common_version")
-            if not isinstance(declared, int) or isinstance(declared, bool) or declared < 1:
-                raise SystemExit(
-                    "problem.json must declare a positive integer 'common_version' "
-                    "(the common-harness version it targets; see common/VERSION.json)"
-                )
-            if declared > contract["version"]:
-                raise SystemExit(
-                    f"bundle targets common harness v{declared}, this checkout ships v{contract['version']}"
-                )
-    common_root = tools / "common" if tools else None
-    for name, directory in LANGUAGE_DIRECTORIES.items():
-        common_dir = common_root / directory if common_root else None
-        if common_dir and common_dir.is_dir():
-            for path in sorted(common_dir.iterdir()):
-                if path.is_file():
-                    assembly["common"][path.name] = path.read_text(encoding="utf-8")
+    assembly: dict[str, dict[str, str]] = {"provided": {}}
     for language, directory in LANGUAGE_DIRECTORIES.items():
         provided_dir = bundle / "provided" / directory
         if provided_dir.is_dir():

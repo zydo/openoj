@@ -6,7 +6,7 @@ import tempfile
 
 sys.path.insert(0, "/runner")
 
-from leetcode_types import emit_protocol
+from protocol import emit_protocol
 
 PROTOCOL_PREFIX = "__OPENOJ_RESULT__"
 MAX_CAPTURED_STDERR = 16_384

@@ -1009,21 +1009,19 @@ class TypeScriptExecutor(CompiledExecutor):
             from .js_interactive import prepare_interactive
             return prepare_interactive(self, job_root, scratch, code, invocation, assembly, is_typescript=True)
         parameters, _, method = function_signature(invocation, self.language)
-        # With the assembled common library the type declarations arrive as
-        # source ahead of the submission; the per-invocation prelude below
-        # still covers pre-assembly jobs.
+        # Type declarations arrive entirely as source from the problem's
+        # own provided/ (docs/CODECS.md: every wire kind names the class
+        # its bundle must ship) — the judge never generates a fallback
+        # class definition of its own; only the wire-codec helper
+        # functions below survive the strip.
         assembly_prelude = "".join(
             content + "\n"
-            for part in ("common", "provided")
-            for name, content in sorted((assembly or {}).get(part, {}).items())
+            for name, content in sorted((assembly or {}).get("provided", {}).items())
             if name.endswith(".ts")
         )
         struct_prelude, struct_codecs = _struct_prelude(invocation)
-        if assembly_prelude:
-            # common/ provides the classes; keep the array-JSON helpers,
-            # which are wire codecs the library does not ship.
-            helpers = re.findall(r"function openoj\w+\([^)]*\): [^\n]*\{.*?\n\}", struct_prelude, re.S)
-            struct_prelude = "".join(helpers)
+        helpers = re.findall(r"function openoj\w+\([^)]*\): [^\n]*\{.*?\n\}", struct_prelude, re.S)
+        struct_prelude = "".join(helpers)
         result_wrapper = _result_wrapper(invocation)
         # Alias splices need the aliased list's nodes; clone checks need
         # every input node registered — read the parameters with that

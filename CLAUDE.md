@@ -33,7 +33,7 @@ the bettercode difficulty/tags scheme (`.localonly/alt/normalize_meta.py`).
 ## Bundle format (openoj-problems/FORMAT.md is authoritative)
 
     problems-adapt/<shard>/<id>_<slug>/
-      problem.json    schema_version, common_version, reference_solution,
+      problem.json    schema_version, reference_solution,
                       id, slug, title, difficulty, tags, invocation, limits
       cases.json      public[] + hidden[], {"input": [...], "expected": ...}
       statement.md    '# Title', '## Description' (### Example N, Constraints)
@@ -43,8 +43,12 @@ the bettercode difficulty/tags scheme (`.localonly/alt/normalize_meta.py`).
       solution.<ext>  canonical solution (the reference when
                       reference_solution == "")
       solution_<variant>.<ext>   named alternative solutions
-      provided/<lang>/   problem-specific oracle/helper sources (design and
-                      interactive kinds) assembled into every submission
+      provided/<lang>/   problem-specific sources assembled into every
+                      submission: oracle/helper code (design and interactive
+                      kinds) AND every well-known data structure the wire
+                      needs (ListNode, TreeNode, ...) — self-contained,
+                      copy-pasted from a sibling bundle, never a shared
+                      library (docs/CODECS.md has the wire→class table)
       figures/*.svg   statement/solutions figures
 
 Canonical JSON form (both repos, enforced by the image formatter):
@@ -52,15 +56,21 @@ Canonical JSON form (both repos, enforced by the image formatter):
 Markdown is hand-wrapped (~75 col); code follows each language's pinned
 formatter via the image.
 
-## Shared code and the versioned contract
+## Self-contained problem code (no shared library)
 
-- `common/<lang>/` (bank-owned) — the shared data-type vocabulary every
-  language compiles in: `ListNode`, `TreeNode`, n-ary `Node`. Narrow types
-  do NOT belong here — they live in the using problem's `provided/`.
-- `common/VERSION.json` declares `{schema, version, types, wire}`. Every
-  bundle's `problem.json` declares `"common_version": <n>` (required);
-  a bundle may not target a version newer than the checkout's — both the
-  authoring CLI and the live judge refuse to assemble it.
+- The judge owns no predefined data structures. Every well-known type a
+  bundle's wire needs — `ListNode`, `TreeNode`, n-ary `Node`, and the
+  rest of `docs/CODECS.md`'s wire→class table — is that bundle's own
+  definition in `provided/<lang>/`, exactly like narrow types (`Node`
+  for LC 133's graph, etc.) always were. This is deliberate: authors
+  never search a shared library before writing a structure, two bundles
+  using the same display name for structurally different shapes never
+  collide, and every language's import story stays flat (a bundle's own
+  files, nothing resolved from a repo-root package). Copy from a
+  sibling bundle using the same kind — never hand-invent a shape, never
+  share a definition across bundles.
+- There is no `common_version` field and no shared-library version to
+  track; `schema_version` alone versions the bundle format.
 - `reference_solution` (required string) designates the ONE time-cost
   baseline: `""` = the canonical `solution.<ext>`, a variant slug =
   `solution_<variant>.<ext>`. It is always the optimal approach — the
@@ -104,7 +114,7 @@ UI to a dedicated logged-out page.
 CLI (inside the runner image): `openoj format <files>` (formats in place;
 combine with hash-compare for a check), `openoj gen-starters`,
 `openoj judge <bundle>` (judges every `solution*.<ext>` through the real
-executors; also asserts the bundle's common_version).
+executors, assembling the bundle's own `provided/` sources).
 
 ## Authoring and verification loop
 
@@ -226,11 +236,13 @@ the gate bootstraps as admin on a fresh DB.
 ## Extending the problem set — checklist
 
 1. Adapt the statement (copyright-free, algorithm-identical), pick the
-   next id/slug, write problem.json (`common_version`: current,
-   `reference_solution`: "" initially), cases.json, statement.md.
+   next id/slug, write problem.json (`reference_solution`: "" initially),
+   cases.json, statement.md.
 2. gen_starters → starters; author the canonical solution ×7 languages
-   (fragment shape: the harness assembles common/ + provided/ + starter
-   context; mirror an existing bundle's files exactly).
+   (fragment shape: the harness assembles provided/ + starter context;
+   copy any well-known data structures the wire needs from a sibling
+   bundle into your own `provided/<lang>/` — never a shared library;
+   mirror an existing bundle's files exactly).
 3. verify_solution.py green → check.py green (in image) → in-image
    format → commit per conventions above.
 4. Second solution only when a genuinely distinct, competitive

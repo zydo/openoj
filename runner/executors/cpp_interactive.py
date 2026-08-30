@@ -396,8 +396,7 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
 
     provided_source = "".join(
         content + "\n"
-        for part in ("common", "provided")
-        for _, content in sorted((assembly or {}).get(part, {}).items())
+        for _, content in sorted((assembly or {}).get("provided", {}).items())
         if _.endswith((".hpp", ".cpp", ".h"))
     )
     main_source = (

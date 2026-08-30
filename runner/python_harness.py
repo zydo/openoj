@@ -13,22 +13,11 @@ from typing import Any
 # placed on the import path.
 sys.path.insert(0, "/runner")
 
-from leetcode_types import (
-    DoublyListNode,
-    GraphNode,
-    ListNode,
-    MultiListNode,
-    NestedInteger,
-    Node,
-    NodeWithNext,
-    QuadNode,
-    RandomListNode,
-    RandomTreeNode,
-    TreeNode,
+from leetcode_codecs import (
+    CLASS_BEARING_CODECS,
     binary_tree_nodes,
     chain_nodes,
     decode,
-    emit_protocol,
     encode,
     graph_nodes,
     parse_alias_list,
@@ -38,6 +27,7 @@ from leetcode_types import (
     serialize_random_list,
     serialize_random_tree,
 )
+from protocol import emit_protocol
 
 
 PROTOCOL_PREFIX = "__OPENOJ_RESULT__"
@@ -61,38 +51,22 @@ def _json_safe(value: Any, output_limit: int = 65_536) -> Any:
 
 
 def _load_solution(solution_path: Path, assembly_paths: list[Path] | None = None):
+    """Load the submission. Every well-known data structure a bundle's wire
+    needs (ListNode, TreeNode, ...) is the bundle's OWN provided/python/
+    source — the judge holds no fallback definitions. assembly_paths is the
+    bundle's provided/ sources (and any narrow oracle/helper classes),
+    exec'd into the submission's namespace ahead of it, so the submission
+    sees exactly one definition of each name it uses."""
     spec = importlib.util.spec_from_file_location("openoj_solution", solution_path)
     if spec is None or spec.loader is None:
         raise RuntimeError("Unable to load solution")
     module = importlib.util.module_from_spec(spec)
-    if assembly_paths:
-        # The assembled program: the problem set's common library and the
-        # problem's provided sources execute into the submission's
-        # namespace first, so the submission sees exactly one definition.
-        namespace = {"__name__": "openoj_assembly"}
-        for assembly_path in assembly_paths:
-            exec(compile(assembly_path.read_text(encoding="utf-8"), str(assembly_path), "exec"), namespace)
-        for name, value in namespace.items():
-            if not name.startswith("__"):
-                module.__dict__[name] = value
-    else:
-        # Jobs that predate the assembly model: the built-in fallback
-        # names, LeetCode-style.
-        module.__dict__.update(
-            {
-                "ListNode": ListNode,
-                "TreeNode": TreeNode,
-                "Node": Node,
-                "QuadNode": QuadNode,
-                "NestedInteger": NestedInteger,
-                "NodeWithNext": NodeWithNext,
-                "MultiListNode": MultiListNode,
-                "GraphNode": GraphNode,
-                "RandomListNode": RandomListNode,
-                "DoublyListNode": DoublyListNode,
-                "RandomTreeNode": RandomTreeNode,
-            }
-        )
+    namespace = {"__name__": "openoj_assembly"}
+    for assembly_path in assembly_paths or []:
+        exec(compile(assembly_path.read_text(encoding="utf-8"), str(assembly_path), "exec"), namespace)
+    for name, value in namespace.items():
+        if not name.startswith("__"):
+            module.__dict__[name] = value
     spec.loader.exec_module(module)
     return module
 
@@ -142,7 +116,7 @@ def _decode_function_arguments(
             alias = parameter.get("alias")
             if alias is None or not 0 <= int(alias) < index:
                 raise ValueError("alias_list requires an earlier aliased parameter")
-            arguments.append(parse_alias_list(value, arguments[int(alias)]))
+            arguments.append(parse_alias_list(module, value, arguments[int(alias)]))
             continue
         if codec == "nary_tree_ref":
             # A node of an earlier n-ary tree, named by its (unique) value:
@@ -153,7 +127,11 @@ def _decode_function_arguments(
                 raise ValueError("nary_tree_ref requires an earlier n-ary parameter")
             arguments.append(parse_nary_tree_ref(value, arguments[int(alias)]))
             continue
-        decoded = decode(value, codec)
+        # Class-bearing kinds (graph, random_list, ...) name their class on
+        # the value_type; every other kind resolves its class by naming
+        # convention (decode()'s per-codec default).
+        class_name = (value_type or {}).get("class") if codec in CLASS_BEARING_CODECS else None
+        decoded = decode(value, codec, module, class_name)
         if codec == "list_node":
             context.setdefault("list_heads", []).append(decoded)
         elif codec == "graph":
@@ -202,16 +180,29 @@ def _canonical_key(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def _method_codecs(invocation: dict[str, Any]) -> dict[str, tuple[list[str], str]]:
-    """Per-method (parameter codecs, return codec) from the manifest, so a
-    design method can take or return a ListNode/TreeNode just like a
-    function-invocation problem does."""
-    table: dict[str, tuple[list[str], str]] = {}
+def _method_codecs(
+    invocation: dict[str, Any],
+) -> dict[str, tuple[list[str], str, list[str], list[str | None]]]:
+    """Per-method (parameter codecs, return codec, parameter kinds, parameter
+    class names) from the manifest, so a design method can take or return a
+    ListNode/TreeNode just like a function-invocation problem does, so an
+    "instance" parameter (another live object of the design class) can be
+    recognized, and so a class-bearing kind (graph, random_list, ...)
+    resolves the bundle's own class name."""
+    table: dict[str, tuple[list[str], str, list[str], list[str | None]]] = {}
     for method in invocation.get("methods", []):
         parameter_codecs = [
             parameter.get("codec", "json") for parameter in method.get("parameters", [])
         ]
-        table[method["name"]] = (parameter_codecs, method.get("return_codec", "json"))
+        value_types = [parameter.get("value_type") or {} for parameter in method.get("parameters", [])]
+        parameter_kinds = [value_type.get("kind", "json") for value_type in value_types]
+        parameter_class_names = [value_type.get("class") for value_type in value_types]
+        table[method["name"]] = (
+            parameter_codecs,
+            method.get("return_codec", "json"),
+            parameter_kinds,
+            parameter_class_names,
+        )
     return table
 
 
@@ -224,51 +215,117 @@ def _resolve_pipe(value: Any, output: list[Any]) -> Any:
     return value
 
 
+def _reference_marker(value: Any) -> str | None:
+    """{"$ref": handle} names a live design instance (multi-instance replay,
+    LC 1570): the handle is resolved to the object itself, never decoded."""
+    if isinstance(value, dict) and set(value) == {"$ref"} and isinstance(value["$ref"], str):
+        return value["$ref"]
+    return None
+
+
 def _invoke_design(module, invocation: dict[str, Any], raw_input: Any) -> Any:
     actions = raw_input["actions"]
     params = raw_input["params"]
     if not actions or len(actions) != len(params):
         raise ValueError("Design input requires equally sized actions and params")
     codecs = _method_codecs(invocation)
-    constructor_codecs = [
-        parameter.get("codec", "json")
-        for parameter in invocation.get("constructor", {}).get("parameters", [])
-    ]
-    constructor_arguments = [
-        decode(value, constructor_codecs[index] if index < len(constructor_codecs) else "json")
-        for index, value in enumerate(params[0])
-    ]
-    instance = getattr(module, invocation["class_name"])(*constructor_arguments)
+    constructor_parameters = invocation.get("constructor", {}).get("parameters", [])
+    constructor_codecs = [parameter.get("codec", "json") for parameter in constructor_parameters]
+    constructor_value_types = [parameter.get("value_type") or {} for parameter in constructor_parameters]
+    entry_class = getattr(module, invocation["class_name"])
+
+    def construct(row: Any) -> Any:
+        arguments = []
+        for index, value in enumerate(row):
+            codec = constructor_codecs[index] if index < len(constructor_codecs) else "json"
+            value_type = constructor_value_types[index] if index < len(constructor_value_types) else {}
+            class_name = value_type.get("class") if codec in CLASS_BEARING_CODECS else None
+            arguments.append(decode(value, codec, module, class_name))
+        return entry_class(*arguments)
+
+    # Named instances ({"new": handle} actions) live here for the whole
+    # replay; $ref arguments and "on" targets resolve through it. The
+    # primary instance from params[0] is registered when actions[0] names
+    # it, and stays the default target otherwise.
+    instances: dict[str, Any] = {}
+    if isinstance(actions[0], dict) and "new" in actions[0]:
+        primary_handle = actions[0]["new"]
+        if not isinstance(primary_handle, str) or not primary_handle:
+            raise ValueError('Design action {"new": ...} needs a string handle')
+        if primary_handle in instances:
+            raise ValueError(f"Duplicate design instance handle {primary_handle!r}")
+        instances[primary_handle] = construct(params[0])
+    else:
+        primary_handle = None
+        primary = construct(params[0])
     output = [None]
     # Raw (undecoded, unencoded) returns feed piped arguments, so a piped
     # value crosses methods as the live object rather than its wire form.
     raw_output: list[Any] = [None]
-    for action, arguments in zip(actions[1:], params[1:]):
-        # A repeated action ({"call": name, "repeat": K}) is a randomized
-        # method under statistical judging: the harness invokes it K times
-        # and reports a frequency table keyed by the canonical JSON of each
-        # returned value, which the judge compares against the expected
-        # distribution.
+    for step, (action, arguments) in enumerate(zip(actions[1:], params[1:]), start=1):
+        # A {"new": handle} action constructs another instance of the design
+        # class from this step's params row; constructors return nothing.
+        if isinstance(action, dict) and "new" in action:
+            handle = action["new"]
+            if not isinstance(handle, str) or not handle:
+                raise ValueError('Design action {"new": ...} needs a string handle')
+            if handle in instances or handle == primary_handle:
+                raise ValueError(f"Duplicate design instance handle {handle!r}")
+            instances[handle] = construct(arguments)
+            output.append(None)
+            raw_output.append(None)
+            continue
+        target = instances.get(primary_handle) if primary_handle is not None else primary
+        # A repeated action ({"call": name, "repeat": K, "on": handle}) is a
+        # randomized method under statistical judging: the harness invokes it
+        # K times and reports a frequency table keyed by the canonical JSON
+        # of each returned value, which the judge compares against the
+        # expected distribution.
         repeat = 1
         if isinstance(action, dict):
             repeat = int(action.get("repeat", 1))
+            if "on" in action:
+                handle = action["on"]
+                if handle not in instances:
+                    raise ValueError(f"Unknown design instance handle {handle!r}")
+                target = instances[handle]
             action = action["call"]
-        parameter_codecs, return_codec = codecs.get(action, ([], "json"))
-        decoded = [
-            _resolve_pipe(argument, raw_output)
-            if isinstance(argument, dict) and set(argument) == {"$prev"}
-            else decode(argument, parameter_codecs[index] if index < len(parameter_codecs) else "json")
-            for index, argument in enumerate(arguments)
-        ]
+        parameter_codecs, return_codec, parameter_kinds, parameter_class_names = codecs.get(
+            action, ([], "json", [], [])
+        )
+        decoded = []
+        for index, argument in enumerate(arguments):
+            if isinstance(argument, dict) and set(argument) == {"$prev"}:
+                decoded.append(_resolve_pipe(argument, raw_output))
+                continue
+            handle = _reference_marker(argument)
+            expects_instance = index < len(parameter_kinds) and parameter_kinds[index] == "instance"
+            if handle is not None or expects_instance:
+                if handle is None or not expects_instance:
+                    raise ValueError(
+                        f'Design action {step} parameter {index + 1}: {{"$ref": handle}}'
+                        " instance references are only valid on an instance parameter"
+                    )
+                if handle not in instances:
+                    raise ValueError(f"Unknown design instance handle {handle!r}")
+                decoded.append(instances[handle])
+                continue
+            codec = parameter_codecs[index] if index < len(parameter_codecs) else "json"
+            class_name = (
+                parameter_class_names[index]
+                if codec in CLASS_BEARING_CODECS and index < len(parameter_class_names)
+                else None
+            )
+            decoded.append(decode(argument, codec, module, class_name))
         if repeat <= 1:
-            value = getattr(instance, action)(*decoded)
+            value = getattr(target, action)(*decoded)
             raw_output.append(value)
             output.append(encode(value, return_codec))
             continue
         counts: dict[str, int] = {}
         last = None
         for _ in range(repeat):
-            last = getattr(instance, action)(*decoded)
+            last = getattr(target, action)(*decoded)
             key = _canonical_key(encode(last, return_codec))
             counts[key] = counts.get(key, 0) + 1
         raw_output.append(last)

@@ -72,135 +72,19 @@ class CppExecutor(CompiledExecutor):
 
         for spec in parameters:
             collect_structs(spec)
-        # With the assembled common library the types arrive as source;
-        # without it (pre-assembly jobs) the per-invocation emission below
-        # still applies.
+        # Struct definitions arrive entirely as source from the problem's
+        # own provided/ (docs/CODECS.md: every wire kind names the class
+        # its bundle must ship) — the judge never generates a fallback
+        # definition of its own. assembly_decls is embedded verbatim into
+        # the compiled unit below; struct_codecs generates only the WIRE
+        # CODECS (read/write templates), which reference these types by
+        # name and compile against whatever the assembly provides.
         assembly_decls = "".join(
             content
-            for part in ("common", "provided")
-            for name, content in sorted((assembly or {}).get(part, {}).items())
+            for name, content in sorted((assembly or {}).get("provided", {}).items())
             if name.endswith((".hpp", ".h", ".cpp"))
         )
         struct_decls = ""
-        if not assembly_decls and ("list" in structs or "circular_list" in structs):
-            struct_decls += (
-                "struct ListNode { "
-                f"{cpp_type(item_spec)} val; ListNode *next; "
-                f"explicit ListNode({cpp_type(item_spec)} x) : val(x), next(nullptr) {{}} }};\n"
-            )
-        if not assembly_decls and "tree" in structs:
-            struct_decls += (
-                "struct TreeNode { "
-                f"{cpp_type(item_spec)} val; TreeNode *left; TreeNode *right; "
-                f"explicit TreeNode({cpp_type(item_spec)} x) : val(x), left(nullptr), right(nullptr) {{}} }};\n"
-            )
-        if not assembly_decls and "nary_tree" in structs:
-            struct_decls += (
-                "struct Node { "
-                f"{cpp_type(item_spec)} val; std::vector<Node*> children; "
-                f"explicit Node({cpp_type(item_spec)} x) : val(x) {{}} "
-                f"Node({cpp_type(item_spec)} x, std::vector<Node*> c) : val(x), children(std::move(c)) {{}} }};\n"
-            )
-        if not assembly_decls and "quad_tree" in structs:
-            struct_decls += (
-                "struct QuadNode { bool val; bool isLeaf; "
-                "QuadNode *topLeft, *topRight, *bottomLeft, *bottomRight; "
-                "QuadNode(bool v, bool l) : val(v), isLeaf(l), topLeft(nullptr), topRight(nullptr), "
-                "bottomLeft(nullptr), bottomRight(nullptr) {} "
-                "QuadNode(bool v, bool l, QuadNode* tl, QuadNode* tr, QuadNode* bl, QuadNode* br) : "
-                "val(v), isLeaf(l), topLeft(tl), topRight(tr), bottomLeft(bl), bottomRight(br) {} };\n"
-            )
-        if not assembly_decls and "nested" in structs:
-            struct_decls += (
-                "class NestedInteger { "
-                "bool held; long long integer; std::vector<NestedInteger> list; "
-                "public: NestedInteger() : held(false), integer(0) {} "
-                "NestedInteger(long long value) : held(true), integer(value) {} "
-                "bool isInteger() const { return held; } "
-                "long long getInteger() const { return integer; } "
-                "void setInteger(long long value) { held = true; integer = value; list.clear(); } "
-                "void add(const NestedInteger& item) { held = false; list.push_back(item); } "
-                "const std::vector<NestedInteger>& getList() const { return list; } };\n"
-            )
-        if not assembly_decls and "next_tree" in structs:
-            struct_decls += (
-                "struct NodeWithNext { "
-                f"{cpp_type(item_spec)} val; NodeWithNext *left, *right, *next, *parent; "
-                f"explicit NodeWithNext({cpp_type(item_spec)} x) : val(x), left(nullptr), right(nullptr), "
-                "next(nullptr), parent(nullptr) {} };\n"
-            )
-        if not assembly_decls and "doubly_circular" in structs:
-            # Same shape as the next-connected node (left is prev there,
-            # right is next; here left is prev and right is next).
-            struct_decls += (
-                "struct NodeWithNext { "
-                f"{cpp_type(item_spec)} val; NodeWithNext *left, *right, *next, *parent; "
-                f"explicit NodeWithNext({cpp_type(item_spec)} x) : val(x), left(nullptr), right(nullptr), "
-                "next(nullptr), parent(nullptr) {} };\n"
-            )
-        if not assembly_decls and "multi_list" in structs:
-            struct_decls += (
-                "struct MultiListNode { "
-                f"{cpp_type(item_spec)} val; MultiListNode *prev, *next, *child; "
-                f"explicit MultiListNode({cpp_type(item_spec)} x) : val(x), prev(nullptr), next(nullptr), "
-                "child(nullptr) {} };\n"
-            )
-        if not assembly_decls and "graph" in structs:
-            struct_decls += (
-                "struct Node { "
-                f"{cpp_type(item_spec)} val; std::vector<Node*> neighbors; "
-                f"Node() : val(0), neighbors() {{}} "
-                f"explicit Node({cpp_type(item_spec)} x) : val(x), neighbors() {{}} "
-                f"Node({cpp_type(item_spec)} x, std::vector<Node*> n) : val(x), neighbors(std::move(n)) {{}} }};\n"
-            ).replace("Node", graph_class)
-        if not assembly_decls and "random_list" in structs:
-            struct_decls += (
-                "struct Node { "
-                f"{cpp_type(item_spec)} val; Node *next, *random; "
-                f"Node() : val(0), next(nullptr), random(nullptr) {{}} "
-                f"explicit Node({cpp_type(item_spec)} x) : val(x), next(nullptr), random(nullptr) {{}} "
-                f"Node({cpp_type(item_spec)} x, Node* n, Node* r) : val(x), next(n), random(r) {{}} }};\n"
-            ).replace("Node", random_class)
-        if not assembly_decls and ("doubly_list" in structs or "doubly_list_node" in structs):
-            # LC 3263/3294: the open doubly chain's node (a bundle uses one
-            # list kind, so one chain shape serves either).
-            chain_class = doubly_class if "doubly_list" in structs else doubly_node_class
-            struct_decls += (
-                "struct Node { "
-                f"{cpp_type(item_spec)} val; Node *prev, *next; "
-                f"Node() : val(0), prev(nullptr), next(nullptr) {{}} "
-                f"explicit Node({cpp_type(item_spec)} x) : val(x), prev(nullptr), next(nullptr) {{}} }};\n"
-            ).replace("Node", chain_class)
-        if not assembly_decls and "random_tree" in structs:
-            # LC 1485: a binary-tree node carrying a random pointer.
-            struct_decls += (
-                "struct Node { "
-                f"{cpp_type(item_spec)} val; Node *left, *right, *random; "
-                f"Node() : val(0), left(nullptr), right(nullptr), random(nullptr) {{}} "
-                f"explicit Node({cpp_type(item_spec)} x) : val(x), left(nullptr), right(nullptr), "
-                "random(nullptr) {} };\n"
-            ).replace("Node", random_tree_class)
-        if not assembly_decls and struct_specs:
-            for name, spec in struct_specs.items():
-                fields = spec.get("fields") or []
-                members = " ".join(
-                    f"{cpp_type(field['value_type'])} {field['name']};"
-                    for field in fields
-                )
-                ctor_params = ", ".join(
-                    f"{cpp_type(field['value_type'])} {field['name']}_"
-                    for field in fields
-                )
-                ctor_init = ", ".join(
-                    f"{field['name']}({field['name']}_)" for field in fields
-                )
-                struct_decls += (
-                    f"struct {name} {{ "
-                    f"{members} "
-                    f"{name}() = default; "
-                    f"{name}({ctor_params}) : {ctor_init} {{}} }};\n"
-                )
-
         struct_codecs = ""
         # The registry of input-side node pointers backs the clone/identity
         # checks for graph, random_list, and alias_list returns: the judge
