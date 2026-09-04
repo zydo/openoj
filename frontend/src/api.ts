@@ -9,8 +9,8 @@ export class ApiError extends Error {
   }
 }
 
-// Set by App: any 401 (idle-expired guest session) routes the app back to the
-// Continue-as-guest entrance.
+// Set by App: a 401 on an active session (idle expiry) routes the app to the
+// logged-out page.
 let unauthorizedHandler: (() => void) | null = null;
 
 export function onUnauthorized(handler: () => void) {
@@ -25,7 +25,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (!response.ok) {
     if (response.status === 401) unauthorizedHandler?.();
     const payload = await response.json().catch(() => null);
-    throw new ApiError(payload?.detail || `Request failed with status ${response.status}`, response.status);
+    // FastAPI validation errors carry detail as an array — stringify
+    // instead of letting it render as "[object Object]".
+    const detail = payload?.detail;
+    const message = typeof detail === "string" && detail
+      ? detail
+      : Array.isArray(detail)
+        ? detail.map((entry: { msg?: string }) => entry?.msg ?? "").join("; ").trim()
+        : "";
+    throw new ApiError(message || `Request failed with status ${response.status}`, response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -35,6 +43,9 @@ export type SessionStatus = {
   idle_seconds: number;
   user: { username: string; is_admin: boolean } | null;
 };
+// POST /auth/register and /auth/login answer with the account, not a
+// session payload (the idle window lives on SessionStatus alone).
+export type AuthResult = { status: string; username: string; is_admin: boolean };
 export type DraftRow = { language: string; code: string; updated_at: number };
 
 export const api = {
@@ -46,13 +57,13 @@ export const api = {
     request<SessionStatus>("/session", { method: "POST" }),
   authStatus: (): Promise<{ needs_setup: boolean }> =>
     request<{ needs_setup: boolean }>("/auth/status"),
-  register: (username: string, password: string): Promise<SessionStatus> =>
-    request<SessionStatus>("/auth/register", {
+  register: (username: string, password: string): Promise<AuthResult> =>
+    request<AuthResult>("/auth/register", {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
-  login: (username: string, password: string): Promise<SessionStatus & { username: string; is_admin: boolean }> =>
-    request<SessionStatus & { username: string; is_admin: boolean }>("/auth/login", {
+  login: (username: string, password: string): Promise<AuthResult> =>
+    request<AuthResult>("/auth/login", {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
@@ -68,13 +79,18 @@ export const api = {
     request<SolutionsContent>(`/problems/${encodeURIComponent(slug)}/solutions`),
   getDrafts: (slug: string): Promise<DraftRow[]> =>
     request<DraftRow[]>(`/drafts/${encodeURIComponent(slug)}`),
-  putDraft: (slug: string, language: string, code: string) =>
-    request<{ status: string }>(`/drafts/${encodeURIComponent(slug)}/${encodeURIComponent(language)}`, {
+  putDraft: (slug: string, language: string, code: string) => {
+    const body = JSON.stringify({ code });
+    // keepalive requests are capped at 64 KiB by the fetch spec and the
+    // PUT would then throw before reaching the server — only use it for
+    // small payloads, where surviving tab teardown matters and the cap
+    // cannot bite.
+    return request<{ status: string }>(`/drafts/${encodeURIComponent(slug)}/${encodeURIComponent(language)}`, {
       method: "PUT",
-      body: JSON.stringify({ code }),
-      // Survive the tab being torn down right after a flush.
-      keepalive: true,
-    }),
+      body,
+      keepalive: body.length < 48 * 1024,
+    });
+  },
   run: (slug: string, language: string, code: string, cases: Record<string, unknown>[]) =>
     request<JudgeResult>("/run", {
       method: "POST",

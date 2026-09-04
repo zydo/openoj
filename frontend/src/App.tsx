@@ -145,7 +145,7 @@ function formatJson(value: unknown) {
 
 function formatTolerance(tolerance: number | undefined) {
   const value = tolerance ?? 1e-9;
-  return value >= 0.001 ? String(value) : `1e${Math.round(Math.log10(value))}`;
+  return value >= 0.001 ? String(value) : value.toExponential(0);
 }
 
 function App() {
@@ -175,6 +175,12 @@ function App() {
   // guest): fetched once a session is active, updated after each submit.
   const [progress, setProgress] = useState<Record<string, "attempted" | "solved">>({});
   const [activeSlug, setActiveSlug] = useState<string | null>(slugFromPath);
+  // Mirror of activeSlug kept in a ref so in-flight run/submit continuations
+  // can detect that the user navigated to another problem mid-judge (state
+  // alone is stale inside the awaited closure).
+  const activeSlugRef = useRef<string | null>(slugFromPath());
+  const sessionPhaseRef = useRef(sessionPhase);
+  sessionPhaseRef.current = sessionPhase;
   const [problem, setProblem] = useState<Problem | null>(null);
   const [loadError, setLoadError] = useState("");
   const [language, setLanguage] = useState<string>(storedLanguage);
@@ -251,15 +257,20 @@ function App() {
   // Any 401 once the app is running (idle expiry mid-use, or the idle
   // watcher's touch-free probe agreeing with the server) leaves the current
   // view for the dedicated logged-out page. The phase guard keeps the
-  // expected first-visit 401 from reading as an expiry.
+  // expected first-visit 401 from reading as an expiry: only an ACTIVE
+  // session can expire, so outside it (first visit, login screen) the 401
+  // is left to the caller — this keeps shared /problems/<slug> links
+  // intact through the sign-in round-trip.
   useEffect(() => {
     onUnauthorized(() => {
+      if (sessionPhaseRef.current !== "active") return;
       flushDrafts();
       draftCache.current.clear();
       pendingDrafts.current.clear();
       setExpiredAsUser(sessionUser !== null);
       setSessionUser(null);
       setProgress({});
+      activeSlugRef.current = null;
       setActiveSlug(null);
       // leave the problem URL behind too, so refresh/back lands on the
       // logged-out page, not the dead view
@@ -323,13 +334,11 @@ function App() {
 
   const registerAccount = useCallback((username: string, password: string) => {
     api.register(username, password)
-      .then((session) => {
-        idleSecondsRef.current = session.idle_seconds || idleSecondsRef.current;
-        return api.authStatus();
-      })
-      .then((status) => {
+      .then((session) => api.authStatus().then((status) => {
         setNeedsSetup(status.needs_setup);
-        setSessionUser({ username: username === "admin" ? "admin" : username, is_admin: status.needs_setup ? false : username === "admin" });
+        setSessionUser({ username: session.username, is_admin: session.is_admin });
+      }))
+      .then(() => {
         setGateError("");
         setSessionExpired(false);
         setSessionPhase("active");
@@ -341,7 +350,6 @@ function App() {
     api.startSession()
       .then(() => api.login(username, password))
       .then((result) => {
-        idleSecondsRef.current = result.idle_seconds || idleSecondsRef.current;
         setSessionUser({ username: result.username, is_admin: result.is_admin });
         setGateError("");
         setSessionExpired(false);
@@ -406,10 +414,15 @@ function App() {
       setProblemsError(error.message);
     });
   }, []);
+  const retryProblems = useCallback(() => {
+    setProblemsError("");
+    ensureProblems();
+  }, [ensureProblems]);
 
   // Keep activeSlug in sync with the URL when the user navigates back/forward.
   useEffect(() => {
     const onPopState = () => {
+      activeSlugRef.current = slugFromPath();
       setActiveSlug(slugFromPath());
       setProblemListOpen(false);
     };
@@ -420,12 +433,14 @@ function App() {
   const openProblem = useCallback((slug: string) => {
     if (slug === activeSlug) return;
     window.history.pushState(null, "", `/problems/${slug}`);
+    activeSlugRef.current = slug;
     setActiveSlug(slug);
   }, [activeSlug]);
 
   const goHome = useCallback(() => {
     if (activeSlug === null) return;
     window.history.pushState(null, "", "/");
+    activeSlugRef.current = null;
     setActiveSlug(null);
     setProblemListOpen(false);
   }, [activeSlug]);
@@ -508,19 +523,26 @@ function App() {
       setBottomTab("testcase");
       return;
     }
+    const slug = problem.slug;
     setBusy(mode);
     setActionError("");
     setBottomTab("result");
     setResult(null);
     try {
       const response = mode === "run"
-        ? await api.run(problem.slug, language, code, parsedCases!)
-        : await api.submit(problem.slug, language, code);
+        ? await api.run(slug, language, code, parsedCases!)
+        : await api.submit(slug, language, code);
+      if (activeSlugRef.current !== slug) return; // user moved on mid-judge
       setResult(response);
       if (mode === "submit") {
         refreshSubmissions();
         const state = response.status === "accepted" ? "solved" : "attempted";
-        setProgress((previous) => ({ ...previous, [problem.slug]: state }));
+        // the server's mark is sticky (solved forever once accepted) — a
+        // failed resubmission must not downgrade the list badge
+        setProgress((previous) => ({
+          ...previous,
+          [slug]: state === "attempted" && previous[slug] === "solved" ? "solved" : state,
+        }));
       }
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "The judge could not complete this request.");
@@ -569,9 +591,11 @@ function App() {
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
   };
 
   const dragVertical = (event: React.PointerEvent) => {
@@ -583,9 +607,11 @@ function App() {
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
   };
 
   if (sessionPhase !== "active") {
@@ -599,17 +625,16 @@ function App() {
           theme={theme}
           onToggleTheme={toggleTheme}
           onSignIn={() => { setGateEntryMode("login"); setSessionPhase("gate"); }}
-          onCreateAccount={() => { setGateEntryMode("signup"); setSessionPhase("gate"); }}
           onGuest={() => { setGateEntryMode("welcome"); setSessionPhase("gate"); }}
         />
       );
     }
     return <GuestGate expired={sessionExpired} error={gateError} needsSetup={needsSetup} entryMode={gateEntryMode} onEnter={enterAsGuest} onRegister={registerAccount} onLogin={loginAccount} theme={theme} onToggleTheme={toggleTheme} />;
   }
-  if (loadError) return <FullPageMessage icon={<CircleAlert />} title="OpenOJ could not load" detail={loadError} />;
-  if (activeSlug === null) return <Landing theme={theme} onToggleTheme={toggleTheme} onOpen={openProblem} onLogout={logoutAccount} progress={progress} />;
+  if (loadError) return <FullPageMessage icon={<CircleAlert />} title="OpenOJ could not load" detail={loadError} action={{ label: "Back to problems", onClick: goHome }} />;
+  if (activeSlug === null) return <Landing theme={theme} onToggleTheme={toggleTheme} onOpen={openProblem} onLogout={logoutAccount} progress={progress} seed={allProblems} />;
   if (problemsError && allProblems === null) {
-    return <FullPageMessage icon={<CircleAlert />} title="The problem set could not load" detail={problemsError} />;
+    return <FullPageMessage icon={<CircleAlert />} title="The problem set could not load" detail={problemsError} action={{ label: "Try again", onClick: retryProblems }} />;
   }
   if (!problem || !allProblems) return <FullPageMessage icon={<LoaderCircle className="spin" />} title="Preparing the judge bench" detail="Loading problem resources…" />;
 
@@ -740,13 +765,13 @@ function App() {
             </article>
           ) : leftTab === "solutions" ? (
             <Solutions
-            key={problem.slug}
-            slug={problem.slug}
-            language={language}
-            languages={problem.languages}
-            theme={theme}
-            onLanguageChange={setLanguage}
-          />
+              key={problem.slug}
+              slug={problem.slug}
+              language={language}
+              languages={problem.languages}
+              theme={theme}
+              onLanguageChange={(key) => problem.languages[key]?.enabled && setLanguage(key)}
+            />
           ) : (
             <Submissions submissions={submissions} problem={problem} />
           )}
@@ -1102,48 +1127,62 @@ function pageNumbers(current: number, pages: number): Array<number | "ellipsis-s
   return numbers;
 }
 
-function Landing({ theme, onToggleTheme, onOpen, onLogout, progress }: {
+function Landing({ theme, onToggleTheme, onOpen, onLogout, progress, seed }: {
   theme: Theme;
   onToggleTheme: () => void;
   onOpen: (slug: string) => void;
   onLogout: () => void;
   progress: Record<string, "attempted" | "solved">;
+  seed: ProblemSummary[] | null;
 }) {
-  const [items, setItems] = useState<ProblemSummary[]>([]);
-  const [total, setTotal] = useState(0);
+  // When the full list is already in memory (the editor was open before),
+  // seed page 1 and the search index from it instead of refetching; paging
+  // still goes through the API.
+  const [items, setItems] = useState<ProblemSummary[]>(seed ? seed.slice(0, LANDING_PAGE_SIZE) : []);
+  const [total, setTotal] = useState(seed ? seed.length : 0);
   const [page, setPage] = useState(1);
-  const [pages, setPages] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [pages, setPages] = useState(seed ? Math.ceil(seed.length / LANDING_PAGE_SIZE) : 0);
+  const [loading, setLoading] = useState(!seed);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   // Full problem set for the search box; the rendered page alone would miss
   // problems on later pages.
-  const [allItems, setAllItems] = useState<ProblemSummary[] | null>(null);
+  const [allItems, setAllItems] = useState<ProblemSummary[] | null>(seed);
   const listRef = useRef<HTMLDivElement>(null);
+  // Monotonic id per loadPage call: an out-of-order response from an earlier
+  // page must never overwrite the page that was requested after it.
+  const loadIdRef = useRef(0);
 
   const loadPage = useCallback((target: number) => {
+    const requestId = ++loadIdRef.current;
     setLoading(true);
     setError("");
     api.getProblems(target, LANDING_PAGE_SIZE).then((data) => {
+      if (loadIdRef.current !== requestId) return;
       setItems(data.items);
       setTotal(data.total);
       setPage(data.page);
       setPages(data.pages);
-    }).catch((loadError: Error) => setError(loadError.message))
-      .finally(() => setLoading(false));
+    }).catch((loadError: Error) => {
+      if (loadIdRef.current !== requestId) return;
+      setError(loadError.message);
+    }).finally(() => {
+      if (loadIdRef.current === requestId) setLoading(false);
+    });
   }, []);
 
   useEffect(() => {
-    loadPage(1);
-  }, [loadPage]);
+    if (!seed) loadPage(1);
+  }, [loadPage, seed]);
 
   useEffect(() => {
+    if (seed) return;
     let cancelled = false;
     api.getProblems().then((data) => {
       if (!cancelled) setAllItems(data.items);
     }).catch(() => undefined);
     return () => { cancelled = true; };
-  }, []);
+  }, [seed]);
 
   const goToPage = (target: number) => {
     if (target < 1 || target > pages || target === page) return;
@@ -1289,6 +1328,10 @@ function Testcases({ problem, drafts, setDrafts, activeCase, setActiveCase }: {
 }) {
   const current = drafts[activeCase];
   if (!current) return null;
+  // Function-shaped problems list their parameters in the manifest; other
+  // invocation types have no manifest parameter list, so the custom-case
+  // fields follow whatever keys the starter case carries.
+  const parameters = problem.invocation.parameters ?? Object.keys(current).map((name) => ({ name, codec: "" }));
   return (
     <div className="testcase-view">
       <div className="case-tabs">
@@ -1305,13 +1348,13 @@ function Testcases({ problem, drafts, setDrafts, activeCase, setActiveCase }: {
           </button>
         ))}
         <button className="add-case" title="Add testcase" onClick={() => {
-          const blank = Object.fromEntries(problem.invocation.parameters.map(({ name }) => [name, name === "nums" ? "[]" : "0"]));
+          const blank = Object.fromEntries(parameters.map(({ name }) => [name, name === "nums" ? "[]" : "0"]));
           setDrafts((items) => [...items, blank]);
           setActiveCase(drafts.length);
         }}><Plus size={15} /></button>
       </div>
       <div className="case-fields">
-        {problem.invocation.parameters.map(({ name: parameter }) => {
+        {parameters.map(({ name: parameter }) => {
           let valid = true;
           try { JSON.parse(current[parameter]); } catch { valid = false; }
           return (
@@ -1493,12 +1536,12 @@ function SolutionBlock({ title, body, code, isReference = false, languages, slug
   selected: string | undefined;
   onSelect: (language: string) => void;
 }) {
-  // Same canonical order as the editor dropdown (problems.py orders the
-  // languages map the same way).
-  const priority = ["python3", "java", "cpp", "go", "typescript", "javascript", "rust"];
+  // Same canonical order as the editor dropdown: the manifest's languages
+  // map is already author-ordered, so sort by its key order.
+  const order = Object.keys(languages);
   const languageKeys = Object.keys(code).sort((a, b) => {
-    const pa = priority.indexOf(a), pb = priority.indexOf(b);
-    return (pa === -1 ? priority.length : pa) - (pb === -1 ? priority.length : pb);
+    const ia = order.indexOf(a), ib = order.indexOf(b);
+    return (ia === -1 ? order.length : ia) - (ib === -1 ? order.length : ib);
   });
   const shown = selected && languageKeys.includes(selected) ? selected : languageKeys[0];
   const [copied, setCopied] = useState(false);
@@ -1681,17 +1724,23 @@ function ConsoleEmpty({ icon, title, detail, tone = "" }: { icon: React.ReactNod
   return <div className={`console-empty ${tone}`}><span>{icon}</span><strong>{title}</strong>{detail ? <p>{detail}</p> : null}</div>;
 }
 
-function FullPageMessage({ icon, title, detail }: { icon: React.ReactNode; title: string; detail: string }) {
-  return <main className="full-page-message"><span>{icon}</span><h1>{title}</h1><p>{detail}</p></main>;
+function FullPageMessage({ icon, title, detail, action }: { icon: React.ReactNode; title: string; detail: string; action?: { label: string; onClick: () => void } }) {
+  return (
+    <main className="full-page-message">
+      <span>{icon}</span>
+      <h1>{title}</h1>
+      <p>{detail}</p>
+      {action && <button className="message-action" onClick={action.onClick}>{action.label}</button>}
+    </main>
+  );
 }
 
 // Where an idle-expired session lands instead of a dead view: guests lose
 // the session's ephemeral work, account holders keep everything under their
 // user id and sign straight back in.
-function LoggedOut({ asUser, onSignIn, onCreateAccount, onGuest, theme, onToggleTheme }: {
+function LoggedOut({ asUser, onSignIn, onGuest, theme, onToggleTheme }: {
   asUser: boolean;
   onSignIn: () => void;
-  onCreateAccount: () => void;
   onGuest: () => void;
   theme: Theme;
   onToggleTheme: () => void;
@@ -1716,8 +1765,6 @@ function LoggedOut({ asUser, onSignIn, onCreateAccount, onGuest, theme, onToggle
         )}
         <button className="gate-enter" onClick={onSignIn}>Sign in</button>
         <div className="gate-links">
-          <button className="gate-link" onClick={onCreateAccount}>Create account</button>
-          <span aria-hidden="true">·</span>
           <button className="gate-link" onClick={onGuest}>Continue as guest</button>
         </div>
       </div>
@@ -1792,8 +1839,6 @@ function GuestGate({ expired, error, needsSetup, entryMode = "welcome", onEnter,
                 <button className="gate-enter" onClick={onEnter}>Continue as guest</button>
                 <div className="gate-links">
                   <button className="gate-link" onClick={() => switchMode("login")}>Log in</button>
-                  <span aria-hidden="true">·</span>
-                  <button className="gate-link" onClick={() => switchMode("signup")}>Create account</button>
                 </div>
               </>
             )}
@@ -1805,7 +1850,7 @@ function GuestGate({ expired, error, needsSetup, entryMode = "welcome", onEnter,
             {mode === "login" ? (
               <p className="gate-copy">Sign in with your account.</p>
             ) : (
-              <p className="gate-copy">{needsSetup ? "Set the admin password (typed twice)." : "Create a regular account — work is stored under your user id."}</p>
+              <p className="gate-copy">Set the admin password (typed twice).</p>
             )}
             {!(needsSetup && mode === "signup") && (
               <label className="gate-field">
@@ -1843,7 +1888,7 @@ function GuestGate({ expired, error, needsSetup, entryMode = "welcome", onEnter,
             )}
             {formError && <p className="gate-notice">{formError}</p>}
             <button className="gate-enter" onClick={submitAccount}>
-              {mode === "login" ? "Log in" : needsSetup ? "Create admin" : "Create account"}
+              {mode === "login" ? "Log in" : "Create admin"}
             </button>
             {!needsSetup && (
               <div className="gate-links">

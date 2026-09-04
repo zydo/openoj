@@ -33,7 +33,9 @@ export type Problem = {
         type: "function" | "design" | "interactive" | "concurrent" | "sql" | "shell";
         class_name: string;
         method: string;
-        parameters: Array<{ name: string; codec: string }>;
+        // Only function-shaped invocations carry parameters; design,
+        // interactive, concurrent, sql, and shell manifests omit it.
+        parameters?: Array<{ name: string; codec: string }>;
         return_codec: string;
         // "exact" (default), "sorted", "multiset", "close", or
         // { mode: "close", tolerance } for float-tolerant comparison.
