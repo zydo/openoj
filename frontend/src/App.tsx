@@ -147,6 +147,15 @@ function matchesHardness(entry: ProblemSummary, hardness: string) {
   return hardness === "" || entry.difficulty === hardness;
 }
 
+// Shell inputs and sql datasets are the raw text itself — shown and sent
+// verbatim, never JSON-encoded.
+function isRawTextParameter(problem: Problem, name: string) {
+  if (problem.invocation.type === "shell") return true;
+  return problem.invocation.parameters?.some(
+    (parameter) => parameter.name === name && parameter.codec === "sql_setup",
+  ) ?? false;
+}
+
 function TopicSelect({ topic, onPick }: {
   topic: string;
   onPick: (topic: string) => void;
@@ -536,15 +545,26 @@ function App() {
       setCode(initialCode);
       // Function-style problems ship named-argument inputs; sql ships a
       // positional list the manifest parameters name (dataset); shell ships
-      // one raw string. Normalize all three into editable named fields.
+      // one raw string. Normalize all three into editable named fields —
+      // raw-text parameters stay verbatim, everything else is JSON-encoded.
       setDrafts(loaded.public_cases.map((test) => {
         const parameters = loaded.invocation.parameters;
-        const entries = Array.isArray(test.input) && parameters
-          ? test.input.map((value, index) => [parameters[index]?.name ?? String(index), value])
-          : typeof test.input === "object" && test.input !== null
-            ? Object.entries(test.input)
-            : [["input", test.input]];
-        return Object.fromEntries(entries.map(([key, value]) => [key, JSON.stringify(value)]));
+        let entries: Array<[string, string]>;
+        if (Array.isArray(test.input) && parameters) {
+          entries = test.input.map((value, index) => {
+            const name = parameters[index]?.name ?? String(index);
+            const text = isRawTextParameter(loaded, name)
+              ? String(value)
+              : JSON.stringify(value);
+            return [name, text];
+          });
+        } else if (typeof test.input === "object" && test.input !== null) {
+          entries = Object.entries(test.input)
+            .map(([key, value]) => [key, JSON.stringify(value)]);
+        } else {
+          entries = [["input", String(test.input)]];
+        }
+        return Object.fromEntries(entries);
       }));
     }).catch((error: Error) => {
       if (!cancelled) setLoadError(error.message);
@@ -562,14 +582,18 @@ function App() {
   }, [leftTab, refreshSubmissions]);
 
   const parsedCases = useMemo(() => {
+    if (!problem) return null;
     try {
       return drafts.map((test) => Object.fromEntries(
-        Object.entries(test).map(([key, value]) => [key, JSON.parse(value)]),
+        Object.entries(test).map(([key, value]) => [
+          key,
+          isRawTextParameter(problem, key) ? value : JSON.parse(value),
+        ]),
       ));
     } catch {
       return null;
     }
-  }, [drafts]);
+  }, [drafts, problem]);
 
   const execute = useCallback(async (mode: "run" | "submit") => {
     if (!problem || busy) return;
@@ -1465,15 +1489,19 @@ function Testcases({ problem, drafts, setDrafts, activeCase, setActiveCase }: {
           </button>
         ))}
         <button className="add-case" title="Add testcase" onClick={() => {
-          const blank = Object.fromEntries(parameters.map(({ name }) => [name, name === "nums" ? "[]" : "0"]));
+          const blank = Object.fromEntries(parameters.map(({ name }) =>
+            [name, isRawTextParameter(problem, name) ? "" : name === "nums" ? "[]" : "0"]));
           setDrafts((items) => [...items, blank]);
           setActiveCase(drafts.length);
         }}><Plus size={15} /></button>
       </div>
       <div className="case-fields">
         {parameters.map(({ name: parameter }) => {
+          const rawText = isRawTextParameter(problem, parameter);
           let valid = true;
-          try { JSON.parse(current[parameter]); } catch { valid = false; }
+          if (!rawText) {
+            try { JSON.parse(current[parameter]); } catch { valid = false; }
+          }
           return (
             <label className="case-field" key={parameter}>
               <span>{parameter} =</span>
@@ -1481,7 +1509,7 @@ function Testcases({ problem, drafts, setDrafts, activeCase, setActiveCase }: {
                 value={current[parameter] ?? ""}
                 className={valid ? "" : "invalid"}
                 spellCheck={false}
-                rows={parameter === "nums" ? 2 : 1}
+                rows={rawText ? 6 : parameter === "nums" ? 2 : 1}
                 onChange={(event) => setDrafts((items) => items.map((item, index) =>
                   index === activeCase ? { ...item, [parameter]: event.target.value } : item,
                 ))}
@@ -1541,7 +1569,7 @@ function Results({ result, busy, error, comparison }: { result: JudgeResult | nu
             {active.error && <div className="error-box">{active.error}</div>}
             {active.input !== undefined ? (
               <>
-                <ResultValue label="Input" value={active.input} />
+                <ResultValue label="Input" value={active.input} raw={typeof active.input === "string"} />
                 {active.actual !== undefined && <ResultValue label="Output" value={active.actual} />}
                 {active.expected !== undefined && <ResultValue
                     label={comparison === "close" || (typeof comparison === "object" && comparison !== null && comparison.mode === "close")
