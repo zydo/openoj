@@ -111,6 +111,13 @@ function slugify(title) {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
+// A couple of non-Algorithms rows so the type filter has real data to chew
+// on in offline UI work; the assignments are intentionally arbitrary.
+const TYPES = {
+  "lru-cache": "Database",
+  "course-schedule": "Shell",
+};
+
 const PROBLEMS = ROWS.map(([title, tags, difficulty], index) => ({
   id: index + 1,
   slug: slugify(title),
@@ -118,6 +125,7 @@ const PROBLEMS = ROWS.map(([title, tags, difficulty], index) => ({
   difficulty,
   tags,
   topics: tags,
+  type: TYPES[slugify(title)] ?? "Algorithms",
 }));
 
 const TOPIC_INDEX = (() => {

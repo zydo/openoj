@@ -139,6 +139,14 @@ function matchesTopic(entry: ProblemSummary, topic: string) {
   return topic === "" || entry.topics.includes(topic);
 }
 
+function matchesType(entry: ProblemSummary, problemType: string) {
+  return problemType === "" || entry.type === problemType;
+}
+
+function matchesHardness(entry: ProblemSummary, hardness: string) {
+  return hardness === "" || entry.difficulty === hardness;
+}
+
 function TopicSelect({ topic, onPick }: {
   topic: string;
   onPick: (topic: string) => void;
@@ -152,19 +160,20 @@ function TopicSelect({ topic, onPick }: {
     return () => { cancelled = true; };
   }, []);
   return (
-    <select
-      className="topic-select"
+    <SelectMenu
+      className="filter-select topic-select-menu"
       value={topic}
-      onChange={(event) => onPick(event.target.value)}
-      aria-label="Filter by topic"
-    >
-      <option value="">All topics</option>
-      {topics.map((entry) => (
-        <option key={entry.name} value={entry.name}>
-          {entry.name} ({entry.count})
-        </option>
-      ))}
-    </select>
+      ariaLabel="Filter by topic"
+      idPrefix="topic"
+      onChange={onPick}
+      options={[
+        { key: "", label: "All topics" },
+        ...topics.map((entry) => ({
+          key: entry.name,
+          label: `${entry.name} (${entry.count})`,
+        })),
+      ]}
+    />
   );
 }
 
@@ -949,10 +958,13 @@ function App() {
   );
 }
 
-function LanguageMenu({ value, options, onChange }: {
+function SelectMenu({ value, options, onChange, ariaLabel, idPrefix, className }: {
   value: string;
-  options: Array<{ key: string; label: string; enabled: boolean }>;
+  options: Array<{ key: string; label: string; disabled?: boolean }>;
   onChange: (key: string) => void;
+  ariaLabel: string;
+  idPrefix: string;
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -976,13 +988,15 @@ function LanguageMenu({ value, options, onChange }: {
 
   useEffect(() => {
     if (!open) return;
-    document.getElementById(`language-option-${activeIndex}`)?.scrollIntoView({ block: "nearest" });
-  }, [activeIndex, open]);
+    document.getElementById(`${idPrefix}-option-${activeIndex}`)?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open, idPrefix]);
 
-  const enabledIndexes = options.map((option, index) => (option.enabled ? index : -1)).filter((index) => index >= 0);
+  const enabledIndexes = options
+    .map((option, index) => (!option.disabled ? index : -1))
+    .filter((index) => index >= 0);
 
   const openMenu = () => {
-    const current = options.findIndex((option) => option.key === value && option.enabled);
+    const current = options.findIndex((option) => option.key === value && !option.disabled);
     setActiveIndex(current >= 0 ? current : (enabledIndexes[0] ?? 0));
     setOpen(true);
   };
@@ -994,7 +1008,7 @@ function LanguageMenu({ value, options, onChange }: {
 
   const select = (index: number) => {
     const option = options[index];
-    if (!option?.enabled) return;
+    if (!option || option.disabled) return;
     onChange(option.key);
     close();
   };
@@ -1009,7 +1023,7 @@ function LanguageMenu({ value, options, onChange }: {
   };
 
   return (
-    <div className="select-menu" ref={rootRef}>
+    <div className={className ? `select-menu ${className}` : "select-menu"} ref={rootRef}>
       <button
         ref={buttonRef}
         type="button"
@@ -1032,8 +1046,8 @@ function LanguageMenu({ value, options, onChange }: {
           ref={listRef}
           className="select-popup"
           role="listbox"
-          aria-label="Programming language"
-          aria-activedescendant={`language-option-${activeIndex}`}
+          aria-label={ariaLabel}
+          aria-activedescendant={`${idPrefix}-option-${activeIndex}`}
           tabIndex={-1}
           onKeyDown={(event) => {
           if (event.key === "ArrowDown") { event.preventDefault(); move(1); }
@@ -1047,26 +1061,46 @@ function LanguageMenu({ value, options, onChange }: {
           {options.map((option, index) => (
             <li
               key={option.key}
-              id={`language-option-${index}`}
+              id={`${idPrefix}-option-${index}`}
               role="option"
               aria-selected={option.key === value}
-              aria-disabled={!option.enabled}
+              aria-disabled={option.disabled ? true : undefined}
               className={[
                 "select-option",
                 index === activeIndex ? "active" : "",
                 option.key === value ? "selected" : "",
-                option.enabled ? "" : "disabled",
+                option.disabled ? "disabled" : "",
               ].filter(Boolean).join(" ")}
-              onMouseEnter={() => option.enabled && setActiveIndex(index)}
+              onMouseEnter={() => !option.disabled && setActiveIndex(index)}
               onClick={() => select(index)}
             >
-              <span>{option.label}{option.enabled ? "" : " — coming soon"}</span>
+              <span>{option.label}</span>
               {option.key === value && <Check size={13} />}
             </li>
           ))}
         </ul>
       )}
     </div>
+  );
+}
+
+function LanguageMenu({ value, options, onChange }: {
+  value: string;
+  options: Array<{ key: string; label: string; enabled: boolean }>;
+  onChange: (key: string) => void;
+}) {
+  return (
+    <SelectMenu
+      value={value}
+      ariaLabel="Programming language"
+      idPrefix="language"
+      options={options.map((option) => ({
+        key: option.key,
+        label: option.enabled ? option.label : `${option.label} — coming soon`,
+        disabled: !option.enabled,
+      }))}
+      onChange={onChange}
+    />
   );
 }
 
@@ -1183,6 +1217,8 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout, progress, seed }: {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [topic, setTopic] = useState("");
+  const [problemType, setProblemType] = useState("");
+  const [hardness, setHardness] = useState("");
   // Full problem set for the search box; the rendered page alone would miss
   // problems on later pages.
   const [allItems, setAllItems] = useState<ProblemSummary[] | null>(seed);
@@ -1229,9 +1265,13 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout, progress, seed }: {
   };
 
   const normalized = searchText(query);
-  const filtering = normalized !== "" || topic !== "";
+  const filtering = normalized !== "" || topic !== "" || problemType !== "" || hardness !== "";
   const filtered = filtering && allItems
-    ? allItems.filter((entry) => matchesFilter(entry, normalized) && matchesTopic(entry, topic))
+    ? allItems.filter((entry) =>
+        matchesFilter(entry, normalized)
+        && matchesTopic(entry, topic)
+        && matchesType(entry, problemType)
+        && matchesHardness(entry, hardness))
     : null;
 
   const renderRow = (entry: ProblemSummary) => (
@@ -1309,6 +1349,32 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout, progress, seed }: {
                 aria-label="Filter problems"
               />
               <TopicSelect topic={topic} onPick={setTopic} />
+              <SelectMenu
+                className="filter-select type-select-menu"
+                value={problemType}
+                ariaLabel="Filter by type"
+                idPrefix="type"
+                onChange={setProblemType}
+                options={[
+                  { key: "", label: "All types" },
+                  { key: "Algorithms", label: "Algorithms" },
+                  { key: "Database", label: "Database" },
+                  { key: "Shell", label: "Shell" },
+                ]}
+              />
+              <SelectMenu
+                className="filter-select hardness-select-menu"
+                value={hardness}
+                ariaLabel="Filter by hardness"
+                idPrefix="hardness"
+                onChange={setHardness}
+                options={[
+                  { key: "", label: "All hardness" },
+                  { key: "Easy", label: "Easy" },
+                  { key: "Medium", label: "Medium" },
+                  { key: "Hard", label: "Hard" },
+                ]}
+              />
             </div>
             {error ? (
               <p className="landing-error">{error}</p>
@@ -1316,7 +1382,7 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout, progress, seed }: {
               <div className="landing-list">
                 {filtered.length ? filtered.map(renderRow) : (
                   <p className="landing-empty">
-                    No problems match {query.trim() ? `“${query.trim()}”` : "the selected topic"}.
+                    No problems match {query.trim() ? `“${query.trim()}”` : "the selected filters"}.
                   </p>
                 )}
               </div>
@@ -1698,6 +1764,8 @@ function ProblemDrawer({ problems, activeSlug, progress, onSelect, onClose }: {
 }) {
   const [query, setQuery] = useState("");
   const [topic, setTopic] = useState("");
+  const [problemType, setProblemType] = useState("");
+  const [hardness, setHardness] = useState("");
   const filterRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -1710,8 +1778,13 @@ function ProblemDrawer({ problems, activeSlug, progress, onSelect, onClose }: {
   }, [onClose]);
 
   const normalized = searchText(query.trim());
-  const filtered = normalized || topic
-    ? problems.filter((entry) => matchesFilter(entry, normalized) && matchesTopic(entry, topic))
+  const filtering = normalized !== "" || topic !== "" || problemType !== "" || hardness !== "";
+  const filtered = filtering
+    ? problems.filter((entry) =>
+        matchesFilter(entry, normalized)
+        && matchesTopic(entry, topic)
+        && matchesType(entry, problemType)
+        && matchesHardness(entry, hardness))
     : problems;
 
   return (
@@ -1731,6 +1804,32 @@ function ProblemDrawer({ problems, activeSlug, progress, onSelect, onClose }: {
             aria-label="Filter problems"
           />
           <TopicSelect topic={topic} onPick={setTopic} />
+          <SelectMenu
+            className="filter-select type-select-menu"
+            value={problemType}
+            ariaLabel="Filter by type"
+            idPrefix="drawer-type"
+            onChange={setProblemType}
+            options={[
+              { key: "", label: "All types" },
+              { key: "Algorithms", label: "Algorithms" },
+              { key: "Database", label: "Database" },
+              { key: "Shell", label: "Shell" },
+            ]}
+          />
+          <SelectMenu
+            className="filter-select hardness-select-menu"
+            value={hardness}
+            ariaLabel="Filter by hardness"
+            idPrefix="drawer-hardness"
+            onChange={setHardness}
+            options={[
+              { key: "", label: "All hardness" },
+              { key: "Easy", label: "Easy" },
+              { key: "Medium", label: "Medium" },
+              { key: "Hard", label: "Hard" },
+            ]}
+          />
           <span className="drawer-count">{filtered.length} of {problems.length} problems</span>
         </div>
         <div className="drawer-list">

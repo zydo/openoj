@@ -5,6 +5,7 @@ export type ProblemSummary = {
     difficulty: string;
     tags: string[];
     topics: string[];
+    type: string;
 };
 
 export type TopicIndex = {
