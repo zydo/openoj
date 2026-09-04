@@ -37,7 +37,7 @@ a re-evaluation; tags follow the bank's normalized scheme.
 
     problems/<shard>/<id>_<slug>/
       problem.json    schema_version, reference_solution,
-                      id, slug, title, difficulty, tags, topics,
+                      id, slug, title, difficulty, tags, topics, type,
                       invocation, limits
       cases.json      public[] + hidden[], {"input": [...], "expected": ...}
       statement.md    '# Title', '## Description' (### Example N, Constraints)
