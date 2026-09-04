@@ -3,7 +3,7 @@ name: Check fallback problems
 # The offline fallback set bundled in this repo (openoj/problems/, used
 # when OPENOJ_PROBLEMS is unset). Same image, same gates as the main
 # problems repo: accidental edits to the fallback are caught here, on
-# every push touching it. (problems-bettercode lives in the problems
+# every push touching it. (problems-originals lives in the problems
 # repo and is frozen; it is not covered by CI.)
 
 on:

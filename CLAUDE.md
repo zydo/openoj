@@ -9,29 +9,32 @@ Two repos, deliberately decoupled:
   bundles, shared code, authoring tooling. Knows nothing about the judge
   except its published contract.
 
-The bank's live tree is `problems-adapt/`; `problems` is a **symlink** to
-it, so the served set can be swapped to any other layout/repo by moving
-one link. `problems-bettercode/` archives the LeetCode originals the
-adapted set derives from. `problems-extend/` is the second corpus: the
-crawled originals under ORIGINAL form (3,193 crawl-keyed bundles,
-complete — adapted into `problems-extend-adapt` as of 2026-09-03; the
-roster file itself was removed in the 2026-08-28 cleanup — the set is
-derived by `openoj/.localonly/verify_corpus.py`). Scrape origin:
-`~/code/lc-crawl` (raw) → `~/code/bettercode` (curated) →
-`problems-bettercode` (in-repo archive).
+The bank's served tree is `problems/` — the merge of both adapted
+corpora: 838 bettercode-derived bundles plus 3,193 extend-derived ones,
+all carrying their **original source ids** (the bettercode set's 1–838
+renumbering was reverted via `problems/MAPPING.json`). 13 ids have one
+bundle from each provenance (distinct slugs);
+`problems/BETTERCODE-SUBSET.md` lists the bettercode-derived ids and
+`problems/MAPPING.md` is that subset's adaptation ledger.
+`problems-originals/` merges the two originals trees — the bettercode
+curated originals plus the verbatim lc-crawl extend originals (the 13
+shared extend originals carry a `-crawl` slug suffix); it is frozen: not
+served, not CI-checked. Scrape origin: `~/code/lc-crawl` (raw) →
+`~/code/bettercode` (curated) → `problems-originals/`.
 
 ## Adaptation philosophy
 
 Every problem is a **copyright-free, algorithm-identical adaptation** of a
 curated LeetCode original: rewritten statements in the bank's own voice,
-renumbered into one 1–838 id sequence (source ids folded in; shard =
-`problems/0001-0100/`-style hundreds buckets), descriptive kebab slugs
+the source's own id kept (shard = `problems/0001-0100/`-style hundreds
+buckets; the bettercode set's temporary 1–838 renumbering was reverted),
+descriptive kebab slugs
 (`0001_pair-sum`), restated examples/constraints. Metadata normalizes to
 the bettercode difficulty/tags scheme (`.localonly/alt/normalize_meta.py`).
 
 ## Bundle format (openoj-problems/FORMAT.md is authoritative)
 
-    problems-adapt/<shard>/<id>_<slug>/
+    problems/<shard>/<id>_<slug>/
       problem.json    schema_version, reference_solution,
                       id, slug, title, difficulty, tags, invocation, limits
       cases.json      public[] + hidden[], {"input": [...], "expected": ...}
@@ -118,7 +121,7 @@ executors, assembling the bundle's own `provided/` sources).
 ## Authoring and verification loop
 
 1. Scrape/curate originals (lc-crawl → bettercode), archive into
-   `problems-bettercode/`, adapt into a new bundle (statement, problem.json,
+   `problems-originals/`, adapt into a new bundle (statement, problem.json,
    cases, canonical solution in all 7 languages).
 2. `scripts/gen_starters.py` regenerates starters from problem.json.
 3. **Verify**: `python3 .localonly/verify_solution.py problems/<shard>/<key>`

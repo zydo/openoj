@@ -1,9 +1,10 @@
-# problems-extend — authoring conventions and wire-class map
+# Extend corpus — authoring conventions and wire-class map
 
-The extend corpus is complete except for the 14 unauthored ids listed
-in `problems-extend/README.md` (derived by
+The extend corpus is complete: 3,193 crawl-keyed originals (archived in
+the bank's `problems-originals/`, derived by
 `openoj/.localonly/verify_corpus.py` — the roster file was removed in
-the 2026-08-28 cleanup). The end-to-end loop for
+the 2026-08-28 cleanup) adapted 1:1 into the bank's served `problems/`
+tree with ids unchanged. The end-to-end loop for
 authoring any single problem is `docs/AUTHORING.md`; the six-fleet wave
 machinery (trackers, lane protocol, concurrency carve) retired with the
 wave — its durable law lives in CLAUDE.md's "Fleet discipline" and in
@@ -14,8 +15,8 @@ proved.
 ## Conventions (ORIGINAL form)
 
 - Source: `~/code/lc-crawl/problems/<shard>/<id>-<slug>.md`; target
-  `problems-extend/<shard>/<id>_<slug>/` (legacy hundreds bucket).
-  Mirror exemplar `problems-bettercode/0001-0100/0001_two-sum/`,
+  `problems/<shard>/<id>_<slug>/` (legacy hundreds bucket). Mirror
+  exemplar `problems-originals/0001-0100/0001_two-sum/`,
   `FORMAT.md`, and one landed extend sibling of the same wire family.
 - ORIGINAL form: crawl prose verbatim into bundle grammar; diagrams and
   LeetCode metadata dropped; mangled superscripts restored (`105` ->
@@ -31,8 +32,8 @@ proved.
   kind (docs/CODECS.md has the wire→class→shape table) — never a shared
   library, never hand-invented. `reference_solution` stays "" (one
   solution; no variants in extend);
-  difficulty "" always (hardness pass still pending — see the bank's
-  problems-extend README).
+  difficulty "" always (a hardness pass for the extend bundles is still
+  pending).
 - Hidden cases >= 12 with named coverage; an independent ORACLE
   structurally different from the solution computes every expected;
   exhaustive small sweeps; measured output sizes when large (compact
@@ -51,7 +52,7 @@ proved.
 ## Verify gate
 
 `python3 /Users/dongziyu/code/openoj/.localonly/verify_solution.py
-problems-extend/<shard>/<id>_<slug>` (run from bank root) judges every
+problems/<shard>/<id>_<slug>` (run from bank root) judges every
 `solution*.<ext>` through the real executors — green across all offered
 languages before landing. Rust "unparseable protocol output" =>
 suspect a panic, not the wire (see the doubled-braces note in
@@ -60,7 +61,9 @@ CODECS.md).
 ## Wire-class map (probe exemplars)
 
 Every mechanism below is judged green across all 7 languages. The wire
-law itself is `docs/CODECS.md`.
+law itself is `docs/CODECS.md`. The 9010–9026 probe bundles these rows
+were proved with were retired after the corpus wave — treat the table
+as the class inventory, CODECS.md as the law.
 
 | Class                                | Probe (exemplar bundle)                         |
 | ------------------------------------ | ----------------------------------------------- |

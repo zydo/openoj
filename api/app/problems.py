@@ -409,9 +409,9 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
         raise ProblemError("problem.json title must be a non-empty string")
     if not isinstance(problem_data["difficulty"], str):
         raise ProblemError("problem.json difficulty must be a string")
-    # "" is a valid, explicitly-unset difficulty (problems-extend ships
-    # unset until the bank's own hardness evaluation fills it); the adapt
-    # bank's check.py is where the non-empty policy is enforced.
+    # "" is a valid, explicitly-unset difficulty (the extend-derived
+    # bundles ship unset until the bank's own hardness evaluation fills
+    # them); the bank's check.py is where the non-empty policy is enforced.
     if not isinstance(problem_data["tags"], list) or not all(
         isinstance(tag, str) and tag for tag in problem_data["tags"]
     ):
