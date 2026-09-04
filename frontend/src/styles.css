@@ -439,18 +439,21 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .landing .problem-row strong { font-size: 16px; letter-spacing: -.01em; }
 .landing-error { color: var(--red); font-size: 12px; padding: 12px 4px; }
 .landing-loading { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; padding: 14px 4px; }
-.landing-filter { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.landing-filter { display: flex; gap: 8px; margin-bottom: 14px; }
 .landing-search { flex: 1 1 auto; min-width: 0; height: 40px; padding: 0 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font-size: 13.5px; }
 .landing-search::placeholder { color: var(--quiet); }
 .landing-search:focus { border-color: var(--cyan); outline: none; }
-.filter-select { flex: 0 0 auto; }
+.filter-select { flex: 0 1 auto; min-width: 0; }
 .filter-select .select-trigger { width: 100%; height: 40px; padding: 0 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font-size: 13.5px; }
 .filter-select .select-trigger:hover { background: var(--surface); border-color: var(--cyan); }
 .filter-select .select-trigger:focus-visible { border-color: var(--cyan); }
 .filter-select .select-popup { width: max-content; }
-.topic-select-menu { width: 200px; }
-.type-select-menu { width: 150px; }
-.hardness-select-menu { width: 155px; }
+/* proportional widths so the four filter controls always share one row;
+   the floors keep their labels un-truncated while the search box flexes */
+.topic-select-menu { width: 20%; min-width: 140px; }
+.type-select-menu { width: 15%; min-width: 112px; }
+.hardness-select-menu { width: 17%; min-width: 128px; }
+.select-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .drawer-tools .filter-select { width: 100%; }
 .drawer-tools .filter-select .select-trigger { height: 38px; color: #d8dee2; background: #101416; border-color: #2c353b; border-radius: 5px; font-size: 13px; }
 .drawer-tools .filter-select .select-trigger:hover { background: #101416; border-color: #46545c; }
