@@ -2,8 +2,7 @@
 
 The extend corpus is complete: 3,193 crawl-keyed originals (archived in
 the bank's `problems-originals/`, derived by
-`openoj/.localonly/verify_corpus.py` — the roster file was removed in
-the 2026-08-28 cleanup) adapted 1:1 into the bank's served `problems/`
+`openoj/scripts/verify_corpus.py`) adapted 1:1 into the bank's served `problems/`
 tree with ids unchanged. The end-to-end loop for
 authoring any single problem is `docs/AUTHORING.md`; the six-fleet wave
 machinery (trackers, lane protocol, concurrency carve) retired with the
@@ -51,8 +50,8 @@ proved.
 
 ## Verify gate
 
-`python3 /Users/dongziyu/code/openoj/.localonly/verify_solution.py
-problems/<shard>/<id>_<slug>` (run from bank root) judges every
+`python3 scripts/verify_solution.py problems/<shard>/<id>_<slug>`
+(openoj repo's `scripts/`, run from bank root) judges every
 `solution*.<ext>` through the real executors — green across all offered
 languages before landing. Rust "unparseable protocol output" =>
 suspect a panic, not the wire (see the doubled-braces note in

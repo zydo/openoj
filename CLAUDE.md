@@ -14,7 +14,7 @@ corpora: 838 bettercode-derived bundles plus 3,193 extend-derived ones,
 all carrying their **original source ids** (the bettercode set's 1–838
 renumbering was reverted via `problems/MAPPING.json`). 13 ids have one
 bundle from each provenance (distinct slugs);
-`problems/BETTERCODE-SUBSET.md` lists the bettercode-derived ids and
+`BETTERCODE-SUBSET.md` (bank root) lists the bettercode-derived ids and
 `problems/MAPPING.md` is that subset's adaptation ledger.
 `problems-originals/` merges the two originals trees — the bettercode
 curated originals plus the verbatim lc-crawl extend originals (the 13
@@ -30,7 +30,7 @@ the source's own id kept (shard = `problems/0001-0100/`-style hundreds
 buckets; the bettercode set's temporary 1–838 renumbering was reverted),
 descriptive kebab slugs
 (`0001_pair-sum`), restated examples/constraints. Metadata normalizes to
-the bettercode difficulty/tags scheme (`.localonly/alt/normalize_meta.py`).
+the bettercode difficulty/tags scheme.
 
 ## Bundle format (openoj-problems/FORMAT.md is authoritative)
 
@@ -124,8 +124,8 @@ executors, assembling the bundle's own `provided/` sources).
    `problems-originals/`, adapt into a new bundle (statement, problem.json,
    cases, canonical solution in all 7 languages).
 2. `scripts/gen_starters.py` regenerates starters from problem.json.
-3. **Verify**: `python3 .localonly/verify_solution.py problems/<shard>/<key>`
-   (openoj repo's .localonly) — judges every solution in the bundle
+3. **Verify**: `python3 scripts/verify_solution.py problems/<shard>/<key>`
+   (openoj repo's scripts/) — judges every solution in the bundle
    through the real executors. The key must be shard-qualified; a bare
    key resolves without the shard and fails.
 4. **Check**: `python3 scripts/check.py` (bank repo) — static tier:
@@ -155,30 +155,27 @@ fragment shape; insert the section per the law; verify until green; no
 formatters, no git) → on landing, hash-check the new files through the
 in-image formatter (normalizes any whitespace drift) and re-verify.
 
-Deferred corpus decisions live in `CORPUS-FLAGS.md` (bank repo) with full
-evidence — read it before touching cases.json or statement wording.
+There is no standing corpus-flags ledger — the retired `CORPUS-FLAGS.md`
+(bank repo) was deleted 2026-09-04 with every item resolved; its history
+is in git. Surface new contradictions to the user with evidence.
 
 ## Tooling map
 
-- openoj `/.localonly/` (gitignored; see its README.md for the full
-  inventory): authoring contracts (`alt/SPEC.md`, `alt/DESIGN.md`,
-  `alt/normalize_meta.py`), the gates (`verify_solution.py`,
-  `verify_corpus.py`, `verify_extend.py`), wave auditors
-  (`audit_wave.py`, `regate_wave.py`), sweeps
-  (`designate_references.py`, `reorder_audit.py`), the svg_*
-  figure-audit pipeline, headless-UI drivers (`stub-server.mjs`,
-  `shot.mjs`, `session-e2e.mjs`).
-- openoj-problems `/.localonly/`: case-gen provenance for recently
-  authored bundles, 2755/2759 partial scratch, finished-wave
-  bookkeeping under `adapt_archive/` (see its README.md).
-- openoj-problems `/.adapt/`: live rate-limit state (`concurrency.json`
-  — cap, floor, target, event log); finished-wave bookkeeping is
-  archived under `.localonly/adapt_archive/`.
+- openoj `/scripts/` (tracked; see its README.md): the authoring gates
+  (`verify_solution.py`, `verify_corpus.py`) and the headless-UI
+  drivers (`stub-server.mjs`, `shot.mjs`, `session-e2e.mjs`). The
+  gitignored `/.localonly/` holds only regenerable cache (the compiled
+  Java harness).
+- openoj-problems `/.localonly/`: empty scratch (see its README.md) —
+  all authoring one-shots and the finished-wave `adapt_archive/`
+  bookkeeping were deleted 2026-09-04 with the corpus complete.
 
 ## Fleet discipline (agent concurrency)
 
-State in `openoj-problems/.adapt/concurrency.json`; record every rate-limit
-event there. Two death classes: per-minute 429s (concurrency-driven —
+The completed adaptation program's state ledger `openoj-problems/.adapt/`
+was deleted 2026-09-04 (corpus complete; history in git). If a future
+fleet runs, recreate the ledger there and record every rate-limit event.
+Two death classes: per-minute 429s (concurrency-driven —
 step the target down, roughly halve, floor 4) vs 5-hour-pool exhaustion
 (consumption-driven — do NOT step down; wait for the reset timestamp in
 the error and resume). Prefer resuming a dead agent (SendMessage keeps
@@ -212,7 +209,7 @@ check the clock against the reset time before waiting on one.
   mid-split.
 - `TODO.md` (openoj): design decisions agreed but not started; when work
   starts, it moves to the session task list; when done, the entry is
-  deleted. Keep entries terse — full context goes in docs or CORPUS-FLAGS.
+  deleted. Keep entries terse — full context goes in docs.
 - Scratch/planning files: `.localonly/` (gitignored) in either repo.
 - Problems CI (in the runner image): format + static checks on push,
   full judge sweep on dispatch/weekly. Push only format-normalized trees.
@@ -254,4 +251,4 @@ the gate bootstraps as admin on a fresh DB.
    set `reference_solution` to the optimal-last variant; update
    solutions.md intro to mirror.
 5. Suspect a corpus/judge-data contradiction? Do NOT edit frozen
-   cases.json quietly — add it to CORPUS-FLAGS.md with evidence.
+   cases.json quietly — surface it to the user with evidence.
