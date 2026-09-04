@@ -1,12 +1,15 @@
 # OpenOJ REST API
 
 The judge's full surface — the same API the web UI uses — available to
-scripted callers. Every endpoint except health requires a **guest session**;
-hidden account endpoints exist for the future UI (`POST /auth/register`
-bootstraps the fixed-name `admin` on a fresh install and then closes,
-`POST /auth/login` binds the session to a user whose drafts and submissions
-then live under the user id, `POST /auth/logout` unbinds). Treat any
-deployment's API as public and rate-limit at the edge if you expose it.
+scripted callers. Every endpoint except health and `GET /auth/status`
+requires a **guest session**; `GET /auth/status` reports whether the admin
+bootstrap has happened (public, so the first-visit gate can render before
+any session exists). Hidden account endpoints exist for the future UI
+(`POST /auth/register` bootstraps the fixed-name `admin` on a fresh
+install and then closes, `POST /auth/login` binds the session to a user
+whose drafts and submissions then live under the user id,
+`POST /auth/logout` unbinds). Treat any deployment's API as public and
+rate-limit at the edge if you expose it.
 
 ## Base URL
 
@@ -28,10 +31,15 @@ curl -c jar.txt -X POST https://openoj.dongziyu.com/api/session
 
 # Check it
 curl -b jar.txt https://openoj.dongziyu.com/api/session
+
+# Validate without extending the idle clock (the frontend's inactivity
+# watcher probes with this — watching must not keep an abandoned session alive)
+curl -b jar.txt 'https://openoj.dongziyu.com/api/session?touch=0'
 ```
 
-Every request with a valid cookie refreshes the idle clock. A request without
-one gets `401 {"detail":"No active session"}`.
+Every request with a valid cookie refreshes the idle clock;
+`GET /session?touch=0` is the one exception. A request without a valid
+cookie gets `401 {"detail":"No active session"}`.
 
 ## Problems
 
@@ -53,13 +61,25 @@ scale).
 curl -b jar.txt https://openoj.dongziyu.com/api/problems/pair-sum
 ```
 
-`invocation` describes the judge contract: parameter names/types (`integer`
-with `bits`, `number`, `string`, `boolean`, `array`, `linked_list`,
-`binary_tree`), the return type, and `comparison` — `exact`, `sorted`,
-`multiset`, `set`, or `close` (floats compared per-scalar within 1e-9 relative
-tolerance; `{"mode":"close","tolerance":…}` customizes it in the problem
-source). For `type: "design"` problems, cases carry LeetCode-style
-`actions`/`params` sequences instead of a positional argument list.
+`invocation` describes the judge contract: parameter names/types (the full
+kind vocabulary — 25 kinds including `nary_tree`, `quad_tree`, `nested`,
+`graph`, `doubly_list`, and `json` — is the table in
+[CODECS.md](CODECS.md)), the return type, and `comparison` — `exact`,
+`sorted`, `multiset`, `set`, or `close` (floats compared per-scalar within
+1e-9 relative tolerance; `{"mode":"close","tolerance":…}` customizes it in
+the problem source). For `type: "design"` problems, cases carry
+LeetCode-style `actions`/`params` sequences instead of a positional
+argument list.
+
+```sh
+# A statement figure shipped with the bundle (SVG)
+curl -b jar.txt https://openoj.dongziyu.com/api/problems/pair-sum/figures/sample-1.svg
+
+# Solutions tab: per-variant explanations plus each variant's
+# implementation in every offered language (404 when the bundle
+# publishes none)
+curl -b jar.txt https://openoj.dongziyu.com/api/problems/pair-sum/solutions
+```
 
 ## Drafts (session-scoped editor state)
 
@@ -70,6 +90,19 @@ curl -b jar.txt https://openoj.dongziyu.com/api/drafts/pair-sum
 curl -b jar.txt -X PUT https://openoj.dongziyu.com/api/drafts/pair-sum/python3 \
   -H 'content-type: application/json' -d '{"code":"class Solution:\n    …"}'
 ```
+
+## Format (editor toolchain)
+
+```sh
+curl -b jar.txt -X POST https://openoj.dongziyu.com/api/format \
+  -H 'content-type: application/json' \
+  -d '{"language":"python3","code":"…"}'
+# {"code":"…"} — the draft formatted with the same pinned toolchain the
+# problem bundles use
+```
+
+A draft that does not parse is the author's to fix, so a formatter refusal
+is a `400` carrying the tool's own first line.
 
 ## Run (visible cases only)
 
@@ -85,10 +118,10 @@ without an assertion and return the actual output. Response:
 
 ```json
 {
-  "status": "completed",
+  "status": "accepted",
   "passed": 3, "total": 3, "runtime_ms": 128,
   "results": [
-    {"name":"Case 1","status":"completed","input":{…},"actual":[0,1]}
+    {"name":"Case 1","status":"accepted","input":{…},"actual":[0,1]}
   ]
 }
 ```
@@ -108,9 +141,19 @@ Judges every hidden case. Verdict statuses: `accepted`, `wrong_answer`,
 on the same runner; the ratio is a hardware-independent speed signal).
 
 ```sh
-# Session's submission history for a problem (strictly session-scoped)
+# Viewer's submission history for a problem (guest submissions are
+# session-scoped and purged with the session; signed-in submissions are
+# user-scoped and survive idle expiry)
 curl -b jar.txt 'https://openoj.dongziyu.com/api/submissions?slug=pair-sum'
 curl -b jar.txt https://openoj.dongziyu.com/api/submissions/42
+```
+
+## Progress (per-viewer marks)
+
+```sh
+# 'solved' / 'attempted' per problem for the current viewer (signed-in
+# user or guest); absent slugs were never tried
+curl -b jar.txt https://openoj.dongziyu.com/api/progress
 ```
 
 ## Errors

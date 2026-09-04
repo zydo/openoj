@@ -2,7 +2,7 @@
 
 OpenOJ is a containerized coding judge with a LeetCode-style
 class-and-method workflow. It runs untrusted Python 3.14.7, Java 21.0.12,
-C++20 with G++ 14.2.0, TypeScript 7.0.2 on Node 22.23.2, JavaScript on
+C++20 with G++ 14.2.0, TypeScript 5.7.3 on Node 22.23.2, JavaScript on
 Node 22.23.2, Go 1.24.4, and Rust 1.85.0 submissions, keeps problem packages
 outside the application images, and persists submission history in a Docker
 volume.
@@ -42,7 +42,7 @@ problems/
         ├── cases.json       testcase corpus ({public, hidden} display grouping)
         ├── statement.md     pure-prose statement with a fixed heading grammar
         ├── starter.py       generated from problem.json — never handcrafted
-        └── solution.*       recommended solutions (not served by the API)
+        └── solution.*       recommended solutions (served by the solutions endpoint)
 ```
 
 The flat single-file format (`0001_pair-sum.md` with `## Metadata`,
@@ -74,7 +74,7 @@ docker compose up --build                                          # default: zy
 OPENOJ_PROBLEMS=zydo/openoj-problems@v1.2.0       docker compose up --build  # pinned branch/tag
 OPENOJ_PROBLEMS=https://github.com/myname/set.git docker compose up --build  # full git URL
 OPENOJ_PROBLEMS=./name/repo                       docker compose up --build  # local, explicit
-OPENOJ_PROBLEMS=/problems                         docker compose up --build  # force the bundled 2-problem set
+OPENOJ_PROBLEMS=/problems                         docker compose up --build  # force the bundled fallback set
 ```
 
 An unreachable remote keeps the cached revision (or fails loudly on a cold
@@ -149,12 +149,12 @@ Function inputs use positional argument arrays (`[[2,7,11,15], 9]` for Two
 Sum). Design problems use `{"actions": [...], "params": [...]}` sequences.
 
 Static-language function wrappers use the same neutral `value_type` shapes on
-parameters and return values. The schema supports signed 32/64-bit integers,
-finite numbers, booleans, UTF-8 strings, nested arrays, and LeetCode-style
-linked lists (`linked_list`) and binary trees (`binary_tree`) carried as value
-and level-order arrays. The API never sends expected values to the runner;
-executor plugins encode testcase inputs into a typed binary stream and
-serialize only the submitted function's result back to JSON.
+parameters and return values. The full kind vocabulary — 25 kinds including
+`nary_tree`, `quad_tree`, `nested`, `graph`, `doubly_list`, and `json` — is
+documented in [docs/CODECS.md](docs/CODECS.md). The API never sends expected
+values to the runner; executor plugins encode testcase inputs into a typed
+binary stream and serialize only the submitted function's result back to
+JSON.
 
 The API renders only `## Description`; schema data, starters, and testcases do
 not cross into the problem pane. Starter templates are neither global nor
@@ -167,29 +167,24 @@ that prepares or compiles source, returns the per-test command/environment, and
 encodes the neutral testcase payload. Sandboxing, queueing, verdicts, storage,
 and the HTTP API remain language-independent.
 
-Python currently supplies `json`, `list_node`, `tree_node`,
-`list_node_array`, `tree_node_array`, `nary_tree`,
-and `html_parser` input codecs. Their wire forms match LeetCode conventions,
-and the familiar `ListNode`, `TreeNode`, `Node`, and
-`HtmlParser` names are injected into submitted modules. Java 21 supports the
-`json`, `list_node`, `tree_node`, `list_node_array`, and `tree_node_array`
-codecs, injecting the matching node classes. Its executor compiles once per
-submission with annotation processing disabled, then starts a fresh JVM for
-each testcase. C++, TypeScript, Go, Rust, and JavaScript use generated
-wrappers derived from the neutral typed signature; the wrapper supplies
-`ListNode`/`TreeNode` definitions for tree and linked-list problems (Rust
-starters define them, following LeetCode convention), builds the structures
-from the wire arrays, and serializes returned nodes back to level-order
-arrays. C++, TypeScript, Go, and Rust compile once per submission, then start
-a fresh process for each testcase; JavaScript runs the same generated wrapper
-on Node without a compile step.
+Per-language input/output codecs cover the well-known wire kinds;
+[docs/CODECS.md](docs/CODECS.md) is the authoritative kind-to-class table.
+The judge owns no class definitions of its own — it assembles only the
+bundle's own `provided/<lang>/` sources with a submission, and no shared or
+fallback definitions exist anywhere. Compiled languages (C++, Java,
+TypeScript, Go, Rust) compile once per submission, then start a fresh
+process for each testcase; JavaScript runs its generated wrapper on Node
+without a compile step.
 
-SQL problems are single `SELECT` queries judged against SQLite. Their
-invocation carries the schema DDL in `sql.schema`, each testcase's `dataset`
-value seeds the tables with `INSERT` statements, and the harness returns the
-query's rows for row-set or exact-order comparison. SQL problems list only
-`SQL` in their languages block, so the editor's language selector shows SQL
-alone, and non-SQL problems never offer it.
+SQL problems are judged against SQLite. The invocation carries the schema
+DDL in `sql.schema`, and each testcase's `input` array carries the setup
+statements — the harness runs `input[0]` to seed the tables — with the
+query's rows returned for row-set or exact-order comparison. Queries may
+be multi-statement for dynamic-columns problems (a discovery `SELECT`
+substitutes its column list into the statements that follow;
+docs/CODECS.md has the details). SQL problems list only `SQL` in their
+languages block, so the editor's language selector shows SQL alone, and
+non-SQL problems never offer it.
 
 Shell problems are bash scripts judged as text filters. Each testcase's raw
 file text is fed on stdin; the script's stdout (without trailing newlines) is
@@ -204,7 +199,7 @@ the same compile cost as later ones — Go additionally shares one persistent
 build cache across submissions so its standard library is compiled once per
 container, not once per job.
 
-The bundled Two Sum demo has three visible and fifteen hidden cases covering
+The bundled Pair Sum demo has three visible and fifteen hidden cases covering
 duplicates, zeros, negative values, non-adjacent answers, minimum input size,
 and integer boundaries. The remaining problem set was imported from a curated
 LeetCode selection: statements and hints were adapted locally, difficulty
@@ -278,10 +273,10 @@ resolution are disabled. The whole runner remains networkless, read-only, and
 bounded by a 768 MB memory cgroup even where managed toolchains require a larger
 virtual-address allowance.
 
-Docker build arguments pin Python, Node, and TypeScript versions. The runner
-also pins the complete Debian package revisions for G++, Go, OpenJDK, Rust,
-and the capability utility. A package repository change therefore fails the
-image build instead of silently selecting a different compiler.
+Docker build arguments (base-image tags and npm installs) pin the Python,
+Node, and TypeScript versions. The Debian packages (G++, Go, OpenJDK, Rust,
+and libcap) are pinned by major package name only, so a package repository
+change can still select a newer minor rather than failing the build.
 
 This is defense in depth for hostile code, but ordinary Docker containers share
 the host kernel. An internet-facing deployment should place the runner on a

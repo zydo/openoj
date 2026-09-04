@@ -13,11 +13,10 @@ The bank's live tree is `problems-adapt/`; `problems` is a **symlink** to
 it, so the served set can be swapped to any other layout/repo by moving
 one link. `problems-bettercode/` archives the LeetCode originals the
 adapted set derives from. `problems-extend/` is the second corpus: the
-crawled originals under ORIGINAL form (3,179 crawl-keyed bundles,
-complete except the 14 unauthored ids listed in
-`problems-extend/README.md`; the roster file itself was removed in the
-2026-08-28 cleanup — the set is derived by
-`openoj/.localonly/verify_corpus.py`). Scrape origin:
+crawled originals under ORIGINAL form (3,193 crawl-keyed bundles,
+complete — adapted into `problems-extend-adapt` as of 2026-09-03; the
+roster file itself was removed in the 2026-08-28 cleanup — the set is
+derived by `openoj/.localonly/verify_corpus.py`). Scrape origin:
 `~/code/lc-crawl` (raw) → `~/code/bettercode` (curated) →
 `problems-bettercode` (in-repo archive).
 
@@ -195,7 +194,8 @@ check the clock against the reset time before waiting on one.
   `docker run --rm -v $PWD:/work -w /work
   ghcr.io/zydo/openoj:latest openoj format <files>`
   (hash files before/after for a check).
-- `openoj format` takes FILES, not directories; `xargs -n 200` a list.
+- `openoj format` walks directories for their formattable files;
+  `xargs -n 200` just bounds the command line when piping many files.
 - macOS `split` has no `-n l/3`; use `-l <lines>`. `timeout` is absent.
 - Tests that patch `problems.PROBLEMS_DIR` must pass a resolved `Path`
   (safe_problem_path compares resolved paths; /var is a symlink).
@@ -216,13 +216,14 @@ check the clock against the reset time before waiting on one.
 
 ## Deployment
 
-Production: GCP VM `openoj` (us-west1-a, project
-`zdong-14850-alefa-ai`, account `zdong.14850@gmail.com`), repo at
+Production: GCP VM `katze` (us-east4-a since 2026-08-24 — the old
+us-west1-a `openoj` VM is retired; project `zdong-14850-alefa-ai`,
+account `zdong.14850@gmail.com`), repo at
 `/home/dongziyu/code/openoj`, site https://openoj.dongziyu.com
 (TLS is terminated by an edge proxy maintained outside this repo, which
 forwards to the web service's published port 8081).
 
-    gcloud compute ssh openoj --zone=us-west1-a \
+    gcloud compute ssh katze --zone=us-east4-a \
       --project=zdong-14850-alefa-ai --account=zdong.14850@gmail.com \
       --command="cd /home/dongziyu/code/openoj && git pull -q && \
                  docker compose up -d --build"

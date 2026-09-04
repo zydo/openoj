@@ -6,10 +6,10 @@ identically on any machine with Docker; no local compilers, formatters,
 or generators are needed.
 
 ```bash
-docker pull ghcr.io/zydo/openoj:v0.1.0   # :latest tracks main
+docker pull ghcr.io/zydo/openoj:latest   # :latest tracks main
 alias openoj='docker run --rm --user 0:0 \
   -v /path/to/openoj-problems:/tools \
-  -v /path/to/my-bundle:/bundle:rw ghcr.io/zydo/openoj:v0.1.0 openoj'
+  -v /path/to/my-bundle:/bundle:rw ghcr.io/zydo/openoj:latest openoj'
 ```
 
 `/tools` is a checkout of the problems repo (its `scripts/gen_starters.py`
@@ -31,7 +31,8 @@ The heart is `invocation`:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "reference_solution": "",
   "id": 9999, "slug": "probe-sum", "title": "Probe Sum",
   "difficulty": "H1", "tags": ["Array"],
   "invocation": {
@@ -47,9 +48,10 @@ The heart is `invocation`:
 }
 ```
 
-The `value_type` kinds are the vocabulary: `integer` (with `bits`),
-`number`, `boolean`, `string`, `array` (with `items`), `linked_list`,
-`binary_tree`. One declaration, seven languages — names follow it into
+The `value_type` kinds are the vocabulary — the full kind list (25 kinds,
+including `nary_tree`, `quad_tree`, `nested`, `graph`, `doubly_list`, and
+`json` beyond the scalar/array basics) is the table in `CODECS.md`. One
+declaration, seven languages — names follow it into
 each (go camelCase, rust snake_case) via `entrypoints` when they must
 differ.
 
@@ -64,7 +66,7 @@ representation the judge uses:
 | --- | --- |
 | linked list | array of node values, `[]` = empty |
 | binary tree | level-order array with `null` for absent children, trailing nulls trimmed |
-| graph | edge list `[from, to, weight?]` or adjacency matrix per the statement's framing |
+| graph | adjacency rows by node index, 0-based (`[[2,4],[1,3]]`); row i lists node i's neighbors |
 | design problem | `actions` (method names, `params[0]` constructs) + `params` rows |
 | interactive | the oracle's construction keys (`grid`, `arr`, …) per its manifest |
 

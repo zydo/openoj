@@ -3,7 +3,7 @@
 How problem data crosses the language boundary: the JSON wire format every
 `cases.json` uses, the binary stream the typed executors read, the wrapper
 types injected into submissions, and the special invocation protocols.
-Source of truth: `runner/leetcode_types.py` (JSON codecs),
+Source of truth: `runner/leetcode_codecs.py` (JSON codecs),
 `runner/executors/typed.py` (binary encoder), and the per-language wrapper
 templates in `runner/executors/`.
 
@@ -528,7 +528,7 @@ named variants `solution_<variant>.<ext>` (e.g. `solution_dfs.py`,
   `{"mode": "close", "tolerance": …}` customizes the tolerance in the
   problem source.
 
-Two modes live in the expected value rather than the invocation, so a
+Some modes live in the expected value rather than the invocation, so a
 single case can mix them with exactly-judged slots:
 
 - `{"mode": "any_of", "values": [...]}` — any listed answer passes. Used
@@ -538,3 +538,5 @@ single case can mix them with exactly-judged slots:
   method (see "Statistical judging of randomized methods" above).
 - `{"mode": "validator", "name": ...}` — a judge-side checker decides
   (see "Validator judging" above).
+- `{"mode": "opaque"}` — accepts any value: the slot is an intermediate
+  whose format the problem deliberately leaves free.
