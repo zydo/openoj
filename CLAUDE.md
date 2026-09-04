@@ -29,14 +29,16 @@ curated LeetCode original: rewritten statements in the bank's own voice,
 the source's own id kept (shard = `problems/0001-0100/`-style hundreds
 buckets; the bettercode set's temporary 1–838 renumbering was reverted),
 descriptive kebab slugs
-(`0001_pair-sum`), restated examples/constraints. Metadata normalizes to
-the bettercode difficulty/tags scheme.
+(`0001_pair-sum`), restated examples/constraints. `difficulty` mirrors
+the original source difficulty (Easy/Medium/Hard) in both trees — never
+a re-evaluation; tags follow the bank's normalized scheme.
 
 ## Bundle format (openoj-problems/FORMAT.md is authoritative)
 
     problems/<shard>/<id>_<slug>/
       problem.json    schema_version, reference_solution,
-                      id, slug, title, difficulty, tags, invocation, limits
+                      id, slug, title, difficulty, tags, topics,
+                      invocation, limits
       cases.json      public[] + hidden[], {"input": [...], "expected": ...}
       statement.md    '# Title', '## Description' (### Example N, Constraints)
       solutions.md    shared intro paragraph, then '## <Approach>' sections,
