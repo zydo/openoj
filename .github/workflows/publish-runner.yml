@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['runner/**', '.github/workflows/publish-runner.yml']
-    tags: ['v*']
+    paths: ["runner/**", ".github/workflows/publish-runner.yml"]
+    tags: ["v*"]
 
 permissions:
   contents: read

@@ -9,9 +9,9 @@ name: Check fallback problems
 on:
   push:
     branches: [main]
-    paths: ['problems/**', '.github/workflows/check-fallback.yml']
+    paths: ["problems/**", ".github/workflows/check-fallback.yml"]
   pull_request:
-    paths: ['problems/**', '.github/workflows/check-fallback.yml']
+    paths: ["problems/**", ".github/workflows/check-fallback.yml"]
   workflow_dispatch:
 
 permissions:
