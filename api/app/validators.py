@@ -327,7 +327,8 @@ def _validate_rearrange_pair_order(actual: Any, params: dict, case_input: Any, e
         return False
     if sorted(actual) != sorted(source):
         return False
-    return actual.rfind(y) < actual.find(x)
+    first_x = actual.find(x)
+    return first_x == -1 or actual.rfind(y) < first_x
 
 
 def _design_constructor_arguments(case_input: Any) -> list | None:
@@ -344,106 +345,6 @@ def _frequency_table(actual: Any):
     if not isinstance(actual, dict) or not all(isinstance(count, int) for count in actual.values()):
         return None
     return actual
-
-
-def _validate_disc_points(actual: Any, params: dict, case_input: Any, expected: Any) -> bool:
-    """478 Random Point in Non-overlapping Rectangles. A randomized design
-    action's frequency table (keyed by the JSON of each [x, y] draw) must be
-    uniform over the constructor's rectangles: every draw in some rectangle,
-    each rectangle binned 5×5 (degenerate sides collapse), and every bin with
-    enough expected mass within a tolerance × 3.5σ band of its area share —
-    the same banding rule as the distribution comparison."""
-    constructor = _design_constructor_arguments(case_input)
-    table = _frequency_table(actual)
-    if not constructor or table is None or not constructor:
-        return False
-    rectangles = constructor[0]
-    if not isinstance(rectangles, list) or not rectangles:
-        return False
-    parsed = []
-    total = sum(table.values())
-    minimum_samples = int(params.get("min_samples", 1000))
-    tolerance = float(params.get("tolerance", 0.10))
-    if total < max(minimum_samples, 1):
-        return False
-    epsilon = 1e-9
-    for key, count in table.items():
-        try:
-            point = json.loads(key)
-        except (TypeError, ValueError):
-            return False
-        if not (isinstance(point, list) and len(point) == 2 and all(_is_number(v) for v in point)):
-            return False
-        inside = any(
-            rectangle[0] - epsilon <= point[0] <= rectangle[2] + epsilon
-            and rectangle[1] - epsilon <= point[1] <= rectangle[3] + epsilon
-            for rectangle in rectangles
-        )
-        if not inside:
-            return False
-        parsed.append((point, count))
-    total_area = 0.0
-    for rectangle in rectangles:
-        width, height = rectangle[2] - rectangle[0], rectangle[3] - rectangle[1]
-        if width > 0 and height > 0:
-            total_area += width * height
-    if total_area <= 0:
-        return False
-    side_bins = 5
-    # One entry per bin: expected count plus its half-open (last side closed)
-    # bounds and owning rectangle. Every accepted draw is assigned to exactly
-    # one bin, so bins + tail always account for the full table.
-    bins: list[dict] = []
-    bin_totals: list[int] = []
-    for rectangle in rectangles:
-        width, height = rectangle[2] - rectangle[0], rectangle[3] - rectangle[1]
-        if width <= 0 or height <= 0:
-            continue  # zero-area rectangles carry no expected mass
-        bin_width, bin_height = width / side_bins, height / side_bins
-        for row_bin in range(side_bins):
-            for column_bin in range(side_bins):
-                bins.append({
-                    "expected": total * (bin_width * bin_height) / total_area,
-                    "low_x": rectangle[0] + column_bin * bin_width,
-                    "high_x": rectangle[0] + (column_bin + 1) * bin_width,
-                    "low_y": rectangle[1] + row_bin * bin_height,
-                    "high_y": rectangle[1] + (row_bin + 1) * bin_height,
-                    "last_x": column_bin == side_bins - 1,
-                    "last_y": row_bin == side_bins - 1,
-                    "rect_x2": rectangle[2],
-                    "rect_y2": rectangle[3],
-                })
-                bin_totals.append(0)
-    for point, count in parsed:
-        for index, entry in enumerate(bins):
-            in_x = entry["low_x"] <= point[0] < entry["high_x"] or (
-                entry["last_x"] and point[0] <= entry["rect_x2"] + epsilon
-            )
-            in_y = entry["low_y"] <= point[1] < entry["high_y"] or (
-                entry["last_y"] and point[1] <= entry["rect_y2"] + epsilon
-            )
-            if in_x and in_y:
-                bin_totals[index] += count
-                break
-        else:
-            return False
-    minimum_bucket = 10.0
-    tail_expected = 0.0
-    tail_actual = 0
-    for entry, actual_count in zip(bins, bin_totals):
-        expected_count = entry["expected"]
-        if expected_count >= minimum_bucket:
-            sigma = math.sqrt(expected_count * (1.0 - expected_count / total))
-            band = max(tolerance * expected_count, 3.5 * sigma)
-            if abs(actual_count - expected_count) > band:
-                return False
-        else:
-            tail_expected += expected_count
-            tail_actual += actual_count
-    if tail_expected > 0 or tail_actual > 0:
-        if abs(tail_actual - tail_expected) > max(tolerance * tail_expected, minimum_bucket):
-            return False
-    return True
 
 
 def _validate_flip_permutation(actual: Any, params: dict, case_input: Any, expected: Any) -> bool:
@@ -485,7 +386,6 @@ REGISTRY = {
     "grid_k_paths": _validate_grid_k_paths,
     "grid_k_paths_free": _validate_grid_k_paths_free,
     "rearrange_pair_order": _validate_rearrange_pair_order,
-    "disc_points": _validate_disc_points,
     "flip_permutation": _validate_flip_permutation,
 }
 

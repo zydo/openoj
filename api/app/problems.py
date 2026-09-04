@@ -57,7 +57,7 @@ LANGUAGE_REGISTRY = {
     "typescript": {
         "display_name": "TypeScript",
         "monaco_language": "typescript",
-        "version": "TypeScript 7.0.2 / Node 22.23.2",
+        "version": "TypeScript 5.7.3 / Node 22.23.2",
     },
     "java": {"display_name": "Java", "monaco_language": "java", "version": "JDK 21.0.12"},
     "cpp": {"display_name": "C++", "monaco_language": "cpp", "version": "G++ 14.2.0"},

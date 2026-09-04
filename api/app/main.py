@@ -69,11 +69,13 @@ def current_session(openoj_session: Annotated[str | None, Cookie()] = None) -> s
 def _set_session_cookie(response: Response, session_id: str, request: Request) -> None:
     # Secure only when the client actually reaches us over https (the edge
     # terminates TLS and forwards the scheme); localhost/CI stay usable.
+    # Deliberately a browser-session cookie (no max_age): a wall-clock cap
+    # here would log active users out mid-session; expiry is the server's
+    # idle clock, enforced by validate_session on every request.
     scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
     response.set_cookie(
         SESSION_COOKIE,
         session_id,
-        max_age=SESSION_IDLE_SECONDS,
         httponly=True,
         secure=scheme == "https",
         samesite="lax",
@@ -127,16 +129,27 @@ _LOGIN_MAX_FAILURES = 10
 _login_failures: dict[str, list[float]] = {}
 
 
-def _register_login_failure(source: str) -> bool:
-    """Record a failure; returns False when the source is throttled."""
+def _prune_login_failures(now: float) -> None:
+    """Drop sources whose every failure stamp has left the window."""
+    for source in [s for s, stamps in _login_failures.items() if not stamps or now - stamps[-1] >= _LOGIN_WINDOW_SECONDS]:
+        del _login_failures[source]
+
+
+def _login_throttled(source: str) -> bool:
+    """True when the source already burned its failure budget (checked
+    BEFORE the password verify, so throttled callers do no scrypt work)."""
+    now = time.monotonic()
+    _prune_login_failures(now)
+    recent = [stamp for stamp in _login_failures.get(source, []) if now - stamp < _LOGIN_WINDOW_SECONDS]
+    _login_failures[source] = recent
+    return len(recent) >= _LOGIN_MAX_FAILURES
+
+
+def _register_login_failure(source: str) -> None:
     now = time.monotonic()
     recent = [stamp for stamp in _login_failures.get(source, []) if now - stamp < _LOGIN_WINDOW_SECONDS]
-    if len(recent) >= _LOGIN_MAX_FAILURES:
-        _login_failures[source] = recent
-        return False
     recent.append(now)
     _login_failures[source] = recent
-    return True
 
 
 @app.post("/auth/register")
@@ -153,8 +166,10 @@ def auth_register(
         # highest privilege.
         if username != "admin":
             raise HTTPException(status_code=400, detail="The first account must be the admin (username 'admin')")
-    elif username == "admin":
-        raise HTTPException(status_code=400, detail="admin is a reserved username")
+    else:
+        # After the bootstrap, registration stays closed (as documented in
+        # docs/API.md) — accounts are managed directly in the database.
+        raise HTTPException(status_code=403, detail="Registration is closed")
     if not username or len(password) < 8:
         raise HTTPException(status_code=400, detail="Username is required and the password must be at least 8 characters")
     try:
@@ -174,10 +189,11 @@ def auth_login(
     session_id: Annotated[str, Depends(current_session)],
 ) -> dict[str, Any]:
     source = request.client.host if request.client else "unknown"
+    if _login_throttled(source):
+        raise HTTPException(status_code=429, detail="Too many failed attempts; wait a minute")
     user = verify_user(body.get("username", ""), body.get("password", ""))
     if user is None:
-        if not _register_login_failure(source):
-            raise HTTPException(status_code=429, detail="Too many failed attempts; wait a minute")
+        _register_login_failure(source)
         raise HTTPException(status_code=401, detail="Invalid username or password")
     bind_session_user(session_id, user["id"])
     return {"status": "logged_in", "username": user["username"], "is_admin": user["is_admin"]}
@@ -203,7 +219,7 @@ FIGURE_NAME = re.compile(r"^[a-z0-9-]+\.svg$")
 
 
 @app.get("/problems/{slug}/figures/{figure}")
-def problem_figure(slug: str, figure: str, session_id: Annotated[str, Depends(current_session)] = None) -> Response:
+def problem_figure(slug: str, figure: str, session_id: Annotated[str, Depends(current_session)]) -> Response:
     """Serve a bundle's redrawn statement figures (figures/<name>.svg)."""
     if FIGURE_NAME.fullmatch(figure) is None:
         raise HTTPException(status_code=404, detail="Figure not found")
@@ -217,7 +233,7 @@ def problem_figure(slug: str, figure: str, session_id: Annotated[str, Depends(cu
 
 
 @app.get("/problems/{slug}/solutions")
-def problem_solutions(slug: str, session_id: Annotated[str, Depends(current_session)] = None) -> dict[str, Any]:
+def problem_solutions(slug: str, session_id: Annotated[str, Depends(current_session)]) -> dict[str, Any]:
     """Solutions-tab content: per-variant explanations plus each variant's
     implementation in every offered language."""
     try:
@@ -253,9 +269,9 @@ def put_draft(
 
 @app.get("/problems")
 def problems(
+    session_id: Annotated[str, Depends(current_session)],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=0, le=500)] = 0,
-    session_id: Annotated[str, Depends(current_session)] = None,
 ) -> dict[str, Any]:
     """List problems, optionally paginated.
 
@@ -287,7 +303,7 @@ def problems(
 
 
 @app.get("/problems/{slug}")
-def problem(slug: str, session_id: Annotated[str, Depends(current_session)] = None) -> dict[str, Any]:
+def problem(slug: str, session_id: Annotated[str, Depends(current_session)]) -> dict[str, Any]:
     try:
         return public_problem(load_problem(slug))
     except ProblemError as error:
@@ -372,7 +388,7 @@ def _run_judge(
 
 @app.post("/format")
 def format_source(
-    request: FormatRequest, session_id: Annotated[str, Depends(current_session)] = None
+    request: FormatRequest, session_id: Annotated[str, Depends(current_session)]
 ) -> dict[str, Any]:
     """Format an editor draft with the same toolchain the problem bundles use.
 
@@ -388,7 +404,7 @@ def format_source(
 
 
 @app.post("/run")
-def run(request: RunRequest, session_id: Annotated[str, Depends(current_session)] = None) -> dict[str, Any]:
+def run(request: RunRequest, session_id: Annotated[str, Depends(current_session)]) -> dict[str, Any]:
     try:
         problem_data = load_problem(request.slug)
     except ProblemError as error:
@@ -458,7 +474,7 @@ def _reference_runtime_ms(
 
 
 @app.post("/submit")
-def submit(request: SubmitRequest, session_id: Annotated[str, Depends(current_session)] = None) -> dict[str, Any]:
+def submit(request: SubmitRequest, session_id: Annotated[str, Depends(current_session)]) -> dict[str, Any]:
     try:
         problem_data = load_problem(request.slug)
         cases, public_count = load_all_cases(request.slug)
@@ -509,15 +525,15 @@ def _summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 @app.get("/submissions")
 def submissions(
+    session_id: Annotated[str, Depends(current_session)],
     slug: str = Query(min_length=1),
     limit: int = Query(default=30, ge=1, le=100),
-    session_id: Annotated[str, Depends(current_session)] = None,
 ):
     return list_submissions(slug, limit, scope_key(session_id))
 
 
 @app.get("/submissions/{submission_id}")
-def submission(submission_id: int, session_id: Annotated[str, Depends(current_session)] = None):
+def submission(submission_id: int, session_id: Annotated[str, Depends(current_session)]):
     result = get_submission(submission_id, scope_key(session_id))
     if result is None:
         raise HTTPException(status_code=404, detail="Submission not found")
@@ -525,7 +541,7 @@ def submission(submission_id: int, session_id: Annotated[str, Depends(current_se
 
 
 @app.get("/progress")
-def progress(session_id: Annotated[str, Depends(current_session)] = None) -> dict[str, str]:
+def progress(session_id: Annotated[str, Depends(current_session)]) -> dict[str, str]:
     """Per-problem status marks for the current viewer (signed-in user or
     guest): 'solved' when any submission in any language was accepted,
     'attempted' otherwise; absent slugs are never-tried."""

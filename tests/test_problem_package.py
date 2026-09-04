@@ -130,7 +130,7 @@ Can you design an algorithm with less than `O(n²)` time complexity?
   "typescript": {
     "display_name": "TypeScript",
     "monaco_language": "typescript",
-    "version": "TypeScript 7.0.2 / Node 22.23.2",
+    "version": "TypeScript 5.7.3 / Node 22.23.2",
     "enabled": true
   },
   "java": {

@@ -5,7 +5,6 @@ registry entry gets a valid answer (accepted) and at least one near-miss
 Each validator spec is trusted authoring content (see docs/TRUST-BOUNDARIES.md);
 these tests pin the acceptance boundary the judge enforces at run time.
 """
-import random
 import unittest
 
 from api.app.judge import _compare
@@ -182,54 +181,11 @@ class RearrangePairOrderValidatorTests(unittest.TestCase):
             accepts("cbb", spec("rearrange_pair_order"), ["aabc", "a", "c"])
         )
 
-
-class DiscPointsValidatorTests(unittest.TestCase):
-    # disc_points (478): uniform draws over two equal-area rectangles.
-    RECTS = [[0, 0, 1, 1], [2, 0, 3, 1]]
-
-    @staticmethod
-    def sample_table(k, biased=False):
-        table = {}
-        for _ in range(k):
-            rect = DiscPointsValidatorTests.RECTS[0] if biased else random.choice(
-                DiscPointsValidatorTests.RECTS
-            )
-            point = [
-                random.uniform(rect[0], rect[2]),
-                random.uniform(rect[1], rect[3]),
-            ]
-            key = repr(point)
-            table[key] = table.get(key, 0) + 1
-        return table
-
-    def setUp(self) -> None:
-        self.case_input = {
-            "actions": [{}, {"call": "randPoint", "repeat": 8000}],
-            "params": [[self.RECTS], []],
-        }
-
-    def test_accepts_a_uniform_sampler(self) -> None:
+    def test_absent_x_is_vacuously_satisfied(self) -> None:
+        # y never followed by x: with x absent from the answer there is no
+        # ordering left to violate, so any permutation is accepted.
         self.assertTrue(
-            accepts(
-                self.sample_table(8000), spec("disc_points"), self.case_input
-            )
-        )
-
-    def test_rejects_biased_out_of_rectangle_and_thin_samples(self) -> None:
-        self.assertFalse(
-            accepts(
-                self.sample_table(8000, biased=True),
-                spec("disc_points"),
-                self.case_input,
-            )
-        )
-        self.assertFalse(
-            accepts(
-                {repr([5.0, 5.0]): 1}, spec("disc_points"), self.case_input
-            )
-        )
-        self.assertFalse(
-            accepts(self.sample_table(50), spec("disc_points"), self.case_input)
+            accepts("cbaa", spec("rearrange_pair_order"), ["aabc", "z", "c"])
         )
 
 
