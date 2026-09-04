@@ -46,65 +46,65 @@ function runMode() {
 // ── Problem catalogue ──────────────────────────────────────────────────────
 // [title, tags, difficulty]
 const ROWS = [
-  ["Two Sum", ["Array", "Hash Table"], "H1"],
-  ["Valid Parentheses", ["Stack", "String"], "H1"],
-  ["Merge Two Sorted Lists", ["Linked List"], "H1"],
-  ["Reverse Linked List", ["Linked List"], "H1"],
-  ["Binary Tree Inorder Traversal", ["Binary Tree", "DFS"], "H2"],
-  ["Maximum Subarray", ["Array", "Divide and Conquer"], "H2"],
-  ["Longest Substring Without Repeating Characters", ["Hash Table", "Sliding Window"], "H2"],
-  ["Container With Most Water", ["Array", "Two Pointers"], "H2"],
-  ["LRU Cache", ["Design", "Hash Table"], "H3"],
-  ["Course Schedule", ["Graph", "Topological Sort"], "H3"],
-  ["Edit Distance", ["Dynamic Programming"], "H3"],
-  ["Find Median from Data Stream", ["Heap", "Design"], "H4"],
-  ["Median of Two Sorted Arrays", ["Array", "Binary Search"], "H4"],
-  ["Palindrome Partitioning II", ["Dynamic Programming"], "H4"],
-  ["Reconstruct Itinerary", ["Graph", "DFS"], "H3"],
-  ["Word Ladder II", ["Graph", "BFS"], "H4"],
-  ["Sudoku Solver", ["Backtracking", "Matrix"], "H4"],
-  ["Count of Smaller Numbers After Self", ["Fenwick Tree", "Divide and Conquer"], "H4"],
-  ["Trapping Rain Water", ["Array", "Two Pointers"], "H2"],
-  ["Kth Largest Element in an Array", ["Heap", "Quickselect"], "H2"],
-  ["Minimum Window Substring", ["Hash Table", "Sliding Window"], "H3"],
-  ["Serialize and Deserialize Binary Tree", ["Design", "Binary Tree"], "H3"],
-  ["Longest Increasing Subsequence", ["Dynamic Programming"], "H2"],
-  ["Coin Change", ["Dynamic Programming"], "H2"],
-  ["Best Time to Buy and Sell Stock", ["Array"], "H1"],
-  ["Climbing Stairs", ["Dynamic Programming"], "H1"],
-  ["Number of Islands", ["Matrix", "DFS"], "H2"],
-  ["Top K Frequent Elements", ["Hash Table", "Heap"], "H2"],
-  ["Pacific Atlantic Water Flow", ["Matrix", "DFS"], "H3"],
-  ["Alien Dictionary", ["Graph", "Topological Sort"], "H3"],
-  ["Merge K Sorted Lists", ["Heap", "Linked List"], "H3"],
-  ["Word Break", ["Dynamic Programming"], "H2"],
-  ["Decode Ways", ["Dynamic Programming"], "H2"],
-  ["Jump Game", ["Greedy", "Array"], "H2"],
-  ["House Robber", ["Dynamic Programming"], "H2"],
-  ["Gas Station", ["Greedy", "Array"], "H2"],
-  ["Candy", ["Greedy", "Array"], "H3"],
-  ["Longest Consecutive Sequence", ["Hash Table", "Union Find"], "H3"],
-  ["Group Anagrams", ["Hash Table", "String"], "H2"],
-  ["Spiral Matrix", ["Matrix"], "H2"],
-  ["Rotate Image", ["Matrix"], "H2"],
-  ["Set Matrix Zeroes", ["Matrix"], "H2"],
-  ["Word Search", ["Backtracking", "Matrix"], "H2"],
-  ["Search in Rotated Sorted Array", ["Array", "Binary Search"], "H2"],
-  ["Find First and Last Position of Element in Sorted Array", ["Array", "Binary Search"], "H2"],
-  ["Combination Sum", ["Backtracking"], "H2"],
-  ["Permutations", ["Backtracking"], "H2"],
-  ["Subsets", ["Backtracking"], "H2"],
-  ["Letter Combinations of a Phone Number", ["Backtracking", "String"], "H2"],
-  ["Validate Binary Search Tree", ["Binary Tree", "DFS"], "H2"],
-  ["Binary Tree Level Order Traversal", ["Binary Tree", "BFS"], "H2"],
-  ["Construct Binary Tree from Preorder and Inorder Traversal", ["Binary Tree", "Divide and Conquer"], "H3"],
-  ["Symmetric Tree", ["Binary Tree", "BFS"], "H1"],
-  ["Maximum Depth of Binary Tree", ["Binary Tree", "DFS"], "H1"],
-  ["Diameter of Binary Tree", ["Binary Tree", "DFS"], "H1"],
-  ["Invert Binary Tree", ["Binary Tree"], "H1"],
-  ["Lowest Common Ancestor of a Binary Tree", ["Binary Tree", "DFS"], "H2"],
-  ["Kth Smallest Element in a BST", ["Binary Tree", "DFS"], "H2"],
-  ["Sliding Window Maximum", ["Heap", "Sliding Window"], "H3"],
+  ["Two Sum", ["Array", "Hash Table"], "Easy"],
+  ["Valid Parentheses", ["Stack", "String"], "Easy"],
+  ["Merge Two Sorted Lists", ["Linked List"], "Easy"],
+  ["Reverse Linked List", ["Linked List"], "Easy"],
+  ["Binary Tree Inorder Traversal", ["Binary Tree", "DFS"], "Medium"],
+  ["Maximum Subarray", ["Array", "Divide and Conquer"], "Medium"],
+  ["Longest Substring Without Repeating Characters", ["Hash Table", "Sliding Window"], "Medium"],
+  ["Container With Most Water", ["Array", "Two Pointers"], "Medium"],
+  ["LRU Cache", ["Design", "Hash Table"], "Hard"],
+  ["Course Schedule", ["Graph", "Topological Sort"], "Hard"],
+  ["Edit Distance", ["Dynamic Programming"], "Hard"],
+  ["Find Median from Data Stream", ["Heap", "Design"], "Hard"],
+  ["Median of Two Sorted Arrays", ["Array", "Binary Search"], "Hard"],
+  ["Palindrome Partitioning II", ["Dynamic Programming"], "Hard"],
+  ["Reconstruct Itinerary", ["Graph", "DFS"], "Hard"],
+  ["Word Ladder II", ["Graph", "BFS"], "Hard"],
+  ["Sudoku Solver", ["Backtracking", "Matrix"], "Hard"],
+  ["Count of Smaller Numbers After Self", ["Fenwick Tree", "Divide and Conquer"], "Hard"],
+  ["Trapping Rain Water", ["Array", "Two Pointers"], "Medium"],
+  ["Kth Largest Element in an Array", ["Heap", "Quickselect"], "Medium"],
+  ["Minimum Window Substring", ["Hash Table", "Sliding Window"], "Hard"],
+  ["Serialize and Deserialize Binary Tree", ["Design", "Binary Tree"], "Hard"],
+  ["Longest Increasing Subsequence", ["Dynamic Programming"], "Medium"],
+  ["Coin Change", ["Dynamic Programming"], "Medium"],
+  ["Best Time to Buy and Sell Stock", ["Array"], "Easy"],
+  ["Climbing Stairs", ["Dynamic Programming"], "Easy"],
+  ["Number of Islands", ["Matrix", "DFS"], "Medium"],
+  ["Top K Frequent Elements", ["Hash Table", "Heap"], "Medium"],
+  ["Pacific Atlantic Water Flow", ["Matrix", "DFS"], "Hard"],
+  ["Alien Dictionary", ["Graph", "Topological Sort"], "Hard"],
+  ["Merge K Sorted Lists", ["Heap", "Linked List"], "Hard"],
+  ["Word Break", ["Dynamic Programming"], "Medium"],
+  ["Decode Ways", ["Dynamic Programming"], "Medium"],
+  ["Jump Game", ["Greedy", "Array"], "Medium"],
+  ["House Robber", ["Dynamic Programming"], "Medium"],
+  ["Gas Station", ["Greedy", "Array"], "Medium"],
+  ["Candy", ["Greedy", "Array"], "Hard"],
+  ["Longest Consecutive Sequence", ["Hash Table", "Union Find"], "Hard"],
+  ["Group Anagrams", ["Hash Table", "String"], "Medium"],
+  ["Spiral Matrix", ["Matrix"], "Medium"],
+  ["Rotate Image", ["Matrix"], "Medium"],
+  ["Set Matrix Zeroes", ["Matrix"], "Medium"],
+  ["Word Search", ["Backtracking", "Matrix"], "Medium"],
+  ["Search in Rotated Sorted Array", ["Array", "Binary Search"], "Medium"],
+  ["Find First and Last Position of Element in Sorted Array", ["Array", "Binary Search"], "Medium"],
+  ["Combination Sum", ["Backtracking"], "Medium"],
+  ["Permutations", ["Backtracking"], "Medium"],
+  ["Subsets", ["Backtracking"], "Medium"],
+  ["Letter Combinations of a Phone Number", ["Backtracking", "String"], "Medium"],
+  ["Validate Binary Search Tree", ["Binary Tree", "DFS"], "Medium"],
+  ["Binary Tree Level Order Traversal", ["Binary Tree", "BFS"], "Medium"],
+  ["Construct Binary Tree from Preorder and Inorder Traversal", ["Binary Tree", "Divide and Conquer"], "Hard"],
+  ["Symmetric Tree", ["Binary Tree", "BFS"], "Easy"],
+  ["Maximum Depth of Binary Tree", ["Binary Tree", "DFS"], "Easy"],
+  ["Diameter of Binary Tree", ["Binary Tree", "DFS"], "Easy"],
+  ["Invert Binary Tree", ["Binary Tree"], "Easy"],
+  ["Lowest Common Ancestor of a Binary Tree", ["Binary Tree", "DFS"], "Medium"],
+  ["Kth Smallest Element in a BST", ["Binary Tree", "DFS"], "Medium"],
+  ["Sliding Window Maximum", ["Heap", "Sliding Window"], "Hard"],
 ];
 
 function slugify(title) {
@@ -117,7 +117,18 @@ const PROBLEMS = ROWS.map(([title, tags, difficulty], index) => ({
   title,
   difficulty,
   tags,
+  topics: tags,
 }));
+
+const TOPIC_INDEX = (() => {
+  const counts = new Map();
+  for (const problem of PROBLEMS) {
+    for (const topic of problem.topics) counts.set(topic, (counts.get(topic) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+    .map(([name, count]) => ({ name, count }));
+})();
 
 const LANGUAGES = {
   python3: { display_name: "Python 3", monaco_language: "python", enabled: true, version: "3.14.7" },
@@ -316,6 +327,10 @@ const server = http.createServer((req, res) => {
         return res.end(toJSON({ status: "saved" }));
       }
       return res.end(toJSON([]));
+    }
+
+    if (path === "/api/problems/topics" && req.method === "GET") {
+      return res.end(toJSON({ topics: TOPIC_INDEX }));
     }
 
     if (path === "/api/problems" && req.method === "GET") {

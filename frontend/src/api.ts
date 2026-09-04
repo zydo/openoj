@@ -1,4 +1,4 @@
-import type { JudgeResult, Problem, ProblemPage, SolutionsContent, Submission } from "./types";
+import type { JudgeResult, Problem, ProblemPage, SolutionsContent, Submission, TopicIndex } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -75,6 +75,7 @@ export const api = {
   // passes an explicit page_size to fetch just the page it renders.
   getProblems: (page = 1, pageSize = 0) =>
     request<ProblemPage>(`/problems?page=${page}&page_size=${pageSize}`),
+  getTopicIndex: () => request<TopicIndex>("/problems/topics"),
   getSolutions: (slug: string): Promise<SolutionsContent> =>
     request<SolutionsContent>(`/problems/${encodeURIComponent(slug)}/solutions`),
   getDrafts: (slug: string): Promise<DraftRow[]> =>

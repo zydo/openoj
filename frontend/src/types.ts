@@ -4,6 +4,16 @@ export type ProblemSummary = {
     title: string;
     difficulty: string;
     tags: string[];
+    topics: string[];
+};
+
+export type TopicIndex = {
+    topics: TopicSummary[];
+};
+
+export type TopicSummary = {
+    name: string;
+    count: number;
 };
 
 export type ProblemPage = {

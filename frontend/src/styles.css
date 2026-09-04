@@ -439,10 +439,14 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .landing .problem-row strong { font-size: 16px; letter-spacing: -.01em; }
 .landing-error { color: var(--red); font-size: 12px; padding: 12px 4px; }
 .landing-loading { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; padding: 14px 4px; }
-.landing-filter { margin-bottom: 14px; }
-.landing-search { width: 100%; height: 40px; padding: 0 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font-size: 13.5px; }
+.landing-filter { display: flex; gap: 8px; margin-bottom: 14px; }
+.landing-search { flex: 1 1 auto; min-width: 0; height: 40px; padding: 0 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font-size: 13.5px; }
 .landing-search::placeholder { color: var(--quiet); }
 .landing-search:focus { border-color: var(--cyan); outline: none; }
+.topic-select { flex: 0 0 auto; max-width: 230px; height: 40px; padding: 0 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; font-size: 13.5px; }
+.topic-select:focus { border-color: var(--cyan); outline: none; }
+.drawer-tools .topic-select { height: 38px; color: #d8dee2; background: #101416; border: 1px solid #2c353b; border-radius: 5px; font-size: 13px; }
+[data-theme="light"] .drawer-tools .topic-select { color: #27343b; background: #fbfcfc; border-color: #ccd7dc; }
 .landing-empty { margin: 22px 0; color: var(--quiet); font-size: 12px; text-align: center; }
 .pagination { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 6px; margin-top: 18px; }
 .page-button { min-width: 30px; height: 30px; padding: 0 8px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font: 12px "Roboto Mono", monospace; cursor: pointer; }

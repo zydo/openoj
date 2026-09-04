@@ -31,7 +31,7 @@ import {
   X,
 } from "lucide-react";
 import { api, onUnauthorized } from "./api";
-import type { JudgeResult, Problem, ProblemSummary, SolutionsContent, Submission } from "./types";
+import type { JudgeResult, Problem, ProblemSummary, SolutionsContent, Submission, TopicSummary } from "./types";
 
 type Theme = "light" | "dark";
 
@@ -106,26 +106,13 @@ function statusTone(status?: string) {
   return "warning";
 }
 
+// The bank carries the original source difficulty (Easy/Medium/Hard),
+// mirrored from the crawl archive — shown as-is, with the usual tones.
 function difficultyTone(difficulty: string) {
-  const level = Number.parseInt(difficulty.replace(/[^0-9]/g, ""), 10);
-  if (Number.isNaN(level)) return "easy";
-  if (level <= 2) return "easy";
-  if (level === 3) return "medium";
-  return "hard";
-}
-
-// The curated problem set grades difficulty on a five-level scale (H1–H5);
-// display the levels as words rather than raw labels.
-const DIFFICULTY_LABELS: Record<string, string> = {
-  H1: "Very Easy",
-  H2: "Easy",
-  H3: "Medium",
-  H4: "Hard",
-  H5: "Very Hard",
-};
-
-function difficultyLabel(difficulty: string) {
-  return DIFFICULTY_LABELS[difficulty] ?? difficulty;
+  const name = difficulty.trim().toLowerCase();
+  if (name === "easy") return "easy";
+  if (name === "hard") return "hard";
+  return "medium";
 }
 
 // Search normalization: case-insensitive and blind to punctuation, so
@@ -136,7 +123,57 @@ function searchText(value: string) {
 
 function matchesFilter(entry: ProblemSummary, normalizedQuery: string) {
   return searchText(entry.title).includes(normalizedQuery)
-    || entry.tags.some((tag) => searchText(tag).includes(normalizedQuery));
+    || entry.tags.some((tag) => searchText(tag).includes(normalizedQuery))
+    || numberMatches(entry.id, normalizedQuery);
+}
+
+// The topic filter's option list — fetched once per session and shared by
+// the landing filter and the problem drawer.
+let topicIndexPromise: Promise<TopicSummary[]> | null = null;
+function loadTopicIndex() {
+  topicIndexPromise ??= api.getTopicIndex().then((data) => data.topics);
+  return topicIndexPromise;
+}
+
+function matchesTopic(entry: ProblemSummary, topic: string) {
+  return topic === "" || entry.topics.includes(topic);
+}
+
+function TopicSelect({ topic, onPick }: {
+  topic: string;
+  onPick: (topic: string) => void;
+}) {
+  const [topics, setTopics] = useState<TopicSummary[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    loadTopicIndex().then((loaded) => {
+      if (!cancelled) setTopics(loaded);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+  return (
+    <select
+      className="topic-select"
+      value={topic}
+      onChange={(event) => onPick(event.target.value)}
+      aria-label="Filter by topic"
+    >
+      <option value="">All topics</option>
+      {topics.map((entry) => (
+        <option key={entry.name} value={entry.name}>
+          {entry.name} ({entry.count})
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// A digits-only query also matches the displayed problem number, by
+// prefix ("39" finds 39, 390–399, 3900–3999). Leading zeros are
+// forgiven so "0042" finds 42.
+function numberMatches(id: number, normalizedQuery: string) {
+  if (!/^\d+$/.test(normalizedQuery)) return false;
+  return String(id).startsWith(normalizedQuery.replace(/^0+(?=\d)/, ""));
 }
 
 function formatJson(value: unknown) {
@@ -730,7 +767,7 @@ function App() {
               <div className="problem-heading">
                 <h1>{problem.id}. {problem.title}{progress[problem.slug] && <StatusMark state={progress[problem.slug]} size={17} />}</h1>
                 <div className="problem-meta">
-                  <span className={`difficulty ${difficultyTone(problem.difficulty)}`}>{difficultyLabel(problem.difficulty)}</span>
+                  <span className={`difficulty ${difficultyTone(problem.difficulty)}`}>{problem.difficulty}</span>
                   {problem.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
                 </div>
               </div>
@@ -1145,6 +1182,7 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout, progress, seed }: {
   const [loading, setLoading] = useState(!seed);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  const [topic, setTopic] = useState("");
   // Full problem set for the search box; the rendered page alone would miss
   // problems on later pages.
   const [allItems, setAllItems] = useState<ProblemSummary[] | null>(seed);
@@ -1191,8 +1229,9 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout, progress, seed }: {
   };
 
   const normalized = searchText(query);
-  const filtered = normalized && allItems
-    ? allItems.filter((entry) => matchesFilter(entry, normalized))
+  const filtering = normalized !== "" || topic !== "";
+  const filtered = filtering && allItems
+    ? allItems.filter((entry) => matchesFilter(entry, normalized) && matchesTopic(entry, topic))
     : null;
 
   const renderRow = (entry: ProblemSummary) => (
@@ -1206,7 +1245,7 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout, progress, seed }: {
         {entry.tags.length > 0 && <small>{entry.tags.join(" · ")}</small>}
       </span>
       {progress[entry.slug] && <StatusMark state={progress[entry.slug]} />}
-      <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{difficultyLabel(entry.difficulty)}</span>
+      <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{entry.difficulty}</span>
     </button>
   );
 
@@ -1266,16 +1305,19 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout, progress, seed }: {
                 className="landing-search"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Filter by title or tag"
+                placeholder="Filter by title, tag, or number"
                 aria-label="Filter problems"
               />
+              <TopicSelect topic={topic} onPick={setTopic} />
             </div>
             {error ? (
               <p className="landing-error">{error}</p>
             ) : filtered !== null ? (
               <div className="landing-list">
                 {filtered.length ? filtered.map(renderRow) : (
-                  <p className="landing-empty">No problems match “{query.trim()}”.</p>
+                  <p className="landing-empty">
+                    No problems match {query.trim() ? `“${query.trim()}”` : "the selected topic"}.
+                  </p>
                 )}
               </div>
             ) : loading && items.length === 0 ? (
@@ -1655,6 +1697,7 @@ function ProblemDrawer({ problems, activeSlug, progress, onSelect, onClose }: {
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
+  const [topic, setTopic] = useState("");
   const filterRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -1667,8 +1710,8 @@ function ProblemDrawer({ problems, activeSlug, progress, onSelect, onClose }: {
   }, [onClose]);
 
   const normalized = searchText(query.trim());
-  const filtered = normalized
-    ? problems.filter((entry) => matchesFilter(entry, normalized))
+  const filtered = normalized || topic
+    ? problems.filter((entry) => matchesFilter(entry, normalized) && matchesTopic(entry, topic))
     : problems;
 
   return (
@@ -1684,9 +1727,10 @@ function ProblemDrawer({ problems, activeSlug, progress, onSelect, onClose }: {
             className="drawer-filter"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter by title or tag"
+            placeholder="Filter by title, tag, or number"
             aria-label="Filter problems"
           />
+          <TopicSelect topic={topic} onPick={setTopic} />
           <span className="drawer-count">{filtered.length} of {problems.length} problems</span>
         </div>
         <div className="drawer-list">
@@ -1701,7 +1745,7 @@ function ProblemDrawer({ problems, activeSlug, progress, onSelect, onClose }: {
                 {entry.tags.length > 0 && <small>{entry.tags.join(" · ")}</small>}
               </span>
               {progress[entry.slug] && <StatusMark state={progress[entry.slug]} />}
-              <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{difficultyLabel(entry.difficulty)}</span>
+              <span className={`difficulty ${difficultyTone(entry.difficulty)}`}>{entry.difficulty}</span>
             </button>
           )) : <p className="drawer-empty">No problems match “{query.trim()}”.</p>}
         </div>
