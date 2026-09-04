@@ -18,6 +18,7 @@ def _bundle_files(reference: str = "", with_canonical: bool = True, with_variant
                 "difficulty": "Easy",
                 "tags": ["Array"],
                 "topics": ["Array"],
+                "type": "Algorithms",
                 "invocation": {
                     "type": "function",
                     "class_name": "Solution",

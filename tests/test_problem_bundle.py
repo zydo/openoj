@@ -17,6 +17,7 @@ BUNDLE = {
             "difficulty": "Easy",
             "tags": ["Array"],
             "topics": ["Array"],
+            "type": "Algorithms",
             "invocation": {
                 "type": "function",
                 "class_name": "Solution",

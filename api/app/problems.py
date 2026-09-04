@@ -381,6 +381,7 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
             "difficulty",
             "tags",
             "topics",
+            "type",
             "invocation",
             "limits",
         },
@@ -421,6 +422,8 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
         isinstance(topic, str) and topic for topic in problem_data["topics"]
     ):
         raise ProblemError("problem.json topics must be an array of non-empty strings")
+    if problem_data["type"] not in {"Algorithms", "Database", "Shell"}:
+        raise ProblemError("problem.json type must be one of Algorithms, Database, Shell")
     invocation = problem_data["invocation"]
     if not isinstance(invocation, dict) or not invocation:
         raise ProblemError("problem.json invocation must be an object")
@@ -505,6 +508,7 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
         "difficulty": problem_data["difficulty"],
         "tags": problem_data["tags"],
         "topics": problem_data["topics"],
+        "type": problem_data["type"],
         "description": description + "\n",
         "hints": hints,
         "invocation": invocation,
@@ -543,11 +547,12 @@ def _cached_summary(path_string: str, modified_ns: int, size: int) -> Optional[d
             data = json.loads((path / "problem.json").read_text(encoding="utf-8"))
             return {
                 key: data[key]
-                for key in ("id", "slug", "title", "difficulty", "tags", "topics")
+                for key in ("id", "slug", "title", "difficulty", "tags", "topics", "type")
             }
         problem, _, _ = parse_problem_markdown(path.read_text(encoding="utf-8"), path)
         summary = {key: problem[key] for key in ("id", "slug", "title", "difficulty", "tags")}
         summary["topics"] = problem.get("topics", [])
+        summary["type"] = problem.get("type", "Algorithms")
         return summary
     except (ProblemError, OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
         return None
@@ -810,6 +815,7 @@ def public_problem(problem: dict[str, Any]) -> dict[str, Any]:
         "difficulty",
         "tags",
         "topics",
+        "type",
         "description",
         "hints",
         "invocation",
