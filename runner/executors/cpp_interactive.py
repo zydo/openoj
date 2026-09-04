@@ -376,7 +376,7 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         if buffer_slot is None:
             call_block = (
                 f"auto openoj_actual = openoj_solution.{method}({call_arguments});\n"
-                '        openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"completed\\",\\"actual\\":" + openoj_json(openoj_actual) + "}")'
+                '        openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"completed\\",\\"actual\\":" + openoj_json(openoj_actual) + "}");'
             )
         else:
             buffer = buffer_variables[buffer_slot]
@@ -395,7 +395,7 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
     else:
         call_block = (
             f"openoj_solution.{method}({call_arguments});\n"
-            '        openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"completed\\",\\"actual\\":" + openoj_json(openoj_oracle.verdict()) + "}")'
+            '        openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"completed\\",\\"actual\\":" + openoj_json(openoj_oracle.verdict()) + "}");'
         )
 
     provided_source = "".join(
