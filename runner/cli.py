@@ -169,6 +169,13 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
 
     compiled.CompiledExecutor.compile = _plain_compile
 
+    # JavaExecutor never calls compile(): javac runs under its own sandboxed
+    # Popen inside prepare(). Neutralize its command wrapper the same way —
+    # the same javac invocation, without the rlimits and uid drop.
+    from executors.java import JavaExecutor
+
+    JavaExecutor.compiler_command = lambda self, command, job_root: list(command)
+
     bundle = Path(arguments.bundle)
     problem = json.loads((bundle / "problem.json").read_text(encoding="utf-8"))
     invocation = problem["invocation"]
@@ -270,6 +277,7 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
                 failures += 1
                 continue
             for index, case in enumerate(all_cases):
+                process = None
                 try:
                     if getattr(executor, "encode_case_with_limits", False):
                         payload = executor.encode_case(invocation, case["input"], limits)
@@ -284,6 +292,15 @@ def cmd_judge(arguments: argparse.Namespace) -> int:
                     )
                     output, _ = process.communicate(payload, timeout=limits.get("time_ms", 1500) / 1000 * 3 + 5)
                 except Exception as error:  # noqa: BLE001
+                    # communicate(timeout=...) raises without killing the
+                    # child; reap it or it keeps running while the finally
+                    # below deletes the working directory it sits in.
+                    if process is not None:
+                        try:
+                            process.kill()
+                            process.wait()
+                        except ProcessLookupError:
+                            pass
                     print(f"FAIL  {solution.name}: case {index + 1}: {error}")
                     failures += 1
                     continue

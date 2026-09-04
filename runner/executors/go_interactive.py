@@ -149,7 +149,7 @@ MAIN_TEMPLATE = """\
 func main() {
 	defer func() {
 		if problem := recover(); problem != nil {
-			openojEmit("__OPENOJ_RESULT__" + fmt.Sprintf(`{"status":"runtime_error","error":"%v"}`, problem))
+			openojEmit("__OPENOJ_RESULT__" + `{"status":"runtime_error","error":` + openojJSON(fmt.Sprintf("%v", problem)) + "}")
 		}
 	}()
 	bytes_ := make([]byte, 0, 4096)
@@ -392,7 +392,7 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         (executor.compiler_path, "build", "-trimpath", "-ldflags=-s -w", "-o", str(executable), str(wrapper),
          *[str(job_root / f"assembly_{name}") for name, _ in provided_files]),
         executable,
-        {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "TMPDIR": "/tmp", "LANG": "C.UTF-8", "GOCACHE": "/tmp/gocache", "GOPATH": "/tmp/gopath", "GOMODCACHE": "/tmp/gomodcache", "GOFLAGS": "-mod=mod", "GO111MODULE": "off"},
+        {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "TMPDIR": "/tmp", "LANG": "C.UTF-8", "GOCACHE": "/tmp/openoj-gocache", "GOPATH": "/tmp/gopath", "GOMODCACHE": "/tmp/gomodcache", "GOFLAGS": "-mod=mod", "GO111MODULE": "off"},
     )
     return PreparedProgram(
         command=(str(executable),),

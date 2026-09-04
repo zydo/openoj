@@ -220,15 +220,19 @@ fn openoj_run() -> Result<String, String> {
         let solution: &mut @CLASS_NAME@ = unsafe { &mut *target };
         if repeat > 1 {
             let mut frequencies: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+            let mut last = OjValue::Null;
             for _trial in 0..repeat {
                 let result = dispatch_@CLASS_NAME@(solution, &name, &call_arguments, &instance_arguments)?;
                 *frequencies.entry(openoj_json(&result)).or_insert(0) += 1;
+                last = result;
             }
             let table = OjValue::Object(frequencies.into_iter().map(|(key, count)| {
                 (key, OjValue::Int(count))
             }).collect());
-            outputs.push(table.clone());
-            previous = table;
+            outputs.push(table);
+            // $prev carries the last raw result, not the frequency table
+            // (python_harness pipes raw_output).
+            previous = last;
         } else {
             let result = dispatch_@CLASS_NAME@(solution, &name, &call_arguments, &instance_arguments)?;
             outputs.push(result.clone());

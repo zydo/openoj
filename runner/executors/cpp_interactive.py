@@ -99,7 +99,11 @@ struct OjTaggedReader {
                 out.kind = OjValue::Object;
                 unsigned count = u32();
                 out.fields.reserve(count);
-                for (unsigned i = 0; i < count; ++i) out.fields.emplace_back(value().text, value());
+                for (unsigned i = 0; i < count; ++i) {
+                    OjValue key = value();
+                    OjValue item = value();
+                    out.fields.emplace_back(key.text, item);
+                }
                 break;
             }
             default: throw std::runtime_error("Unknown tagged value");
@@ -194,7 +198,7 @@ int main() {
         @ORACLE_CLASS@ openoj_oracle(@ORACLE_ARGS@);
 @CALL_BLOCK@
     } catch (const std::exception& error) {
-        openojEmit(std::string("__OPENOJ_RESULT__{\\"status\\":\\"runtime_error\\",\\"error\\":\\"") + error.what() + "\\"}");
+        openojEmit(std::string("__OPENOJ_RESULT__{\\"status\\":\\"runtime_error\\",\\"error\\":") + openoj_json(std::string(error.what())) + "}");
     } catch (...) {
         openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"runtime_error\\",\\"error\\":\\"Unknown C++ exception\\"}");
     }
@@ -372,7 +376,7 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
         if buffer_slot is None:
             call_block = (
                 f"auto openoj_actual = openoj_solution.{method}({call_arguments});\n"
-                '        openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"completed\\",\\"actual\\":" + openoj_json(openoj_actual) + "}" + "");'
+                '        openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"completed\\",\\"actual\\":" + openoj_json(openoj_actual) + "}")'
             )
         else:
             buffer = buffer_variables[buffer_slot]
@@ -391,7 +395,7 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
     else:
         call_block = (
             f"openoj_solution.{method}({call_arguments});\n"
-            '        openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"completed\\",\\"actual\\":" + openoj_json(openoj_oracle.verdict()) + "}" + "");'
+            '        openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"completed\\",\\"actual\\":" + openoj_json(openoj_oracle.verdict()) + "}")'
         )
 
     provided_source = "".join(

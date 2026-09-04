@@ -172,7 +172,6 @@ class GoExecutor(CompiledExecutor):
         # WIRE CODECS (reader methods, JSON conversion), which reference
         # these types by name and compile against whatever the assembly
         # provides.
-        struct_decls = ""
         struct_codecs = ""
         result_conversion = "openojIdentity"
         if "list" in structs:
@@ -1200,7 +1199,7 @@ class GoExecutor(CompiledExecutor):
             + _tabs(
                 textwrap.dedent(
                     f"""
-                    {struct_decls}{code}
+                    {code}
 
                     type openojReaderType struct {{
                         data   []byte
@@ -1271,8 +1270,10 @@ class GoExecutor(CompiledExecutor):
                     }}
 
                     func openojEmit(line string) {{
-                        // Judge protocol prefers the dedicated fd so submission code
-                        // cannot forge verdicts on stdout; stdout is the fallback.
+                        // The last valid protocol line wins and is JSON-validated; the
+                        // fd keeps ordinary stdout noise out of the channel, but the
+                        // submission inherits it too — an accepted result must still
+                        // carry matching output.
                         if channel := os.NewFile(63, "protocol"); channel != nil {{
                             if _, errorValue := channel.WriteString(line + "\\n"); errorValue == nil {{
                                 return

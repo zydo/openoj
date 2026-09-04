@@ -34,8 +34,6 @@ def _prettier_java_plugin() -> str:
     image_path = "/usr/local/lib/node_modules/prettier-plugin-java/dist/index.mjs"
     if Path(image_path).is_file():
         return image_path
-    import shutil
-
     executable = shutil.which("prettier")
     if executable:
         # a node_modules install: .bin/prettier -> ../prettier/bin/prettier.cjs,

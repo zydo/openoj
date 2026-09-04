@@ -63,9 +63,13 @@ def _parse_protocol(output: str) -> dict[str, Any]:
     return {"status": "runtime_error", "error": "Solution did not produce a valid judge response"}
 
 
-# The judge protocol travels on a dedicated inherited fd so submission code
-# cannot forge a verdict by printing the protocol prefix to stdout. Harnesses
-# fall back to stdout only when the fd is absent (local authoring tooling).
+# The judge protocol travels on a dedicated inherited fd so ordinary stdout
+# noise never masquerades as protocol output; harnesses fall back to stdout
+# only when the fd is absent (local authoring tooling). This is hygiene, not
+# protection: the submission's own process inherits fd 63 and could write a
+# protocol line directly. The real guarantee is validation — the judge takes
+# the last parseable protocol line, and an accepted result must still carry
+# output matching the expected value.
 PROTOCOL_FD = 63
 
 
@@ -78,7 +82,15 @@ _prewarming = False
 
 
 def _kill_lingering_children() -> None:
-    """Remove processes a submission attempted to leave behind."""
+    """Remove processes a submission attempted to leave behind.
+
+    The sweep kills every NOBODY_UID process in the PID namespace, which is
+    only correct because the stack deploys a single worker container per PID
+    namespace (docker-compose runs one web/worker service): there are no
+    other workers whose live submissions could be caught by the sweep. A
+    multi-worker deployment sharing one namespace would kill its siblings'
+    submissions here.
+    """
     if _prewarming:
         return
     for status_path in Path("/proc").glob("[0-9]*/status"):

@@ -779,6 +779,10 @@ def _struct_codecs(invocation: dict[str, Any]) -> tuple[str, str]:
             "    }\n"
         )
     return_type = invocation.get("return_type", {})
+    # Array-of-node result helpers deliberately cover only these three kinds
+    # (javascript.py's _ARRAY_RESULT_HELPERS covers twelve): TypeScript
+    # type-checks unreachable helpers against the bundle's own provided/
+    # classes, so each additional kind needs a guarded, typed renderer.
     if return_type.get("kind") == "array":
         item_kind = (return_type.get("items") or {}).get("kind")
         if item_kind == "linked_list" and "list" in structs:

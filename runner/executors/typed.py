@@ -391,7 +391,6 @@ def _encode_value(value: Any, spec: dict[str, Any], location: str) -> bytes:
                 f"{location}.children must match values slot for slot"
             )
         chunks = [struct.pack(">I", len(values))]
-        item_spec = {"kind": "integer", "bits": 32}
         for index, (val, child) in enumerate(zip(values, children)):
             if isinstance(val, bool) or not isinstance(val, int):
                 raise ExecutorError(f"{location}.values[{index}] must be an integer")

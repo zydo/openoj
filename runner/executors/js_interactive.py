@@ -62,8 +62,9 @@ class OjReader {
     }
     str() {
         const length = this.u32();
-        let value = "";
-        for (let i = 0; i < length; i++) value += String.fromCharCode(this.byte());
+        if (this.position + length > this.bytes.length) throw new Error("Truncated case payload");
+        const value = this.bytes.toString("utf8", this.position, this.position + length);
+        this.position += length;
         return value;
     }
     value() {
@@ -306,5 +307,5 @@ def prepare_interactive(executor, job_root: Path, scratch: Path, code: str,
 
     return PreparedProgram(
         command=(str(executor.node_path), str(run_path)),
-        environment={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "NODE_OPTIONS": "--disable-proto=throw --no-addons", "TMPDIR": str(scratch), "LANG": "C.UTF-8"},
+        environment={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "NODE_OPTIONS": "--disable-proto=throw --no-addons --max-old-space-size=192 --stack-size=512", "TMPDIR": str(scratch), "LANG": "C.UTF-8"},
     )

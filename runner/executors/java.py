@@ -62,6 +62,13 @@ class JavaExecutor:
         factor = min(3.0, max(0.75, elapsed_ms / self.reference_benchmark_ms))
         return elapsed_ms, factor
 
+    def compiler_command(self, command: tuple[str, ...], job_root: Path) -> list[str]:
+        """The command that forks javac: the sandboxed compiler wrapper by
+        default (rlimits plus the uid drop prepare() chowns the job
+        directory for). cli.cmd_judge neutralizes this hook so an author
+        judging their own reference solutions compiles plainly."""
+        return sandboxed_compiler_command(command, 2048, self.max_processes)
+
     def prepare(
         self,
         job_root: Path,
@@ -131,7 +138,7 @@ class JavaExecutor:
         process: Optional[subprocess.Popen[bytes]] = None
         try:
             process = subprocess.Popen(
-                sandboxed_compiler_command(command, 2048, self.max_processes),
+                self.compiler_command(command, job_root),
                 cwd=job_root,
                 env=compiler_environment,
                 stdout=subprocess.PIPE,

@@ -130,7 +130,7 @@ MAIN_TEMPLATE = """\
 func main() {
 	defer func() {
 		if problem := recover(); problem != nil {
-			openojEmit("__OPENOJ_RESULT__" + fmt.Sprintf(`{"status":"runtime_error","error":"%v"}`, problem))
+			openojEmit("__OPENOJ_RESULT__" + `{"status":"runtime_error","error":` + openojJSON(fmt.Sprintf("%v", problem)) + "}")
 		}
 	}()
 	bytes_ := make([]byte, 0, 4096)
@@ -244,12 +244,16 @@ func main() {
 		}
 		if repeat > 1 {
 			frequencies := map[string]int{}
+			var last any
 			for trial := int64(0); trial < repeat; trial++ {
 				result := dispatch@CLASS_NAME@(target, name, callArguments)
+				last = result
 				frequencies[openojJSON(result)]++
 			}
 			outputs = append(outputs, frequencies)
-			previous = frequencies
+			// $prev carries the last raw result, not the frequency table
+			// (python_harness pipes raw_output).
+			previous = last
 		} else {
 			result := dispatch@CLASS_NAME@(target, name, callArguments)
 			outputs = append(outputs, result)
@@ -262,7 +266,7 @@ func main() {
 
 JSON_HELPER = """\
 func openojJSON(value any) string {
-	encoded, errorValue := jsonMarshalStable(value)
+	encoded, errorValue := json.Marshal(value)
 	if errorValue != nil {
 		panic(errorValue)
 	}
@@ -463,7 +467,7 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
     source = (
         "package main\n\n" + import_block + "\n\n"
         + WRAPPER_HEAD_HEADLESS
-        + "\n" + JSON_HELPER.replace("jsonMarshalStable", "json.Marshal")
+        + "\n" + JSON_HELPER
         + "\n" + provided_source + "\n" + (TREE_HELPERS + "\n" if needs_tree else "")
         + user_code.strip("\n") + "\n"
         + constructor_shim + "\n" + dispatch + "\n"
@@ -477,7 +481,7 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         job_root,
         (executor.compiler_path, "build", "-trimpath", "-ldflags=-s -w", "-o", str(executable), str(source_path)),
         executable,
-        {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "TMPDIR": "/tmp", "LANG": "C.UTF-8", "GOCACHE": "/tmp/gocache", "GOPATH": "/tmp/gopath", "GOMODCACHE": "/tmp/gomodcache", "GO111MODULE": "off"},
+        {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "TMPDIR": "/tmp", "LANG": "C.UTF-8", "GOCACHE": "/tmp/openoj-gocache", "GOPATH": "/tmp/gopath", "GOMODCACHE": "/tmp/gomodcache", "GO111MODULE": "off"},
     )
     return PreparedProgram(
         command=(str(executable),),

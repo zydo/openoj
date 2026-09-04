@@ -82,7 +82,6 @@ class CppExecutor(CompiledExecutor):
             for name, content in sorted((assembly or {}).get("provided", {}).items())
             if name.endswith((".hpp", ".h", ".cpp"))
         )
-        struct_decls = ""
         struct_codecs = ""
         # The registry of input-side node pointers backs the clone/identity
         # checks for graph, random_list, and alias_list returns: the judge
@@ -1222,8 +1221,9 @@ class CppExecutor(CompiledExecutor):
             "#include <unistd.h>\n"
             "using namespace std;\n"
             "\n"
-            "// Judge protocol prefers the dedicated fd so submission code cannot\n"
-            "// forge verdicts on stdout; stdout remains the fallback.\n"
+            "// The last valid protocol line wins and is JSON-validated; the fd\n"
+            "// keeps ordinary stdout noise out of the channel, but the submission\n"
+            "// inherits it too — an accepted result must still carry matching output.\n"
             "void openojEmit(const std::string& line) {\n"
             "    std::string payload = line + \"\\n\";\n"
             "    if (::write(63, payload.data(), payload.size()) < 0) {\n"
@@ -1231,7 +1231,6 @@ class CppExecutor(CompiledExecutor):
             "    }\n"
             "}\n"
             + assembly_decls
-            + struct_decls
             + code
             + "\n"
             + wrapper,

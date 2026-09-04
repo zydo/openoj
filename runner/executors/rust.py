@@ -833,7 +833,7 @@ class RustExecutor(CompiledExecutor):
                         // The chain, then the (unique) value naming the node
                         // the method receives — the handle is the real node.
                         let head = self.doubly_list()?;
-                        let target = self.i32()?;
+                        let target = {item_read};
                         let mut current = head;
                         while let Some(node) = current {{
                             if node.borrow().val == target {{ return Ok(Some(node)); }}
@@ -1213,6 +1213,9 @@ class RustExecutor(CompiledExecutor):
         def declaration(index: int, spec: dict[str, Any]) -> str:
             if spec.get("kind") == "alias_list":
                 aliased = f"openoj_arg_{spec['alias']}_nodes"
+                # This block reads inline in openoj_run, where the reader
+                # local is openoj_reader (not the impl receiver).
+                prefix_item_read = _read_expression(struct_item_spec(invocation), "openoj_reader")
                 return textwrap.dedent(
                     f"""
                     let openoj_arg_{index}: Option<std::rc::Rc<std::cell::RefCell<SharedListNode>>> = {{
@@ -1221,7 +1224,7 @@ class RustExecutor(CompiledExecutor):
                         let mut tail: Option<std::rc::Rc<std::cell::RefCell<SharedListNode>>> = None;
                         let mut prefix: Vec<std::rc::Rc<std::cell::RefCell<SharedListNode>>> = Vec::with_capacity(count);
                         for _ in 0..count {{
-                            let node = std::rc::Rc::new(std::cell::RefCell::new(SharedListNode {{ val: openoj_reader.i32()?, next: None }}));
+                            let node = std::rc::Rc::new(std::cell::RefCell::new(SharedListNode {{ val: {prefix_item_read}, next: None }}));
                             if let Some(previous) = tail.clone() {{
                                 previous.borrow_mut().next = Some(node.clone());
                             }} else {{
@@ -1257,13 +1260,15 @@ class RustExecutor(CompiledExecutor):
                 # (unique) value: the argument is that exact Rc handle, so
                 # mutations through it land in the aliased tree.
                 aliased_tree = f"openoj_arg_{spec['alias']}"
+                ref_item_spec = spec.get("items") or {"kind": "integer", "bits": 32}
+                ref_target_type = "i64" if ref_item_spec.get("bits", 32) == 64 else "i32"
                 return textwrap.dedent(
                     f"""
                     let openoj_arg_{index}: Option<std::rc::Rc<std::cell::RefCell<{nary_class}>>> = {{
-                        let target = openoj_reader.i32()?;
+                        let target = {_read_expression(ref_item_spec, "openoj_reader")};
                         fn openoj_find_nary_node(
                             node: &std::rc::Rc<std::cell::RefCell<{nary_class}>>,
-                            target: i32,
+                            target: {ref_target_type},
                         ) -> Option<std::rc::Rc<std::cell::RefCell<{nary_class}>>> {{
                             if node.borrow().val == target {{ return Some(node.clone()); }}
                             let children = node.borrow().children.clone();
@@ -1437,8 +1442,11 @@ class RustExecutor(CompiledExecutor):
             }}
 
             fn openoj_emit(line: &str) {{
-                // Judge protocol prefers the dedicated fd so submission code
-                // cannot forge verdicts on stdout; stdout is the fallback.
+                // The judge takes the last valid protocol line; the fd keeps
+                // ordinary stdout noise out of the channel, but the
+                // submission inherits it too — nothing here is
+                // cryptographically protected from it, and an accepted
+                // result must still carry matching output.
                 use std::io::Write;
                 use std::os::unix::io::FromRawFd;
                 let mut channel = unsafe {{ std::fs::File::from_raw_fd(63) }};

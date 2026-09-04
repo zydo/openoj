@@ -206,9 +206,11 @@ int main() {
             }
             if (repeat > 1) {
                 std::map<std::string, long long> frequencies;
+                OjValue last;
                 for (long long trial = 0; trial < repeat; ++trial) {
                     OjValue result = dispatch@CLASS_NAME@(*target, name, call_arguments, instance_arguments);
                     frequencies[openoj_json(result)] += 1;
+                    last = result;
                 }
                 OjValue table;
                 table.kind = OjValue::Object;
@@ -219,7 +221,9 @@ int main() {
                     table.fields.emplace_back(entry.first, count);
                 }
                 outputs.push_back(table);
-                previous = table;
+                // $prev carries the last raw result, not the frequency table
+                // (python_harness pipes raw_output).
+                previous = last;
             } else {
                 OjValue result = dispatch@CLASS_NAME@(*target, name, call_arguments, instance_arguments);
                 outputs.push_back(result);
@@ -228,7 +232,7 @@ int main() {
         }
         openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"completed\\",\\"actual\\":" + openoj_json(outputs) + "}");
     } catch (const std::exception& error) {
-        openojEmit(std::string("__OPENOJ_RESULT__{\\"status\\":\\"runtime_error\\",\\"error\\":\\"") + error.what() + "\\"}");
+        openojEmit(std::string("__OPENOJ_RESULT__{\\"status\\":\\"runtime_error\\",\\"error\\":") + openoj_json(std::string(error.what())) + "}");
     } catch (...) {
         openojEmit("__OPENOJ_RESULT__{\\"status\\":\\"runtime_error\\",\\"error\\":\\"Unknown C++ exception\\"}");
     }
@@ -293,7 +297,7 @@ def prepare_design(executor, job_root: Path, scratch: Path, code: str,
         call = f"solution.{cpp_name}({args})"
         result_expr = f"oj_from_tree({call})" if is_tree else f"oj_from({call})"
         dispatch_cases.append(
-            f'        if (name == "{name}") {{ {"OjValue openoj_result; (void)openoj_result; " if not is_void else ""}'
+            f'        if (name == "{name}") {{ '
             + (f"return {result_expr};" if not is_void else f"{call}; return OjValue();")
             + " }"
         )
