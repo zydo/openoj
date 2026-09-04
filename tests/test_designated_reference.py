@@ -15,8 +15,9 @@ def _bundle_files(reference: str = "", with_canonical: bool = True, with_variant
                 "id": 2,
                 "slug": "demo-two",
                 "title": "Demo Two",
-                "difficulty": "H1",
+                "difficulty": "Easy",
                 "tags": ["Array"],
+                "topics": ["Array"],
                 "invocation": {
                     "type": "function",
                     "class_name": "Solution",

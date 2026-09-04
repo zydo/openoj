@@ -7,7 +7,7 @@ FLAT_FIXTURE = """# 1. Two Sum
 {
   "schema_version": 1,
   "slug": "two-sum",
-  "difficulty": "H2",
+  "difficulty": "Medium",
   "tags": ["Array", "Hash Table"]
 }
 ```

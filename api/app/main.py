@@ -302,6 +302,21 @@ def problems(
     }
 
 
+@app.get("/problems/topics")
+def problem_topics(session_id: Annotated[str, Depends(current_session)]) -> dict[str, Any]:
+    """Index of the topic taxonomy: each topic with how many problems carry
+    it, busiest first — the option list for the topic filter."""
+    counts: dict[str, int] = {}
+    for summary in list_problems():
+        for topic in summary.get("topics", []):
+            counts[topic] = counts.get(topic, 0) + 1
+    topics = [
+        {"name": name, "count": count}
+        for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    return {"topics": topics}
+
+
 @app.get("/problems/{slug}")
 def problem(slug: str, session_id: Annotated[str, Depends(current_session)]) -> dict[str, Any]:
     try:

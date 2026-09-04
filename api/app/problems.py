@@ -380,6 +380,7 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
             "title",
             "difficulty",
             "tags",
+            "topics",
             "invocation",
             "limits",
         },
@@ -409,13 +410,17 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
         raise ProblemError("problem.json title must be a non-empty string")
     if not isinstance(problem_data["difficulty"], str):
         raise ProblemError("problem.json difficulty must be a string")
-    # "" is a valid, explicitly-unset difficulty (the extend-derived
-    # bundles ship unset until the bank's own hardness evaluation fills
-    # them); the bank's check.py is where the non-empty policy is enforced.
+    # The difficulty mirrors the original source difficulty (Easy/Medium/
+    # Hard) — the API only requires a string; the bank's check.py enforces
+    # the vocabulary.
     if not isinstance(problem_data["tags"], list) or not all(
         isinstance(tag, str) and tag for tag in problem_data["tags"]
     ):
         raise ProblemError("problem.json tags must be an array of non-empty strings")
+    if not isinstance(problem_data["topics"], list) or not all(
+        isinstance(topic, str) and topic for topic in problem_data["topics"]
+    ):
+        raise ProblemError("problem.json topics must be an array of non-empty strings")
     invocation = problem_data["invocation"]
     if not isinstance(invocation, dict) or not invocation:
         raise ProblemError("problem.json invocation must be an object")
@@ -499,6 +504,7 @@ def parse_problem_bundle(path: Path) -> tuple[dict[str, Any], list[dict[str, Any
         "title": problem_data["title"],
         "difficulty": problem_data["difficulty"],
         "tags": problem_data["tags"],
+        "topics": problem_data["topics"],
         "description": description + "\n",
         "hints": hints,
         "invocation": invocation,
@@ -535,9 +541,14 @@ def _cached_summary(path_string: str, modified_ns: int, size: int) -> Optional[d
     try:
         if path.is_dir():
             data = json.loads((path / "problem.json").read_text(encoding="utf-8"))
-            return {key: data[key] for key in ("id", "slug", "title", "difficulty", "tags")}
+            return {
+                key: data[key]
+                for key in ("id", "slug", "title", "difficulty", "tags", "topics")
+            }
         problem, _, _ = parse_problem_markdown(path.read_text(encoding="utf-8"), path)
-        return {key: problem[key] for key in ("id", "slug", "title", "difficulty", "tags")}
+        summary = {key: problem[key] for key in ("id", "slug", "title", "difficulty", "tags")}
+        summary["topics"] = problem.get("topics", [])
+        return summary
     except (ProblemError, OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
         return None
 
@@ -798,6 +809,7 @@ def public_problem(problem: dict[str, Any]) -> dict[str, Any]:
         "title",
         "difficulty",
         "tags",
+        "topics",
         "description",
         "hints",
         "invocation",

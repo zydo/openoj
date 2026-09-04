@@ -14,8 +14,9 @@ BUNDLE = {
             "id": 1,
             "slug": "demo-problem",
             "title": "Demo Problem",
-            "difficulty": "H1",
+            "difficulty": "Easy",
             "tags": ["Array"],
+            "topics": ["Array"],
             "invocation": {
                 "type": "function",
                 "class_name": "Solution",
