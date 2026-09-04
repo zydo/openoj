@@ -167,7 +167,8 @@ def _compare(actual: Any, expected: Any, comparison: Any, case_input: Any = None
 
 
 def _display_input(invocation: dict[str, Any], raw_input: Any) -> Any:
-    if invocation.get("type", "function") == "function" and isinstance(raw_input, list):
+    invocation_type = invocation.get("type", "function")
+    if invocation_type in {"function", "sql"} and isinstance(raw_input, list):
         names = [parameter["name"] for parameter in invocation.get("parameters", [])]
         return dict(zip(names, raw_input))
     return raw_input

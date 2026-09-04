@@ -534,9 +534,18 @@ function App() {
       const saved = draftCache.current.get(`${loaded.slug}:${initialLanguage}`);
       const initialCode = saved ?? loaded.languages[initialLanguage].starter;
       setCode(initialCode);
-      setDrafts(loaded.public_cases.map((test) =>
-        Object.fromEntries(Object.entries(test.input).map(([key, value]) => [key, JSON.stringify(value)])),
-      ));
+      // Function-style problems ship named-argument inputs; sql ships a
+      // positional list the manifest parameters name (dataset); shell ships
+      // one raw string. Normalize all three into editable named fields.
+      setDrafts(loaded.public_cases.map((test) => {
+        const parameters = loaded.invocation.parameters;
+        const entries = Array.isArray(test.input) && parameters
+          ? test.input.map((value, index) => [parameters[index]?.name ?? String(index), value])
+          : typeof test.input === "object" && test.input !== null
+            ? Object.entries(test.input)
+            : [["input", test.input]];
+        return Object.fromEntries(entries.map(([key, value]) => [key, JSON.stringify(value)]));
+      }));
     }).catch((error: Error) => {
       if (!cancelled) setLoadError(error.message);
     });
@@ -1038,7 +1047,7 @@ function SelectMenu({ value, options, onChange, ariaLabel, idPrefix, className }
           }
         }}
       >
-        {selected?.label ?? value}
+        <span className="select-trigger-label">{selected?.label ?? value}</span>
         <ChevronDown size={14} className={open ? "select-chevron flipped" : "select-chevron"} />
       </button>
       {open && (

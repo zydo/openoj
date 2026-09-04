@@ -431,12 +431,18 @@ def run(request: RunRequest, session_id: Annotated[str, Depends(current_session)
     else:
         cases = []
         invocation = problem_data["invocation"]
+        invocation_type = invocation.get("type", "function")
         for index, custom_input in enumerate(request.cases):
-            if invocation.get("type", "function") == "function":
+            # Function- and SQL-style cases arrive as named arguments and
+            # travel to the runner positionally; shell's single raw value
+            # arrives wrapped in one field and is unwrapped here.
+            if isinstance(custom_input, dict) and invocation.get("parameters"):
                 try:
                     wire_input = [custom_input[parameter["name"]] for parameter in invocation["parameters"]]
                 except KeyError as error:
                     raise HTTPException(status_code=400, detail=f"Missing testcase argument: {error.args[0]}") from error
+            elif invocation_type == "shell" and isinstance(custom_input, dict) and len(custom_input) == 1:
+                wire_input = next(iter(custom_input.values()))
             else:
                 wire_input = custom_input
             matched = next((case for case in canonical if case["input"] == wire_input), None)
