@@ -24,12 +24,12 @@ CI-checked. Scrape origin: `~/code/lc-crawl` (raw) →
 
 **`problems` is a symlink** naming whichever tree the judge serves (the
 app takes the repo's `problems/` subdirectory as its package root). It
-points at `problems-originals` as of 2026-09-04. Everything else — CI,
+points at `problems-adapt` as of 2026-09-04. Everything else — CI,
 the bank's `scripts/`, this repo's `scripts/verify_*.py` — addresses
-`problems-adapt` by name and never goes through the symlink. Note the
-838 bettercode-curated originals are `schema_version: 1` and carry no
-`reference_solution`, so while the symlink points at the originals those
-bundles list but fail to open (the other 3,193 serve normally).
+`problems-adapt` by name and never goes through the symlink. Do not
+point it at `problems-originals`: the 838 bettercode-curated originals
+are `schema_version: 1` and carry no `reference_solution`, so they list
+but fail to open (the other 3,193 serve normally).
 
 ## Adaptation philosophy
 
