@@ -24,14 +24,13 @@ CI-checked. Scrape origin: `~/code/lc-crawl` (raw) →
 
 **`problems` is a symlink** naming whichever tree the judge serves (the
 app takes the repo's `problems/` subdirectory as its package root). It
-points at `problems-adapt` as of 2026-09-04. Everything else — CI,
+points at `problems-originals` as of 2026-09-05. Everything else — CI,
 the bank's `scripts/`, this repo's `scripts/verify_*.py` — addresses
 `problems-adapt` by name and never goes through the symlink. The
-originals are fully schema-2 serveable (the 838 bettercode-era
-manifests were backfilled 2026-09-05: `reference_solution` taken from
-each bundle's problems-adapt twin, canonical `solution.*` meaning `""`)
-but keep the symlink on the adapted tree — its statements are what the
-site should show.
+originals became fully schema-2 serveable when the 838 bettercode-era
+manifests were backfilled 2026-09-05 (`reference_solution` taken from
+each bundle's problems-adapt twin, canonical `solution.*` meaning `""`);
+flipping the symlink is the one-line switch between the two trees.
 
 ## Adaptation philosophy
 

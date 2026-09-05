@@ -448,11 +448,11 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .filter-select .select-trigger:hover { background: var(--surface); border-color: var(--cyan); }
 .filter-select .select-trigger:focus-visible { border-color: var(--cyan); }
 .filter-select .select-popup { width: max-content; }
-/* proportional widths so the four filter controls always share one row;
-   the floors keep their labels un-truncated while the search box flexes */
-.topic-select-menu { width: 20%; min-width: 140px; }
-.type-select-menu { width: 15%; min-width: 112px; }
-.hardness-select-menu { width: 17%; min-width: 128px; }
+/* the three filter controls are one equal-width set, so the gap reads the
+   same between every pair; the search box flexes into what is left */
+.topic-select-menu,
+.type-select-menu,
+.hardness-select-menu { width: 18%; min-width: 130px; }
 .select-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .drawer-tools .filter-select { width: 100%; }
 .drawer-tools .filter-select .select-trigger { height: 38px; color: #d8dee2; background: #101416; border-color: #2c353b; border-radius: 5px; font-size: 13px; }
@@ -562,6 +562,18 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 [data-theme="light"] .problem-row:hover { border-color: #9caeb7; }
 [data-theme="light"] .problem-row.active { border-color: #dcae60; background: #fdf7e9; }
 [data-theme="light"] .problem-row.active strong { color: #9b5d08; }
+/* The topic filter is a modal chip grid, not a dropdown: 175 topics do not
+   read as a list, and the per-topic counts are noise at choosing time. */
+.topic-dialog { width: min(760px, calc(100vw - 40px)); max-height: min(72vh, 640px); padding: 17px 20px 19px; display: flex; flex-direction: column; }
+.topic-dialog-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; }
+.topic-dialog-head h2 { margin: 0; font-size: 16px; letter-spacing: -.015em; }
+.topic-dialog-close { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; color: var(--muted); background: transparent; border: 0; border-radius: 5px; cursor: pointer; }
+.topic-dialog-close:hover { color: var(--ink); background: var(--surface-raised); }
+.topic-grid { display: flex; flex-wrap: wrap; align-content: start; gap: 7px; min-height: 0; overflow-y: auto; padding: 1px 4px 1px 1px; scrollbar-color: #3b444a transparent; }
+.topic-chip { padding: 6px 12px; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; font-size: 12.5px; line-height: 1.2; white-space: nowrap; cursor: pointer; }
+.topic-chip:hover { color: var(--ink); border-color: var(--cyan); }
+.topic-chip.selected { color: #08171b; background: var(--cyan); border-color: var(--cyan); font-weight: 600; }
+
 [data-theme="light"] .dialog-backdrop { background: #17252d8c; }
 [data-theme="light"] .dialog { background: #ffffff; box-shadow: 0 24px 70px #24343d33; }
 [data-theme="light"] .dialog-cancel { color: #29343b; background: #edf1f3; border-color: #d4dde1; }
@@ -612,3 +624,7 @@ h1 .status-mark { margin-left: 8px; vertical-align: -2px; }
   vertical-align: 2px;
   opacity: 0.9;
 }
+[data-theme="light"] .topic-dialog-head h2 { color: #1f292f; }
+[data-theme="light"] .topic-chip { color: #4c5a63; background: #ffffff; border-color: #d4dee2; }
+[data-theme="light"] .topic-chip:hover { color: #192127; border-color: #4f9dad; }
+[data-theme="light"] .topic-chip.selected { color: #ffffff; background: #2f8296; border-color: #2f8296; }

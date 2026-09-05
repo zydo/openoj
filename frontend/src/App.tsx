@@ -156,11 +156,14 @@ function isRawTextParameter(problem: Problem, name: string) {
   ) ?? false;
 }
 
+// The topic filter opens a modal grid rather than a dropdown: 175 topics
+// do not read as a list, and the counts add noise to the choice.
 function TopicSelect({ topic, onPick }: {
   topic: string;
   onPick: (topic: string) => void;
 }) {
   const [topics, setTopics] = useState<TopicSummary[]>([]);
+  const [open, setOpen] = useState(false);
   useEffect(() => {
     let cancelled = false;
     loadTopicIndex().then((loaded) => {
@@ -168,21 +171,71 @@ function TopicSelect({ topic, onPick }: {
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.stopPropagation(); setOpen(false); }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [open]);
+  const choose = (next: string) => { onPick(next); setOpen(false); };
   return (
-    <SelectMenu
-      className="filter-select topic-select-menu"
-      value={topic}
-      ariaLabel="Filter by topic"
-      idPrefix="topic"
-      onChange={onPick}
-      options={[
-        { key: "", label: "All topics" },
-        ...topics.map((entry) => ({
-          key: entry.name,
-          label: `${entry.name} (${entry.count})`,
-        })),
-      ]}
-    />
+    <div className="select-menu filter-select topic-select-menu">
+      <button
+        type="button"
+        className="select-trigger"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen(true)}
+      >
+        <span className="select-trigger-label">{topic || "All topics"}</span>
+        <ChevronDown size={14} className={open ? "select-chevron flipped" : "select-chevron"} />
+      </button>
+      {open && (
+        <div className="dialog-backdrop" onMouseDown={() => setOpen(false)}>
+          <div
+            className="dialog topic-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Filter by topic"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="topic-dialog-head">
+              <h2>Topics</h2>
+              <button
+                type="button"
+                className="topic-dialog-close"
+                aria-label="Close topics"
+                onClick={() => setOpen(false)}
+              >
+                <X size={15} />
+              </button>
+            </div>
+            <div className="topic-grid">
+              <button
+                type="button"
+                className={topic === "" ? "topic-chip selected" : "topic-chip"}
+                onClick={() => choose("")}
+                autoFocus
+              >
+                All topics
+              </button>
+              {topics.map((entry) => (
+                <button
+                  key={entry.name}
+                  type="button"
+                  className={entry.name === topic ? "topic-chip selected" : "topic-chip"}
+                  onClick={() => choose(entry.name)}
+                >
+                  {entry.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1404,11 +1457,11 @@ function Landing({ theme, onToggleTheme, onOpen, onLogout, progress, seed }: {
               <SelectMenu
                 className="filter-select hardness-select-menu"
                 value={hardness}
-                ariaLabel="Filter by hardness"
+                ariaLabel="Filter by level"
                 idPrefix="hardness"
                 onChange={setHardness}
                 options={[
-                  { key: "", label: "All hardness" },
+                  { key: "", label: "All Levels" },
                   { key: "Easy", label: "Easy" },
                   { key: "Medium", label: "Medium" },
                   { key: "Hard", label: "Hard" },
@@ -1873,11 +1926,11 @@ function ProblemDrawer({ problems, activeSlug, progress, onSelect, onClose }: {
           <SelectMenu
             className="filter-select hardness-select-menu"
             value={hardness}
-            ariaLabel="Filter by hardness"
+            ariaLabel="Filter by level"
             idPrefix="drawer-hardness"
             onChange={setHardness}
             options={[
-              { key: "", label: "All hardness" },
+              { key: "", label: "All Levels" },
               { key: "Easy", label: "Easy" },
               { key: "Medium", label: "Medium" },
               { key: "Hard", label: "Hard" },
