@@ -954,7 +954,13 @@ function App() {
                   setActiveCase={setActiveCase}
                 />
               ) : (
-                <Results result={result} busy={busy} error={actionError} comparison={problem.invocation.comparison} />
+                <Results
+                  result={result}
+                  busy={busy}
+                  error={actionError}
+                  comparison={problem.invocation.comparison}
+                  invocationType={problem.invocation.type}
+                />
               )}
             </div>
           </section>
@@ -1522,7 +1528,13 @@ function Testcases({ problem, drafts, setDrafts, activeCase, setActiveCase }: {
   );
 }
 
-function Results({ result, busy, error, comparison }: { result: JudgeResult | null; busy: string | null; error: string; comparison?: Problem["invocation"]["comparison"] }) {
+function Results({ result, busy, error, comparison, invocationType }: {
+  result: JudgeResult | null;
+  busy: string | null;
+  error: string;
+  comparison?: Problem["invocation"]["comparison"];
+  invocationType?: string;
+}) {
   const [openCase, setOpenCase] = useState(0);
   useEffect(() => setOpenCase(0), [result]);
   if (busy) return <ConsoleEmpty icon={<LoaderCircle className="spin" />} title="Executing code and judging" />;
@@ -1530,6 +1542,9 @@ function Results({ result, busy, error, comparison }: { result: JudgeResult | nu
   if (!result) return <ConsoleEmpty icon={<TerminalSquare />} title="No results yet" detail="Run to check your code against the visible cases, or Submit to face the full judge." />;
   const active = result.results[openCase];
   const tone = statusTone(result.status);
+  // A shell case's answer is the program's own stdout — raw text, shown with
+  // its real newlines instead of one JSON-escaped line.
+  const rawAnswer = (value: unknown) => invocationType === "shell" && typeof value === "string";
   return (
     <div className="results-view">
       <div className={`result-summary ${tone}`}>
@@ -1570,12 +1585,13 @@ function Results({ result, busy, error, comparison }: { result: JudgeResult | nu
             {active.input !== undefined ? (
               <>
                 <ResultValue label="Input" value={active.input} raw={typeof active.input === "string"} />
-                {active.actual !== undefined && <ResultValue label="Output" value={active.actual} />}
+                {active.actual !== undefined && <ResultValue label="Output" value={active.actual} raw={rawAnswer(active.actual)} />}
                 {active.expected !== undefined && <ResultValue
                     label={comparison === "close" || (typeof comparison === "object" && comparison !== null && comparison.mode === "close")
                       ? `Expected ±${formatTolerance(typeof comparison === "object" && comparison !== null ? comparison.tolerance : undefined)}`
                       : "Expected"}
                     value={active.expected}
+                    raw={rawAnswer(active.expected)}
                   />}
                 {active.stdout && <ResultValue label="Stdout" value={active.stdout} raw />}
               </>
