@@ -15,7 +15,7 @@ served tree).
   Needs `frontend/node_modules` installed (tsc) and the local
   toolchain on PATH.
 - `verify_corpus.py` — whole-bank consistency check (crawl index ↔
-  bettercode ↔ problems-originals ↔ problems/ keyed by MAPPING.json):
+  bettercode ↔ problems-originals ↔ problems-adapt/ keyed by MAPPING.json):
   coverage, slug parity, shard placement, bundle file shape, the 13
   `-crawl` twins. Run after any tree surgery. Upstream scrape sources
   default to `~/code/lc-crawl` and `~/code/bettercode`; override with

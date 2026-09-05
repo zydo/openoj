@@ -9,24 +9,33 @@ Two repos, deliberately decoupled:
   bundles, shared code, authoring tooling. Knows nothing about the judge
   except its published contract.
 
-The bank's served tree is `problems/` — the merge of both adapted
+The bank's adapted tree is `problems-adapt/` — the merge of both adapted
 corpora: 838 bettercode-derived bundles plus 3,193 extend-derived ones,
 all carrying their **original source ids** (the bettercode set's 1–838
-renumbering was reverted via `problems/MAPPING.json`). 13 ids have one
-bundle from each provenance (distinct slugs);
+renumbering was reverted via `problems-adapt/MAPPING.json`). 13 ids have
+one bundle from each provenance (distinct slugs);
 `BETTERCODE-SUBSET.md` (bank root) lists the bettercode-derived ids and
-`problems/MAPPING.md` is that subset's adaptation ledger.
+`problems-adapt/MAPPING.md` is that subset's adaptation ledger.
 `problems-originals/` merges the two originals trees — the bettercode
 curated originals plus the verbatim lc-crawl extend originals (the 13
-shared extend originals carry a `-crawl` slug suffix); it is frozen: not
-served, not CI-checked. Scrape origin: `~/code/lc-crawl` (raw) →
+shared extend originals carry a `-crawl` slug suffix); it is not
+CI-checked. Scrape origin: `~/code/lc-crawl` (raw) →
 `~/code/bettercode` (curated) → `problems-originals/`.
+
+**`problems` is a symlink** naming whichever tree the judge serves (the
+app takes the repo's `problems/` subdirectory as its package root). It
+points at `problems-originals` as of 2026-09-04. Everything else — CI,
+the bank's `scripts/`, this repo's `scripts/verify_*.py` — addresses
+`problems-adapt` by name and never goes through the symlink. Note the
+838 bettercode-curated originals are `schema_version: 1` and carry no
+`reference_solution`, so while the symlink points at the originals those
+bundles list but fail to open (the other 3,193 serve normally).
 
 ## Adaptation philosophy
 
 Every problem is a **copyright-free, algorithm-identical adaptation** of a
 curated LeetCode original: rewritten statements in the bank's own voice,
-the source's own id kept (shard = `problems/0001-0100/`-style hundreds
+the source's own id kept (shard = `problems-adapt/0001-0100/`-style hundreds
 buckets; the bettercode set's temporary 1–838 renumbering was reverted),
 descriptive kebab slugs
 (`0001_pair-sum`), restated examples/constraints. `difficulty` mirrors
@@ -35,7 +44,7 @@ a re-evaluation; tags follow the bank's normalized scheme.
 
 ## Bundle format (openoj-problems/FORMAT.md is authoritative)
 
-    problems/<shard>/<id>_<slug>/
+    problems-adapt/<shard>/<id>_<slug>/
       problem.json    schema_version, reference_solution,
                       id, slug, title, difficulty, tags, topics, type,
                       invocation, limits
@@ -126,7 +135,7 @@ executors, assembling the bundle's own `provided/` sources).
    `problems-originals/`, adapt into a new bundle (statement, problem.json,
    cases, canonical solution in all 7 languages).
 2. `scripts/gen_starters.py` regenerates starters from problem.json.
-3. **Verify**: `python3 scripts/verify_solution.py problems/<shard>/<key>`
+3. **Verify**: `python3 scripts/verify_solution.py problems-adapt/<shard>/<key>`
    (openoj repo's scripts/) — judges every solution in the bundle
    through the real executors. The key must be shard-qualified; a bare
    key resolves without the shard and fails.
@@ -207,7 +216,7 @@ check the clock against the reset time before waiting on one.
 - Git: never commit/push unless asked this turn (see ~/.claude/CLAUDE.md
   for the full rules — no auto-amend, no attribution trailers). Session
   work typically lands as a handful of focused commits when the user says
-  so; scoped `git add` by path lists, never blanket `git add problems/`
+  so; scoped `git add` by path lists, never blanket `git add problems-adapt/`
   mid-split.
 - `TODO.md` (openoj): design decisions agreed but not started; when work
   starts, it moves to the session task list; when done, the entry is

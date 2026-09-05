@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO = Path(os.environ.get(
     "OPENOJ_PROBLEMS_BANK", str(ROOT.parent / "openoj-problems")))
 sys.path.insert(0, str(ROOT))
-os.environ.setdefault("OPENOJ_PROBLEMS_DIR", str(REPO / "problems"))
+os.environ.setdefault("OPENOJ_PROBLEMS_DIR", str(REPO / "problems-adapt"))
 
 from api.app.judge import _compare  # noqa: E402
 from api.app import problems as problems_module  # noqa: E402
@@ -255,11 +255,11 @@ def run_cases(bundle: Path, solution: Path) -> tuple[bool, str]:
 def main() -> None:
     _install_local_paths()
     key = sys.argv[1]
-    # Shard-qualified key under the served tree: either
-    # "problems/<shard>/<id>_<slug>" or "<shard>/<id>_<slug>".
+    # Shard-qualified key under the adapted tree: either
+    # "problems-adapt/<shard>/<id>_<slug>" or "<shard>/<id>_<slug>".
     bundle = (REPO / key).resolve()
     if not bundle.is_dir():
-        bundle = (REPO / "problems" / key).resolve()
+        bundle = (REPO / "problems-adapt" / key).resolve()
     key = bundle.name
     arguments = sys.argv[2:]
     # --solution judges a file that lives outside the bundle against this

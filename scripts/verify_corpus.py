@@ -37,7 +37,7 @@ CRAWL = Path(os.environ.get(
 BETTERCODE = Path(os.environ.get(
     "OPENOJ_BETTERCODE", str(Path.home() / "code/bettercode/data/problems.jsonl")))
 ORIGINALS = BANK / "problems-originals"
-SERVED = BANK / "problems"
+SERVED = BANK / "problems-adapt"
 
 failures = []
 

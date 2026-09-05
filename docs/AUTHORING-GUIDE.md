@@ -14,7 +14,7 @@ proved.
 ## Conventions (ORIGINAL form)
 
 - Source: `~/code/lc-crawl/problems/<shard>/<id>-<slug>.md`; target
-  `problems/<shard>/<id>_<slug>/` (legacy hundreds bucket). Mirror
+  `problems-adapt/<shard>/<id>_<slug>/` (legacy hundreds bucket). Mirror
   exemplar `problems-originals/0001-0100/0001_two-sum/`,
   `FORMAT.md`, and one landed extend sibling of the same wire family.
 - ORIGINAL form: crawl prose verbatim into bundle grammar; diagrams and
@@ -50,7 +50,7 @@ proved.
 
 ## Verify gate
 
-`python3 scripts/verify_solution.py problems/<shard>/<id>_<slug>`
+`python3 scripts/verify_solution.py problems-adapt/<shard>/<id>_<slug>`
 (openoj repo's `scripts/`, run from bank root) judges every
 `solution*.<ext>` through the real executors — green across all offered
 languages before landing. Rust "unparseable protocol output" =>
