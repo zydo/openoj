@@ -26,10 +26,12 @@ CI-checked. Scrape origin: `~/code/lc-crawl` (raw) →
 app takes the repo's `problems/` subdirectory as its package root). It
 points at `problems-adapt` as of 2026-09-04. Everything else — CI,
 the bank's `scripts/`, this repo's `scripts/verify_*.py` — addresses
-`problems-adapt` by name and never goes through the symlink. Do not
-point it at `problems-originals`: the 838 bettercode-curated originals
-are `schema_version: 1` and carry no `reference_solution`, so they list
-but fail to open (the other 3,193 serve normally).
+`problems-adapt` by name and never goes through the symlink. The
+originals are fully schema-2 serveable (the 838 bettercode-era
+manifests were backfilled 2026-09-05: `reference_solution` taken from
+each bundle's problems-adapt twin, canonical `solution.*` meaning `""`)
+but keep the symlink on the adapted tree — its statements are what the
+site should show.
 
 ## Adaptation philosophy
 
